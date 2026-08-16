@@ -303,6 +303,7 @@ u32  fb_bytes(void);
 u32  fb_rgb(u8 r, u8 g, u8 b);
 void fb_set_target(void *p);
 void *fb_get_hw(void);
+void *fb_get_target(void);
 void fb_pixel(u32 x, u32 y, u32 c);
 void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c);
 void fb_rect(i32 x, i32 y, i32 w, i32 h, u32 c);

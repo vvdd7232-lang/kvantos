@@ -6,8 +6,8 @@
 
 #define MULTIBOOT_MAGIC 0x2BADB002
 
-#define HEAP_BASE 0x00400000      /* 4 MiB */
-#define HEAP_SIZE 0x00A00000      /* 10 MiB */
+#define HEAP_BASE 0x01000000      /* 16 MiB (above the .kapp window) */
+#define HEAP_SIZE 0x02000000      /* 32 MiB: room for a screen buffer plus its cache */
 
 static void step(const char *what) {
     vga_set_color(VGA_COLOR(VGA_DGREY, VGA_BLACK));
@@ -98,15 +98,31 @@ void kmain(u32 magic, u32 mbi_addr) {
     paging_init();
     if (have_fb && !fb_map())
         panic(T("Failed to map the framebuffer into the address space", "Не удалось отобразить фреймбуфер в адресное пространство"), NULL);
-    step(T("Paging: identity-mapped 16 MiB, #PF handler", "Paging: identity-mapping 16 МиБ, обработчик #PF"));
+    step(T("Paging: identity-mapped 64 MiB, #PF handler", "Paging: identity-mapping 64 МиБ, обработчик #PF"));
 
-    heap_init(HEAP_BASE, HEAP_SIZE);
-    pmm_reserve_range(HEAP_BASE, HEAP_SIZE);   /* so that the PMM never hands out these frames */
+    /* The heap is sized from the RAM actually present. The desktop wants
+       two screen-sized buffers (the back buffer plus the cached
+       background) - at 1920x1080x32 that is 16 MiB on its own - but a
+       machine with 32 MiB of RAM must still boot, so the heap never
+       takes more than about half of physical memory. */
+    u32 heap_size = HEAP_SIZE;
+    u32 ram = pmm_total_bytes();
+    if (ram < HEAP_BASE + HEAP_SIZE + (8u << 20)) {
+        u32 avail = (ram > HEAP_BASE) ? (ram - HEAP_BASE) : 0;
+        heap_size = avail / 2;
+        heap_size &= ~0xFFFFFu;                     /* round down to 1 MiB */
+        if (heap_size > HEAP_SIZE) heap_size = HEAP_SIZE;
+        if (heap_size < (2u << 20)) heap_size = (2u << 20);   /* bare minimum */
+    }
+
+    heap_init(HEAP_BASE, heap_size);
+    pmm_reserve_range(HEAP_BASE, heap_size);   /* so that the PMM never hands out these frames */
     /* The region where .kapp applications are unpacked (14-16 MiB).
        It is kept outside the heap: an application is written to a fixed
        address and no heap chunk may end up there. */
     pmm_reserve_range(KAPP_LOAD_BASE, KAPP_MAX_SIZE);
-    step(T("Heap: 10 MiB kernel heap (first-fit + coalescing)", "Heap: куча ядра 10 МиБ (first-fit + слияние)"));
+    kprintf(T("       heap %u MiB at %u MiB\n", "       куча %u МиБ по адресу %u МиБ\n"), heap_size / 1048576, HEAP_BASE / 1048576);
+    step(T("Heap: kernel heap (first-fit + coalescing)", "Heap: куча ядра (first-fit + слияние)"));
 
     /* 1000 Hz instead of 100. With a 10 ms step a frame cannot be timed
        more precisely than 33 fps, and task_sleep(1) would sleep the full

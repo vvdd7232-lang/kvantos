@@ -1,11 +1,11 @@
-/* Paging: identity mapping of the first 16 MiB */
+/* Paging: identity mapping of the first 64 MiB */
 #include "kernel.h"
 
 #define PAGE_PRESENT 0x1
 #define PAGE_RW      0x2
 #define PAGE_USER    0x4
 
-#define IDENTITY_MB  16
+#define IDENTITY_MB  64
 #define PT_COUNT     (IDENTITY_MB)      /* one table = 1024 * 4K = 4 MiB */
 
 static u32 page_directory[1024] __attribute__((aligned(4096)));

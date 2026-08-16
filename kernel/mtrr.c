@@ -23,6 +23,7 @@
 
 static int mtrr_ok = 0;
 static int mtrr_slot_used = -1;
+static u32 mtrr_owned = 0;      /* bitmask of the pairs we programmed */
 
 static inline void rdmsr(u32 msr, u32 *lo, u32 *hi) {
     __asm__ volatile("rdmsr" : "=a"(*lo), "=d"(*hi) : "c"(msr));
@@ -73,6 +74,42 @@ static u32 fit_size(u32 base, u32 size) {
 
 int mtrr_available(void) { return mtrr_ok; }
 
+/* Program one variable MTRR pair. Returns the slot used, or -1. */
+static int mtrr_program(u32 vcnt, int slot, u32 base, u32 len) {
+    if (slot < 0) {
+        for (u32 i = 0; i < vcnt; i++) {
+            u32 mlo, mhi;
+            rdmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, &mlo, &mhi);
+            if (!(mlo & (1u << 11))) { slot = (int)i; break; }
+        }
+    }
+    if (slot < 0) return -1;
+
+    u32 fl = irq_save();
+
+    u32 cr0;
+    __asm__ volatile("movl %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile("movl %0, %%cr0" : : "r"((cr0 | 0x40000000u) & ~0x20000000u));
+    __asm__ volatile("wbinvd");
+
+    u32 def_lo, def_hi;
+    rdmsr(IA32_MTRR_DEF_TYPE, &def_lo, &def_hi);
+    wrmsr(IA32_MTRR_DEF_TYPE, def_lo & ~(1u << 11), def_hi);
+
+    wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2,
+          (base & 0xFFFFF000u) | MTRR_TYPE_WC, 0);
+    wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2 + 1,
+          ((~(len - 1)) & 0xFFFFF000u) | (1u << 11), 0x0000000F);
+
+    wrmsr(IA32_MTRR_DEF_TYPE, def_lo | (1u << 11), def_hi);
+
+    __asm__ volatile("wbinvd");
+    __asm__ volatile("movl %0, %%cr0" : : "r"(cr0));
+
+    irq_restore(fl);
+    return slot;
+}
+
 /* Returns 1 if WC was successfully assigned to the region. */
 int mtrr_set_wc(u32 base, u32 size) {
     if (!has_cpuid()) return 0;
@@ -88,53 +125,49 @@ int mtrr_set_wc(u32 base, u32 size) {
     if (!(cap_lo & (1u << 10))) return 0; /* bit 10: WC support */
     if (!vcnt) return 0;
 
-    u32 len = fit_size(base, size);
-    if (len < 0x100000u) return 0;        /* anything below 1 MiB is pointless */
+    /* A single MTRR can only describe a power-of-two block aligned to its
+       own size, so one register never covers a framebuffer whose size is
+       not a power of two. At 1920x1080x32 (7.91 MiB) it used to cover
+       just 4 MiB: the remaining half of every frame stayed uncacheable,
+       and each write there became a separate bus transaction. That is
+       what dragged the desktop down to ~20 fps as the resolution grew -
+       and it got worse with size, exactly as reported.
 
-    /* Reuse our own register on a repeated call. Every mode switch
-       re-arms WC for the new geometry; hunting for a "free" pair each
-       time would burn through all the variable MTRRs after a handful of
-       resolution changes and then silently stop working. */
-    int slot = -1;
-    if (mtrr_slot_used >= 0 && (u32)mtrr_slot_used < vcnt) {
-        slot = mtrr_slot_used;
-    } else {
-        for (u32 i = 0; i < vcnt; i++) {
-            u32 mlo, mhi;
-            rdmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, &mlo, &mhi);
-            if (!(mlo & (1u << 11))) { slot = (int)i; break; }
-        }
+       The region is therefore covered with SEVERAL registers: the
+       largest fitting block, then the next one for the remainder, and so
+       on while free MTRRs and at least 1 MiB of tail remain. */
+    int used_any = 0;
+    u32 addr = base;
+    u32 left = size;
+
+    /* Release the pairs we programmed last time before re-arming, so a
+       sequence of mode changes cannot exhaust the registers. */
+    for (u32 i = 0; i < vcnt && i < 32; i++) {
+        if (!(mtrr_owned & (1u << i))) continue;
+        u32 fl = irq_save();
+        wrmsr(IA32_MTRR_PHYSBASE0 + i * 2, 0, 0);
+        wrmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, 0, 0);
+        irq_restore(fl);
     }
-    if (slot < 0) return 0;
+    mtrr_owned = 0;
 
-    u32 fl = irq_save();
+    while (left >= 0x100000u) {
+        u32 len = fit_size(addr, left);
+        if (len < 0x100000u) break;
 
-    /* The standard MTRR change sequence: disable the cache, flush it,
-       clear the global MTRR enable. */
-    u32 cr0;
-    __asm__ volatile("movl %%cr0, %0" : "=r"(cr0));
-    __asm__ volatile("movl %0, %%cr0" : : "r"((cr0 | 0x40000000u) & ~0x20000000u));
-    __asm__ volatile("wbinvd");
+        int slot = mtrr_program(vcnt, -1, addr, len);
+        if (slot < 0) break;                  /* no free registers left */
 
-    u32 def_lo, def_hi;
-    rdmsr(IA32_MTRR_DEF_TYPE, &def_lo, &def_hi);
-    wrmsr(IA32_MTRR_DEF_TYPE, def_lo & ~(1u << 11), def_hi);
+        mtrr_owned |= (1u << slot);
+        mtrr_slot_used = slot;
+        used_any = 1;
 
-    /* PHYSBASE: address + type; PHYSMASK: length mask + valid bit. */
-    wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2,
-          (base & 0xFFFFF000u) | MTRR_TYPE_WC, 0);
-    wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2 + 1,
-          ((~(len - 1)) & 0xFFFFF000u) | (1u << 11), 0x0000000F);
+        addr += len;
+        left -= len;
+    }
 
-    wrmsr(IA32_MTRR_DEF_TYPE, def_lo | (1u << 11), def_hi);
-
-    __asm__ volatile("wbinvd");
-    __asm__ volatile("movl %0, %%cr0" : : "r"(cr0));
-
-    irq_restore(fl);
-
+    if (!used_any) return 0;
     mtrr_ok = 1;
-    mtrr_slot_used = slot;
     return 1;
 }
 

@@ -25,6 +25,7 @@ u32  fb_bytes(void)   { return fb_pitch * fb_h; }
 
 void fb_set_target(void *p) { fb_draw = p ? (u8 *)p : fb_hw; }
 void *fb_get_hw(void)       { return fb_hw; }
+void *fb_get_target(void)   { return fb_draw; }
 
 /* The framebuffer usually sits outside the mapped 16 MiB (around
    0xFD000000). Called right after paging is enabled. */
