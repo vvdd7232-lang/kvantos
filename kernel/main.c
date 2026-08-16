@@ -7,7 +7,7 @@
 #define MULTIBOOT_MAGIC 0x2BADB002
 
 #define HEAP_BASE 0x01000000      /* 16 MiB (above the .kapp window) */
-#define HEAP_SIZE 0x02000000      /* 32 MiB: room for a screen buffer plus its cache */
+#define HEAP_SIZE 0x04000000      /* 64 MiB: room for large screen buffers */
 
 static void step(const char *what) {
     vga_set_color(VGA_COLOR(VGA_DGREY, VGA_BLACK));
@@ -98,7 +98,7 @@ void kmain(u32 magic, u32 mbi_addr) {
     paging_init();
     if (have_fb && !fb_map())
         panic(T("Failed to map the framebuffer into the address space", "Не удалось отобразить фреймбуфер в адресное пространство"), NULL);
-    step(T("Paging: identity-mapped 64 MiB, #PF handler", "Paging: identity-mapping 64 МиБ, обработчик #PF"));
+    step(T("Paging: identity-mapped 128 MiB, #PF handler", "Paging: identity-mapping 128 МиБ, обработчик #PF"));
 
     /* The heap is sized from the RAM actually present. The desktop wants
        two screen-sized buffers (the back buffer plus the cached
