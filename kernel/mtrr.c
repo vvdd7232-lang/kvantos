@@ -91,12 +91,19 @@ int mtrr_set_wc(u32 base, u32 size) {
     u32 len = fit_size(base, size);
     if (len < 0x100000u) return 0;        /* anything below 1 MiB is pointless */
 
-    /* Look for a free register pair (valid = 0 in MASK). */
+    /* Reuse our own register on a repeated call. Every mode switch
+       re-arms WC for the new geometry; hunting for a "free" pair each
+       time would burn through all the variable MTRRs after a handful of
+       resolution changes and then silently stop working. */
     int slot = -1;
-    for (u32 i = 0; i < vcnt; i++) {
-        u32 mlo, mhi;
-        rdmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, &mlo, &mhi);
-        if (!(mlo & (1u << 11))) { slot = (int)i; break; }
+    if (mtrr_slot_used >= 0 && (u32)mtrr_slot_used < vcnt) {
+        slot = mtrr_slot_used;
+    } else {
+        for (u32 i = 0; i < vcnt; i++) {
+            u32 mlo, mhi;
+            rdmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, &mlo, &mhi);
+            if (!(mlo & (1u << 11))) { slot = (int)i; break; }
+        }
     }
     if (slot < 0) return 0;
 

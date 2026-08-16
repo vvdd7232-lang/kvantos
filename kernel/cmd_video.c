@@ -238,6 +238,8 @@ void cmd_refresh(int argc, char **argv) {
         kputs(T("\n    Change with: refresh <50..120>\n", "\n    Изменить: refresh <50..120>\n"));
         if (fb_active() && (vbe_backend() == GPU_BGA || vbe_backend() == GPU_VMWARE))
             kputs(T("    Note: in LFB mode the host system drives the refresh\n", "    Внимание: в режиме LFB развёртку задаёт хост-система\n"));
+        else if (fb_active())
+            kputs(T("    Note: in LFB mode the rate is fixed by the video mode\n", "    Внимание: в режиме LFB частота задана видеорежимом\n"));
         else
             kputs(T("    CRTC timings are programmed directly\n", "    Тайминги CRTC программируются напрямую\n"));
         vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
@@ -260,7 +262,20 @@ void cmd_refresh(int argc, char **argv) {
         kprintf(T("\n  The value %u Hz is stored, but the real refresh rate\n", "\n  Значение %u Гц сохранено, но реальную развёртку\n"), hz);
         kputs(T("  inside a virtual machine is set by the host.\n", "  в виртуальной машине задаёт хост-система.\n"));
         vga_set_color(VGA_COLOR(VGA_DGREY, VGA_BLACK));
-        kputs(T("  On real hardware with a normal CRTC the rate does change.\n\n", "  На физическом железе с обычным CRTC частота меняется.\n\n"));
+        kputs(T("  Outside a linear framebuffer the CRTC is programmed directly.\n\n", "  Вне режима линейного фреймбуфера CRTC программируется напрямую.\n\n"));
+        vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
+    } else if (r == VBE_ERR_UNSUPPORTED && fb_active()) {
+        /* Deliberate refusal, not a failure: under a linear framebuffer
+           the legacy CRTC does not drive the scan-out, and programming it
+           would throw the monitor out of sync. */
+        vga_set_color(VGA_COLOR(VGA_YELLOW, VGA_BLACK));
+        kputs(T("\n  In linear framebuffer mode the refresh rate is fixed\n",
+                "\n  В режиме линейного фреймбуфера частота задана\n"));
+        kputs(T("  by the video mode and cannot be reprogrammed safely.\n",
+                "  видеорежимом и не может быть изменена безопасно.\n"));
+        vga_set_color(VGA_COLOR(VGA_DGREY, VGA_BLACK));
+        kputs(T("  Pick another resolution with: vidmode\n\n",
+                "  Выберите другое разрешение командой: vidmode\n\n"));
         vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
     } else {
         vga_set_color(VGA_COLOR(VGA_LRED, VGA_BLACK));

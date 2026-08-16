@@ -1544,6 +1544,11 @@ static void settings_apply(void) {
             changed = 1;
         } else if (r == VBE_WARN_VIRTUAL) {
             set_status(T("The host system sets the refresh rate", "Частоту задаёт хост-система"), C_YELLOW);
+        } else if (r == VBE_ERR_UNSUPPORTED) {
+            /* Refusing is deliberate: reprogramming the CRTC under a
+               linear framebuffer would desync the monitor. */
+            set_status(T("The refresh rate is fixed by the video mode",
+                         "Частота задана видеорежимом и не меняется"), C_YELLOW);
         } else {
             set_status(vbe_error_text(r), C_RED);
         }

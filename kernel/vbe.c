@@ -307,7 +307,16 @@ int vbe_set_mode(u32 w, u32 h, u32 bpp) {
         pci_dev_t *gpu = pci_gpu();
         if (gpu) { int i = -1; phys = pci_bar_mem(gpu, &i); }
         if (!phys) phys = fb_base();          /* keep the previous address */
-        pitch = w * (bpp >> 3);
+
+        /* The adapter is free to round the scanline up (alignment to 8 or
+           16 pixels), and BGA reports the value it actually took in
+           VIRT_WIDTH. Assuming pitch = w * bytes blindly would skew every
+           row on hardware that rounds - and for a width that is not a
+           multiple of 8 the last rows run past the buffer. So the pitch
+           is read back rather than guessed. */
+        u32 vw = bga_read(VBE_DISPI_INDEX_VIRT_WIDTH);
+        if (vw < w) vw = w;                   /* nonsense readback - trust the request */
+        pitch = vw * (bpp >> 3);
 
     } else {  /* VMware SVGA II */
         svga_write(SVGA_REG_ENABLE, 0);
@@ -387,13 +396,25 @@ u32 vbe_measure_hz(void) {
 int vbe_set_refresh(u32 hz) {
     if (hz < 50 || hz > 120) return VBE_ERR_BADPARAM;
 
-    /* On emulated adapters in LFB mode the host dictates the timings:
-       the CRTC there is decorative, so we say so honestly. */
-    if (backend == GPU_BGA || backend == GPU_VMWARE) {
-        if (fb_active()) {
+    /* CRITICAL: in a linear framebuffer mode the legacy VGA CRTC
+       (0x3D4/0x3D5) does NOT describe the active scan-out. The timings
+       below are derived from the legacy pixel clock (25.175/28.322 MHz),
+       which is only valid for 640x480/720x400. Writing such a vertical
+       total into a controller that is actually scanning out, say,
+       1024x768 puts the sync pulse inside the visible area: the monitor
+       loses sync and goes black - the machine looks frozen although the
+       kernel keeps running.
+
+       Emulators hide this completely (QEMU/Bochs report GPU_BGA and
+       return early below), so the fault only ever shows on real
+       hardware, where the adapter reports GPU_FIXED. Therefore: while a
+       linear framebuffer is active the CRTC is never touched. */
+    if (fb_active()) {
+        if (backend == GPU_BGA || backend == GPU_VMWARE) {
             refresh_hz = hz;
             return VBE_WARN_VIRTUAL;   /* the value is accepted, but the host decides */
         }
+        return VBE_ERR_UNSUPPORTED;    /* real adapter in LFB: refuse, do not desync */
     }
 
     u8 misc = inb(VGA_MISC_R);

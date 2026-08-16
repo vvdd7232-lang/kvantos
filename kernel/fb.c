@@ -75,6 +75,14 @@ int fb_remap(u32 phys, u32 w, u32 h, u32 pitch, u8 bpp) {
     if (phys + size > 0x01000000u)
         if (paging_map_range(phys, size, 1) < 0) return -1;
 
+    /* The write-combining region was sized for the PREVIOUS mode. After a
+       switch to a larger resolution the tail of the buffer stays
+       uncacheable, and every frame past that boundary crawls - on real
+       hardware a 1920x1080 frame then takes hundreds of milliseconds and
+       the desktop looks hung. QEMU keeps the framebuffer in ordinary host
+       RAM, so it never shows this. Re-arm WC for the new geometry. */
+    mtrr_set_wc(phys, size);
+
     fb_hw    = (u8 *)phys;
     fb_draw  = fb_hw;
     fb_w     = w;
