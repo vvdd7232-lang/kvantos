@@ -319,16 +319,40 @@ int vbe_set_mode(u32 w, u32 h, u32 bpp) {
         pitch = vw * (bpp >> 3);
 
     } else {  /* VMware SVGA II */
+        /* CRITICAL: SVGA_REG_CONFIG_DONE must NOT be set here.
+           Writing 1 to it declares "the driver owns the FIFO", after
+           which the adapter stops scanning the framebuffer on its own
+           and only repaints the rectangles the driver submits through
+           the FIFO command queue. This driver has no FIFO support at
+           all, so nothing is ever submitted: the screen keeps whatever
+           was on it at the moment of the switch and the lower part of
+           the desktop stays black. Input still works, which makes it
+           look like a freeze.
+
+           QEMU's SVGA emulation is lenient and keeps scanning the
+           buffer regardless, which is why this never showed in testing
+           - real VMware Workstation honours the register strictly.
+
+           Without CONFIG_DONE the adapter stays in plain framebuffer
+           mode, exactly what fb_present() needs. */
         svga_write(SVGA_REG_ENABLE, 0);
         svga_write(SVGA_REG_WIDTH, w);
         svga_write(SVGA_REG_HEIGHT, h);
         svga_write(SVGA_REG_BPP, bpp);
         svga_write(SVGA_REG_ENABLE, 1);
-        svga_write(SVGA_REG_CONFIG_DONE, 1);
+
         phys  = svga_read(SVGA_REG_FB_START);
         pitch = svga_read(SVGA_REG_BYTES_PER_LINE);
         if (!pitch) pitch = w * (bpp >> 3);
         if (!phys) phys = svga_fb;
+
+        /* Sanity-check the readback: a stride smaller than one visible
+           row would make fb_present() write past the end of the buffer. */
+        if (pitch < w * (bpp >> 3)) pitch = w * (bpp >> 3);
+
+        /* Confirm the adapter really took the mode. */
+        if (svga_read(SVGA_REG_WIDTH) != w || svga_read(SVGA_REG_HEIGHT) != h)
+            return VBE_ERR_REJECTED;
     }
 
     /* rebind the framebuffer driver to the new mode */
