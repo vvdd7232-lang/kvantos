@@ -1494,23 +1494,71 @@ static void settings_apply(void) {
 
     if (set_res_sel >= 0) {
         vmode_t m, cur;
-        vbe_mode_get((u32)set_res_sel, &m);
+        /* a stale chip id must not be read as an uninitialised mode */
+        if (!vbe_mode_get((u32)set_res_sel, &m)) { set_res_sel = -1; return; }
         vbe_current(&cur);
 
         if (m.width != cur.width || m.height != cur.height || m.bpp != cur.bpp) {
-            /* draw straight into video memory while there is no buffer */
+            /* The backbuffer for the TARGET mode is reserved before the
+               adapter is touched. Running the desktop without one means
+               every primitive goes straight into video memory: on real
+               hardware that is uncached MMIO, so a single full redraw of
+               a 1920x1080 screen costs hundreds of milliseconds and a
+               redraw fires on every input event - the machine looks
+               frozen although the kernel keeps running. Emulators hold
+               video memory in ordinary host RAM, which is why the
+               fallback is free there and the fault never shows in QEMU.
+
+               The heap is 10 MiB and a 1920x1080x32 buffer needs 7.91 of
+               them, so the allocation really can fail once a few windows
+               are open. Failing must leave the mode untouched rather
+               than drop into direct rendering. */
+            u32 est_w = (m.width + 15u) & ~15u;      /* the adapter may widen the scanline */
+            u32 need  = est_w * (m.bpp >> 3) * m.height;
+
             if (backbuf) { kfree(backbuf); backbuf = NULL; }
             fb_set_target(NULL);
 
-            int r = vbe_set_mode(m.width, m.height, m.bpp);
-            if (r != VBE_OK) {
-                set_status(vbe_error_text(r), C_RED);
-                /* restore the buffer for the previous mode;
-                   if memory ran out, draw straight into video memory */
+            u32 *nb = (u32 *)kmalloc(need);
+            if (!nb) {
+                /* stay where we are - the current mode is still backed */
                 backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                fb_set_target(backbuf);          /* NULL -> direct rendering */
+                fb_set_target(backbuf);
+                set_status(T("Not enough kernel memory for this resolution",
+                             "Не хватает памяти ядра для этого разрешения"), C_RED);
                 set_res_sel = -1;
                 return;
+            }
+
+            int r = vbe_set_mode(m.width, m.height, m.bpp);
+            if (r != VBE_OK) {
+                kfree(nb);
+                set_status(vbe_error_text(r), C_RED);
+                /* restore the buffer for the previous mode */
+                backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+                fb_set_target(backbuf);
+                set_res_sel = -1;
+                return;
+            }
+
+            /* The adapter may have taken a wider scanline than estimated. */
+            if (fb_pitch_get() * fb_height() > need) {
+                kfree(nb);
+                nb = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+                if (!nb) {
+                    /* Undo rather than run unbuffered at the new size. */
+                    vbe_set_mode(cur.width, cur.height, cur.bpp);
+                    backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+                    fb_set_target(backbuf);
+                    scr_w = fb_width();
+                    scr_h = fb_height();
+                    mouse_set_bounds((i32)scr_w, (i32)scr_h);
+                    mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
+                    set_status(T("Not enough kernel memory for this resolution",
+                                 "Не хватает памяти ядра для этого разрешения"), C_RED);
+                    set_res_sel = -1;
+                    return;
+                }
             }
 
             scr_w = fb_width();
@@ -1519,9 +1567,8 @@ static void settings_apply(void) {
             mouse_set_bounds((i32)scr_w, (i32)scr_h);
             mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
 
-            backbuf = (u32 *)kmalloc(fb_pitch_get() * scr_h);
+            backbuf = nb;
             fb_set_target(backbuf);
-            if (!backbuf) fb_set_target(NULL);
 
             /* windows must not be left beyond the edge of the new screen */
             for (int i = 0; i < MAX_WIN; i++) {
@@ -2006,7 +2053,10 @@ int gui_run(void) {
 
     u32 bytes = fb_pitch_get() * scr_h;
     backbuf = (u32 *)kmalloc(bytes);
-    /* when memory runs short, draw straight into video memory */
+    /* Without a backbuffer every primitive goes straight to uncached
+       video memory - on real hardware that is unusably slow and looks
+       like a freeze. Better to refuse the desktop than to hang it. */
+    if (!backbuf) return -2;
     fb_set_target(backbuf);
 
     memset(wins, 0, sizeof(wins));

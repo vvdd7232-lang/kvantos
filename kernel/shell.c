@@ -608,12 +608,17 @@ static void cmd_guimenu(void) {
     kputs(T("  Back to the console: Esc or Q\n", "  Выход обратно в консоль: Esc или Q\n"));
     sleep_ms(400);
 
-    gui_run();
+    int grc = gui_run();
 
     /* back to text mode */
     vga_text_mode_restore();
     vga_clear();
     logo_print();
+    if (grc == -2) {
+        vga_set_color(VGA_COLOR(VGA_LRED, VGA_BLACK));
+        kputs(T("\n  Not enough kernel memory for a screen buffer at this\n", "\n  Не хватает памяти ядра под буфер экрана при текущем\n"));
+        kputs(T("  resolution. Lower it, e.g.: vidmode 1024 768\n\n", "  разрешении. Уменьшите его, например: vidmode 1024 768\n\n"));
+    }
     vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
     kputs(T("\n  Back in the kvsh text console.\n\n", "\n  Возврат в текстовую консоль kvsh.\n\n"));
 }
