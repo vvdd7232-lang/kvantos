@@ -57,6 +57,12 @@ static void kbd_cb(registers_t *r) {
                 case 0x50: push((char)(u8)KEY_DOWN); return;
                 case 0x4B: push((char)(u8)KEY_LEFT); return;
                 case 0x4D: push((char)(u8)KEY_RIGHT); return;
+                case 0x47: push((char)(u8)KEY_HOME); return;
+                case 0x4F: push((char)(u8)KEY_END); return;
+                case 0x49: push((char)(u8)KEY_PGUP); return;
+                case 0x51: push((char)(u8)KEY_PGDN); return;
+                case 0x53: push((char)(u8)KEY_DEL); return;
+                case 0x52: push((char)(u8)KEY_INS); return;
             }
         }
         return;
@@ -72,6 +78,24 @@ static void kbd_cb(registers_t *r) {
     switch (sc) {
         case 0x2A: case 0x36: shift = 1; return;
         case 0x1D: ctrl = 1; return;
+        /* the grey navigation block, and the same keys on the numeric
+           keypad when NumLock is off (they arrive without the 0xE0) */
+        case 0x47: push((char)(u8)KEY_HOME); return;
+        case 0x4F: push((char)(u8)KEY_END);  return;
+        case 0x49: push((char)(u8)KEY_PGUP); return;
+        case 0x51: push((char)(u8)KEY_PGDN); return;
+        case 0x53: push((char)(u8)KEY_DEL);  return;
+        /* function keys F1..F10 are contiguous from 0x3B */
+        case 0x3B: push((char)(u8)KEY_F1); return;
+        case 0x3C: push((char)(u8)KEY_F2); return;
+        case 0x3D: push((char)(u8)KEY_F3); return;
+        case 0x3E: push((char)(u8)KEY_F4); return;
+        case 0x3F: push((char)(u8)KEY_F5); return;
+        case 0x40: push((char)(u8)KEY_F6); return;
+        case 0x41: push((char)(u8)KEY_F7); return;
+        case 0x42: push((char)(u8)KEY_F8); return;
+        case 0x43: push((char)(u8)KEY_F9); return;
+        case 0x44: push((char)(u8)KEY_F10); return;
         case 0x3A:                       /* CapsLock */
             caps = !caps;
             kbd_sync_leds();

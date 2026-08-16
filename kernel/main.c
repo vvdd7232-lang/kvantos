@@ -3,6 +3,7 @@
  * ============================================================ */
 #include "kernel.h"
 #include "kvapp.h"
+#include "vfs.h"
 
 #define MULTIBOOT_MAGIC 0x2BADB002
 
@@ -229,6 +230,22 @@ skip_hw:
             kputs(T("  [--] No ATA disk: installing applications is unavailable\n", "  [--] Диск ATA не найден: установка приложений недоступна\n"));
             vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
         }
+
+        /* Every other filesystem on every disk: partition tables are
+           read and FAT/NTFS volumes are mounted under /mnt. */
+        vfs_init();
+        int nvol = vfs_autoscan();
+        for (int i = 0; i < vfs_volume_count(); i++) {
+            vfs_volume_t *vv = vfs_volume(i);
+            if (vv->kind == FS_RAMFS || vv->kind == FS_KVFS) continue;
+            kprintf(T("       /mnt/%s  %s  %s%s\n", "       /mnt/%s  %s  %s%s\n"),
+                    vv->name, vfs_kind_name(vv->kind), vv->label,
+                    vv->writable ? "" : T(" (read-only)", " (только чтение)"));
+        }
+        if (nvol) step(T("Volumes: FAT/NTFS partitions mounted under /mnt",
+                         "Тома: разделы FAT/NTFS подключены в /mnt"));
+        else      step(T("Volumes: no FAT or NTFS partitions found",
+                         "Тома: разделы FAT и NTFS не найдены"));
     }
 
     sched_init();

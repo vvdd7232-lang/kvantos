@@ -158,6 +158,51 @@ of showing an invented number.
 * **COM1** — every kernel message is mirrored to the serial port for debugging
 * **PC speaker** — sound generated through PIT channel 2
 
+### Filesystems and volumes
+KvantOS reads the partition table of every ATA disk, recognises the filesystems
+it finds and mounts them into one namespace under `/mnt`.
+
+| Filesystem | Read | Write | Notes |
+|---|---|---|---|
+| **FAT32** | yes | yes | long names (VFAT), subdirectories, files up to 4 GiB |
+| **FAT16** | yes | yes | the same driver; chosen automatically by cluster count |
+| **NTFS** | yes | **no** | MFT, resident and non-resident data, B-tree directories |
+| KvFS | yes | yes | the system's own format, for installed applications |
+| ramfs | yes | yes | files in RAM, from the boot modules |
+
+**FAT32/FAT16** is a complete driver. It reads and creates long names in UTF-16,
+walks subdirectories, allocates and frees clusters through both copies of the
+FAT, keeps the FSInfo free-cluster hint up to date, and creates directories with
+their `.` and `..` entries. Volumes written by KvantOS pass `fsck.vfat` without a
+single complaint and mount normally under Linux and Windows.
+
+**NTFS is deliberately read-only.** The driver understands the Master File
+Table, the update-sequence fixups, resident and non-resident `$DATA` attributes,
+runlists including sparse extents, `$ATTRIBUTE_LIST` for fragmented files, and
+directory B-trees built from `$INDEX_ROOT` and `$INDEX_ALLOCATION`. It does not
+write, and that is a design decision rather than an omission: NTFS journals
+every change through `$LogFile`, and a driver that modified the volume without
+maintaining the journal, the cluster bitmap and the B-tree balance would produce
+a filesystem that Windows refuses to mount. Compressed and encrypted streams are
+reported as an error instead of being returned as garbage.
+
+Not supported: exFAT (a different format that merely shares the NTFS partition
+type — it is recognised and skipped), and copying whole directory trees in one
+action.
+
+### The file manager
+A two-pane manager in the spirit of Norton Commander, on the `Files` desktop
+icon. The left pane is the source, the right one the destination, so a copy is
+always "from the active pane to the other one" — including from NTFS to FAT32.
+
+* `Tab` — switch pane, `Enter` — open a directory or preview a file
+* `Backspace` — go up; at the root of a volume it moves to the next volume
+* `F5` — copy, `F7` — new directory, `F8` — delete (with confirmation),
+  `F2` — refresh, `F3` — preview
+* the preview shows text as text and binary files as a hex dump
+* read-only volumes are marked as such, and every write to one is refused with
+  an explanation rather than a silent failure
+
 ### The kvsh shell
 An interactive command line with history (↑↓ arrows), Ctrl+L and Ctrl+C.
 
@@ -168,8 +213,14 @@ write     rm        colors    beep      alloc     lang
 history   crash     reboot    poweroff  guimenu   gfx
 lspci     gpu       vidmode   refresh   setup     disk
 format    df        dls       dcat      install   uninstall
-apps      hwreport
+apps      hwreport  mount     rescan    vls       vcd
+vcat      vcp       vrm       vmkdir
 ```
+
+`mount` lists the mounted volumes with their type, label and free space,
+`vls`/`vcat`/`vcp`/`vrm`/`vmkdir` work on any volume by path
+(for example `vcp /mnt/hda2/readme.txt /mnt/hda1/`), and `rescan` looks for
+volumes again after a disk has been swapped.
 
 `guimenu` starts the graphical environment, `gfx` reports the video mode,
 `lang` switches the interface language.

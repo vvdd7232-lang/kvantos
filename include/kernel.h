@@ -109,6 +109,7 @@ void kputc(char c);
 void kputs(const char *s);
 void kprintf(const char *fmt, ...);
 void ksnprintf(char *buf, size_t size, const char *fmt, ...);
+int  ksnprintf_ret(char *buf, size_t size, const char *fmt, ...);
 void kvsnprintf_v(char *buf, size_t size, const char *fmt, va_list ap);
 void kvprintf(void (*emit)(char, void *), void *ctx, const char *fmt, va_list ap);
 
@@ -137,6 +138,25 @@ void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 #define KEY_DOWN   0x82
 #define KEY_LEFT   0x83
 #define KEY_RIGHT  0x84
+/* Navigation and function keys. They travel through the same one-byte
+   queue as characters, so the values stay above the printable range
+   and below 0xFF. */
+#define KEY_HOME   0x85
+#define KEY_END    0x86
+#define KEY_PGUP   0x87
+#define KEY_PGDN   0x88
+#define KEY_DEL    0x89
+#define KEY_INS    0x8A
+#define KEY_F1     0x90
+#define KEY_F2     0x91
+#define KEY_F3     0x92
+#define KEY_F4     0x93
+#define KEY_F5     0x94
+#define KEY_F6     0x95
+#define KEY_F7     0x96
+#define KEY_F8     0x97
+#define KEY_F9     0x98
+#define KEY_F10    0x99
 
 typedef struct { u8 sec, min, hour, day, month; u16 year; } rtc_time_t;
 void rtc_read(rtc_time_t *t);

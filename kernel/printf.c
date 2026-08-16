@@ -70,6 +70,18 @@ void ksnprintf(char *buf, size_t size, const char *fmt, ...) {
     if (size) buf[s.pos < size ? s.pos : size - 1] = 0;
 }
 
+/* Like ksnprintf, but returns how many characters were written. The
+   hex dump in the file manager builds one line from several calls and
+   needs to know where the previous one stopped. */
+int ksnprintf_ret(char *buf, size_t size, const char *fmt, ...) {
+    sbuf_t s = { buf, size, 0 };
+    va_list ap; va_start(ap, fmt);
+    kvprintf(emit_buf, &s, fmt, ap);
+    va_end(ap);
+    if (size) buf[s.pos < size ? s.pos : size - 1] = 0;
+    return (int)(s.pos < size ? s.pos : (size ? size - 1 : 0));
+}
+
 /* Variant taking an already-built argument list: needed by the
    syscall table, where format() parses its own "..." arguments. */
 void kvsnprintf_v(char *buf, size_t size, const char *fmt, va_list ap) {

@@ -4,6 +4,8 @@
  *  Drawing goes into a back buffer that is then blitted to screen.
  * ============================================================ */
 #include "kernel.h"
+#include "vfs.h"
+#include "filemgr.h"
 
 #define MAX_WIN 8
 #define TITLE_H 22
@@ -429,36 +431,298 @@ static void ed_scroll_to_cursor(void) {
     if (ed_top < 0) ed_top = 0;
 }
 
-static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
-    i32 y = cy + 10;
-    fb_text(cx + 12, y, T("ramfs — files kept in RAM", "ramfs — файлы в оперативной памяти"), C_TEXT_DIM, 0xFFFFFFFF);
-    y += 22;
+/* forward declarations: the manager is drawn before the widget helpers
+   are defined further down this file */
+static void widget_chip(int win, int id, i32 x, i32 y, i32 w, i32 h,
+                        const char *label, int active);
 
-    rfile_t *tbl = ramfs_table();
-    u32 count = 0, bytes = 0;
-    for (int i = 0; i < RAMFS_MAX_FILES; i++) {
-        if (!tbl[i].used) continue;
-        if (y > v->y + v->h - 46) break;
-        int hovered = 0;
-        fb_fill(cx + 8, y - 3, cw - 16, 20, count & 1 ? fb_rgb(246, 247, 250) : C_WIN);
-        /* document icon */
-        fb_fill(cx + 14, y, 11, 14, C_WHITE);
-        fb_rect(cx + 14, y, 11, 14, fb_rgb(150, 158, 175));
-        fb_fill(cx + 16, y + 3, 7, 1, C_TEXT_DIM);
-        fb_fill(cx + 16, y + 6, 7, 1, C_TEXT_DIM);
-        fb_fill(cx + 16, y + 9, 5, 1, C_TEXT_DIM);
-        fb_text(cx + 34, y, tbl[i].name, C_TEXT, 0xFFFFFFFF);
-        char sz[24];
-        ksnprintf(sz, sizeof(sz), T("%u B", "%u Б"), tbl[i].size);
-        fb_text(cx + cw - 80, y, sz, C_TEXT_DIM, 0xFFFFFFFF);
-        y += 20;
-        count++; bytes += tbl[i].size;
-        (void)hovered;
+/* ============================================================
+ *  The file manager
+ *
+ *  Two panes side by side over any mounted volume. The drawing is here
+ *  because it needs the framebuffer primitives; the state and all the
+ *  actual file operations live in kernel/filemgr.c.
+ * ============================================================ */
+
+/* hit-test identifiers of the toolbar and the panes */
+#define W_FM_PANE0   700
+#define W_FM_PANE1   701
+#define W_FM_ROW0    1000        /* + pane*512 + row  */
+#define W_FM_UP      710
+#define W_FM_COPY    711
+#define W_FM_DEL     712
+#define W_FM_MKDIR   713
+#define W_FM_REFRESH 714
+#define W_FM_VOLUME  715
+#define W_FM_VIEWCLS 716
+#define W_FM_YES     717
+#define W_FM_NO      718
+
+static i32 fm_rows_visible(window_t *v) {
+    i32 body = v->h - TITLE_H - 34 - 30 - 26;   /* toolbar, path, footer */
+    i32 n = body / 18;
+    return n < 1 ? 1 : n;
+}
+
+/* Shorten a long name so it fits: "a very long...name.txt" */
+static void fit_name(char *dst, u32 dstsz, const char *src, u32 maxchars) {
+    u32 len = utf8_len(src);
+    if (len <= maxchars) { strncpy(dst, src, dstsz); return; }
+
+    /* copy maxchars-3 characters, respecting UTF-8 boundaries */
+    u32 keep = maxchars > 4 ? maxchars - 3 : 1;
+    u32 chars = 0, i = 0, o = 0;
+    while (src[i] && chars < keep && o < dstsz - 4) {
+        u8 c = (u8)src[i];
+        u32 clen = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0 ? 2 : ((c & 0xF0) == 0xE0 ? 3 : 4));
+        for (u32 k = 0; k < clen && src[i]; k++) dst[o++] = src[i++];
+        chars++;
     }
-    char foot[64];
-    ksnprintf(foot, sizeof(foot), T("Files: %u, %u bytes total", "Файлов: %u, всего %u байт"), count, bytes);
-    fb_fill(cx + 8, v->y + v->h - 30, cw - 16, 1, fb_rgb(210, 214, 222));
-    fb_text(cx + 12, v->y + v->h - 24, foot, C_TEXT_DIM, 0xFFFFFFFF);
+    dst[o] = 0;
+    if (o + 3 < dstsz) { dst[o] = '.'; dst[o+1] = '.'; dst[o+2] = '.'; dst[o+3] = 0; }
+}
+
+static void human_size(char *dst, u32 dstsz, u32 bytes) {
+    if (bytes < 1024)              ksnprintf(dst, dstsz, "%u B", bytes);
+    else if (bytes < 1024u * 1024) ksnprintf(dst, dstsz, "%u.%u K", bytes / 1024, (bytes % 1024) * 10 / 1024);
+    else                           ksnprintf(dst, dstsz, "%u.%u M", bytes / (1024*1024),
+                                             (bytes % (1024*1024)) * 10 / (1024*1024));
+}
+
+/* one pane */
+static void fm_draw_pane(window_t *v, int win, int idx, i32 px, i32 py, i32 pw, i32 ph) {
+    int active = (fm_active_pane() == idx);
+    i32 rows = fm_rows_visible(v);
+
+    /* frame */
+    fb_fill(px, py, pw, ph, C_WHITE);
+    fb_rect(px, py, pw, ph, active ? C_ACCENT : fb_rgb(198, 203, 214));
+    if (active) fb_rect(px + 1, py + 1, pw - 2, ph - 2, C_ACCENT);
+
+    /* the volume header: name, type, free space */
+    const char *path = fm_pane_path(idx);
+    u32 tk = 0, fk = 0;
+    fm_pane_space(idx, &tk, &fk);      /* cached: see filemgr.c */
+
+    fb_fill(px + 1, py + 1, pw - 2, 20, active ? C_ACCENT : fb_rgb(232, 235, 242));
+    char head[80];
+    fit_name(head, sizeof(head), path, (u32)((pw - 90) / 8));
+    fb_text(px + 6, py + 3, head, active ? C_WHITE : C_TEXT, 0xFFFFFFFF);
+
+    char sp[32];
+    if (tk) {
+        if (fk >= 1024) ksnprintf(sp, sizeof(sp), T("%u M free", "%u М своб"), fk / 1024);
+        else            ksnprintf(sp, sizeof(sp), T("%u K free", "%u К своб"), fk);
+        fb_text(px + pw - 6 - (i32)utf8_len(sp) * 8, py + 3, sp,
+                active ? C_WHITE : C_TEXT_DIM, 0xFFFFFFFF);
+    }
+
+    hit_add(win, idx ? W_FM_PANE1 : W_FM_PANE0, px, py, pw, ph);
+
+    /* the rows */
+    int count  = fm_pane_count(idx);
+    int scroll = fm_pane_scroll(idx);
+    int sel    = fm_pane_sel(idx);
+
+    i32 y = py + 23;
+    i32 name_chars = (pw - 96) / 8;
+    if (name_chars < 6) name_chars = 6;
+
+    if (!count) {
+        fb_text(px + 10, y + 6, T("(empty)", "(пусто)"), C_TEXT_DIM, 0xFFFFFFFF);
+    }
+
+    for (int r = 0; r < rows; r++) {
+        int i = scroll + r;
+        if (i >= count) break;
+        vfs_dirent_t *e = fm_pane_item(idx, i);
+        if (!e) break;
+
+        int is_sel = (i == sel);
+        u32 bg = is_sel ? (active ? C_ACCENT : fb_rgb(214, 219, 230))
+                        : ((r & 1) ? fb_rgb(247, 248, 251) : C_WHITE);
+        fb_fill(px + 2, y, pw - 4, 18, bg);
+
+        u32 fg = is_sel && active ? C_WHITE : C_TEXT;
+
+        /* a small icon: folder or sheet */
+        if (e->is_dir) {
+            fb_fill(px + 7, y + 4, 6, 2, is_sel && active ? C_WHITE : C_YELLOW);
+            fb_fill(px + 7, y + 6, 13, 9, is_sel && active ? C_WHITE : C_YELLOW);
+        } else {
+            u32 ic = is_sel && active ? C_WHITE : fb_rgb(150, 158, 175);
+            fb_fill(px + 8, y + 3, 10, 12, is_sel && active ? C_ACCENT : C_WHITE);
+            fb_rect(px + 8, y + 3, 10, 12, ic);
+            fb_fill(px + 10, y + 6, 6, 1, ic);
+            fb_fill(px + 10, y + 9, 6, 1, ic);
+        }
+
+        char nm[96];
+        fit_name(nm, sizeof(nm), e->name, (u32)name_chars);
+        fb_text(px + 24, y + 1, nm, fg, 0xFFFFFFFF);
+
+        /* the size, or <DIR> */
+        char sz[24];
+        if (e->is_dir) strncpy(sz, T("<DIR>", "<КАТ>"), sizeof(sz));
+        else           human_size(sz, sizeof(sz), e->size);
+        i32 sw = (i32)utf8_len(sz) * 8;
+        fb_text(px + pw - 8 - sw, y + 1,
+                sz, is_sel && active ? C_WHITE : C_TEXT_DIM, 0xFFFFFFFF);
+
+        hit_add(win, W_FM_ROW0 + idx * 512 + i, px + 2, y, pw - 4, 18);
+        y += 18;
+    }
+
+    /* the scrollbar, only when it is needed */
+    if (count > rows) {
+        i32 track_y = py + 23, track_h = rows * 18;
+        fb_fill(px + pw - 5, track_y, 3, track_h, fb_rgb(228, 231, 238));
+        i32 bar = track_h * rows / count;
+        if (bar < 12) bar = 12;
+        i32 bpos = (count - rows) ? (track_h - bar) * scroll / (count - rows) : 0;
+        fb_fill(px + pw - 5, track_y + bpos, 3, bar, fb_rgb(168, 176, 194));
+    }
+
+    /* how many entries are here */
+    char cnt[48];
+    ksnprintf(cnt, sizeof(cnt), T("%d item(s)", "объектов: %d"), count);
+    fb_text(px + 6, py + ph - 17, cnt, C_TEXT_DIM, 0xFFFFFFFF);
+}
+
+/* the file preview, drawn over the panes */
+static void fm_draw_view(window_t *v, int win, i32 cx, i32 cy, i32 cw, i32 ch) {
+    i32 w = cw - 40, h = ch - 40;
+    if (w < 240) w = 240;
+    i32 x = cx + 20, y = cy + 20;
+
+    fb_fill(x + 4, y + 4, w, h, fb_rgb(0, 0, 0));      /* a soft shadow */
+    fb_fill(x, y, w, h, C_WHITE);
+    fb_rect(x, y, w, h, C_ACCENT);
+    fb_fill(x, y, w, 22, C_ACCENT);
+
+    char title[80];
+    fit_name(title, sizeof(title), fm_view_title(), (u32)((w - 60) / 8));
+    fb_text(x + 8, y + 3, title, C_WHITE, 0xFFFFFFFF);
+    fb_text(x + w - 18, y + 3, "x", C_WHITE, 0xFFFFFFFF);
+    hit_add(win, W_FM_VIEWCLS, x + w - 24, y, 24, 22);
+
+    const char *data = fm_view_data();
+    int len = fm_view_length();
+    int skip = fm_view_scroll_pos();
+    i32 ty = y + 28;
+    i32 max_y = y + h - 22;
+    i32 cols = (w - 20) / 8;
+
+    if (fm_view_is_binary()) {
+        /* a hex dump: 16 bytes per line */
+        int line = 0;
+        for (int off = 0; off < len && ty < max_y; off += 16, line++) {
+            if (line < skip) continue;
+            char row[96];
+            int o = 0;
+            o += ksnprintf_ret(row + o, sizeof(row) - o, "%04x  ", (u32)off);
+            for (int k = 0; k < 16; k++) {
+                if (off + k < len)
+                    o += ksnprintf_ret(row + o, sizeof(row) - o, "%02x ", (u8)data[off + k]);
+                else
+                    o += ksnprintf_ret(row + o, sizeof(row) - o, "   ");
+            }
+            o += ksnprintf_ret(row + o, sizeof(row) - o, " ");
+            for (int k = 0; k < 16 && off + k < len; k++) {
+                u8 c = (u8)data[off + k];
+                row[o++] = (c >= 32 && c < 127) ? (char)c : '.';
+            }
+            row[o] = 0;
+            fb_text(x + 10, ty, row, C_TEXT, 0xFFFFFFFF);
+            ty += 16;
+        }
+    } else {
+        int line = 0;
+        int i = 0;
+        while (i < len && ty < max_y) {
+            char row[160];
+            int o = 0;
+            while (i < len && data[i] != '\n' && o < (int)sizeof(row) - 1 && o < cols)
+                { if (data[i] != '\r') row[o++] = data[i]; i++; }
+            while (i < len && data[i] != '\n') i++;      /* drop the tail */
+            if (i < len) i++;                             /* skip the newline */
+            row[o] = 0;
+            if (line >= skip) { fb_text(x + 10, ty, row, C_TEXT, 0xFFFFFFFF); ty += 16; }
+            line++;
+        }
+    }
+
+    char foot[96];
+    ksnprintf(foot, sizeof(foot),
+              T("%d bytes shown  -  Esc closes, arrows scroll",
+                "показано %d байт  —  Esc закрыть, стрелки — прокрутка"), len);
+    fb_fill(x + 1, y + h - 20, w - 2, 19, fb_rgb(240, 242, 247));
+    fb_text(x + 8, y + h - 18, foot, C_TEXT_DIM, 0xFFFFFFFF);
+    (void)v;
+}
+
+/* a modal question */
+static void fm_draw_confirm(int win, i32 cx, i32 cy, i32 cw, i32 ch) {
+    i32 w = 380, h = 120;
+    if (w > cw - 20) w = cw - 20;
+    i32 x = cx + (cw - w) / 2, y = cy + (ch - h) / 2;
+
+    fb_fill(x + 4, y + 4, w, h, fb_rgb(0, 0, 0));
+    fb_fill(x, y, w, h, C_WHITE);
+    fb_rect(x, y, w, h, fb_rgb(204, 51, 68));
+    fb_fill(x, y, w, 22, fb_rgb(204, 51, 68));
+    fb_text_center(x, y + 3, w, T("Confirm deletion", "Подтвердите удаление"), C_WHITE, 0xFFFFFFFF);
+
+    char nm[80];
+    fit_name(nm, sizeof(nm), fm_confirm_target(), (u32)((w - 30) / 8));
+    fb_text_center(x, y + 38, w, nm, C_TEXT, 0xFFFFFFFF);
+    fb_text_center(x, y + 56, w, T("This cannot be undone.", "Отменить это будет нельзя."),
+                   C_TEXT_DIM, 0xFFFFFFFF);
+
+    widget_chip(win, W_FM_YES, x + w / 2 - 110, y + h - 34, 100, 26, T("Delete", "Удалить"), 1);
+    widget_chip(win, W_FM_NO,  x + w / 2 + 10,  y + h - 34, 100, 26, T("Cancel", "Отмена"), 0);
+}
+
+static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
+    int win = (int)(v - wins);
+    i32 ch = v->h - TITLE_H - 2;
+
+    fm_init();
+
+    /* the toolbar */
+    i32 tx = cx + 8, ty = cy + 6;
+    widget_chip(win, W_FM_UP,      tx,       ty, 46, 24, T("Up", "Вверх"), 0);
+    widget_chip(win, W_FM_VOLUME,  tx + 52,  ty, 74, 24, T("Volume", "Том"), 0);
+    widget_chip(win, W_FM_COPY,    tx + 132, ty, 92, 24, T("Copy F5", "Копир. F5"), 0);
+    widget_chip(win, W_FM_MKDIR,   tx + 230, ty, 92, 24, T("Folder F7", "Каталог F7"), 0);
+    widget_chip(win, W_FM_DEL,     tx + 328, ty, 92, 24, T("Delete F8", "Удалить F8"), 0);
+    widget_chip(win, W_FM_REFRESH, tx + 426, ty, 76, 24, T("Refresh", "Обновить"), 0);
+
+    /* the two panes */
+    i32 top = cy + 36;
+    i32 body_h = ch - 36 - 26;
+    i32 gap = 8;
+    i32 pw = (cw - 16 - gap) / 2;
+
+    fm_draw_pane(v, win, 0, cx + 8,           top, pw, body_h);
+    fm_draw_pane(v, win, 1, cx + 8 + pw + gap, top, pw, body_h);
+
+    /* the status line */
+    i32 sy = cy + ch - 22;
+    fb_fill(cx + 1, sy, cw - 2, 21, fb_rgb(240, 242, 247));
+
+    if (fm_input_active()) {
+        char line[160];
+        ksnprintf(line, sizeof(line), T("New folder name: %s_", "Имя нового каталога: %s_"),
+                  fm_input_text());
+        fb_text(cx + 10, sy + 3, line, C_ACCENT, 0xFFFFFFFF);
+    } else {
+        u32 col = fm_status_colour();
+        fb_text(cx + 10, sy + 3, fm_status_text(), col ? col : C_TEXT_DIM, 0xFFFFFFFF);
+    }
+
+    if (fm_view_is_open())      fm_draw_view(v, win, cx, cy, cw, ch);
+    if (fm_confirm_pending())   fm_draw_confirm(win, cx, cy, cw, ch);
 }
 
 /* a mini terminal: shows the output of the last command */
@@ -1504,6 +1768,7 @@ static void open_app(int app) {
     if (app == APP_HELP)   { w = 440; h = 470; }
     if (app == APP_SETTINGS) { w = 470; h = 430; }
     if (app == APP_STORE)  { w = 560; h = 420; }
+    if (app == APP_FILES)  { w = 720; h = 480; }   /* two panes need width */
     if (app == APP_USER)   { w = kapp_pref_w() + 2; h = kapp_pref_h() + TITLE_H + 24; }
     i32 x = 190 + (win_count % 4) * 34;
     i32 y = 60 + (win_count % 4) * 28;
@@ -1641,6 +1906,54 @@ static void settings_apply(void) {
                changed ? C_GREEN : C_TEXT_DIM);
 }
 
+/* A click inside the file manager */
+static int files_click(int id, i32 mx, i32 my) {
+    int w = hit_test(id, mx, my);
+    if (w < 0) return 0;
+
+    /* the modal question comes first: nothing else may be touched */
+    if (fm_confirm_pending()) {
+        if (w == W_FM_YES) { fm_confirm_yes(); return 1; }
+        if (w == W_FM_NO)  { fm_confirm_no();  return 1; }
+        return 1;
+    }
+    if (fm_view_is_open()) {
+        if (w == W_FM_VIEWCLS) { fm_close_view(); return 1; }
+        return 1;
+    }
+
+    switch (w) {
+        case W_FM_UP:      fm_go_up();       return 1;
+        case W_FM_VOLUME:  fm_next_volume(); return 1;
+        case W_FM_COPY:    fm_do_copy();     return 1;
+        case W_FM_MKDIR:   fm_ask_mkdir();   return 1;
+        case W_FM_DEL:     fm_ask_delete();  return 1;
+        case W_FM_REFRESH: fm_refresh(); fm_say(T("Refreshed", "Обновлено"), 0); return 1;
+        case W_FM_PANE0:   fm_set_active(0); return 1;
+        case W_FM_PANE1:   fm_set_active(1); return 1;
+    }
+
+    /* a row: select it, and open it on a double click */
+    if (w >= W_FM_ROW0) {
+        int rel  = w - W_FM_ROW0;
+        int pane = rel / 512;
+        int row  = rel % 512;
+
+        static u64 last_tick = 0;
+        static int last_row = -1, last_pane = -1;
+
+        fm_set_active(pane);
+        fm_pane_set_sel(pane, row);
+
+        u64 now = timer_ticks();
+        if (row == last_row && pane == last_pane && now - last_tick < 400)
+            fm_activate();
+        last_tick = now; last_row = row; last_pane = pane;
+        return 1;
+    }
+    return 0;
+}
+
 /* A click inside the Settings window */
 static int settings_click(int id, i32 mx, i32 my) {
     int w = hit_test(id, mx, my);
@@ -1723,6 +2036,11 @@ static void handle_click(i32 mx, i32 my, int pressed) {
         /* the Settings controls */
         if (v->app == APP_SETTINGS) {
             if (settings_click(id, mx, my)) return;
+        }
+
+        /* the file manager */
+        if (v->app == APP_FILES) {
+            if (files_click(id, mx, my)) return;
         }
 
         /* Programs: formatting the disk, launching and removing */
@@ -1932,6 +2250,18 @@ static void handle_key(int c) {
         kapp_key(c, v->x + 1, v->y + TITLE_H + 1,
                  v->w - 2, v->h - TITLE_H - 2 - 20);
         return;
+    }
+
+    /* ----- The file manager on top: it handles navigation itself.
+       Esc is only ours once no dialog is open inside it. ----- */
+    if (top >= 0 && wins[top].app == APP_FILES) {
+        window_t *v = &wins[top];
+        int rows = fm_rows_visible(v);
+        if (c == 27 && !fm_view_is_open() && !fm_confirm_pending() && !fm_input_active()) {
+            /* fall through: Esc closes the window */
+        } else if (fm_key(c, rows)) {
+            return;
+        }
     }
 
     /* ----- Notepad on top: the editor takes all input ----- */
