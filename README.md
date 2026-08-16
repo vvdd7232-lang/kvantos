@@ -337,7 +337,7 @@ previously on it becomes unreachable. In a virtual machine the disk must be
 **IDE**, not SCSI.
 
 A detailed step-by-step guide, including real hardware, is in
-[INSTALL.ru.md](INSTALL.ru.md) (Russian).
+[INSTALL.md](INSTALL.md).
 
 ## Code audit
 

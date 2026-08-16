@@ -639,7 +639,7 @@ file there, and no disk was attached to that VM.
 | Module diagnostics | `flags=0x126d mods_count=2` — GRUB passes the modules correctly |
 
 Screenshots: `screenshots/37_app_snake.png`, `38_apps_from_iso.png`.
-The user-facing instructions are in `INSTALL.ru.md`.
+The user-facing instructions are in `INSTALL.md`.
 
 ## Checksums (current)
 
