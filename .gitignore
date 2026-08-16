@@ -19,3 +19,6 @@ release/apps/*.kapp
 
 # Архив релиза
 kvantos-*.tar.gz
+
+# Workflow лежит в ci/ — переносится в .github/workflows вручную
+.github/
