@@ -32,9 +32,16 @@ ASM_SRC  := $(wildcard boot/*.asm)
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
-.PHONY: all iso run run-curses clean font debug
+.PHONY: all apps iso floppy run run-curses clean font debug release
 
 all: $(KERNEL)
+
+# Приложения собираются отдельным SDK и кладутся в release/apps.
+# Список APPS раскрывается при чтении Makefile, поэтому цели, которым
+# нужны готовые .kapp, перезапускают make рекурсивно - тогда wildcard
+# видит уже собранные файлы.
+apps:
+	@$(MAKE) --no-print-directory -C sdk
 
 build/obj:
 	@mkdir -p build/obj
@@ -67,7 +74,8 @@ build/hdboot.img: $(KERNEL) grub/grub.cfg | build/obj
 	    $(APP_GRAFT) 2>/dev/null
 	@cat /usr/lib/grub/i386-pc/boot.img build/hd_core.img > $@
 
-iso: $(ISO)
+iso: apps
+	@$(MAKE) --no-print-directory $(ISO)
 
 $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@echo "  ISO  $@"
@@ -107,7 +115,10 @@ $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@cp $(KERNEL) release/kvant.bin
 	@echo "  ГОТОВО: release/kvantos.iso"
 
-floppy: $(KERNEL)
+floppy: apps
+	@$(MAKE) --no-print-directory build/kvantos.img
+
+build/kvantos.img: $(KERNEL)
 	@echo "  FLOPPY  build/kvantos.img (запасной вариант без DVD)"
 	@# Файловой системы на дискете НЕТ намеренно: core.img, положенный
 	@# со 2-го сектора, затирал бы FAT. Вместо этого ядро и grub.cfg
@@ -135,6 +146,17 @@ run-curses: $(ISO)
 
 debug: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -m 128 -s -S -serial stdio
+
+# Полный комплект для раздачи: ISO, дискета, ядро, приложения
+# и пустой диск под файлы. Именно этот архив прикладывается к релизу
+# на GitHub - в самом репозитории двоичных файлов нет.
+release: iso floppy
+	@mkdir -p release
+	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
+	@rm -f kvantos-0.1.0-photon.tar.gz
+	@tar czf kvantos-0.1.0-photon.tar.gz -C release \
+	    kvantos.iso kvantos-floppy.img kvant.bin kvantos-disk.img apps
+	@echo "  ГОТОВО: kvantos-0.1.0-photon.tar.gz ($$(du -h kvantos-0.1.0-photon.tar.gz | cut -f1))"
 
 font:
 	@python3 tools/mkfont.py

@@ -1,0 +1,40 @@
+# Сборка KvantOS на чистой машине: проверяем, что репозитория
+# достаточно для получения загрузочного образа.
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить инструменты
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-multilib nasm xorriso mtools grub-pc-bin grub-common \
+            binutils python3
+
+      - name: Собрать ядро
+        run: make
+
+      - name: Проверить Multiboot-заголовок
+        run: grub-file --is-x86-multiboot build/kvant.bin
+
+      - name: Собрать приложения SDK
+        run: make apps
+
+      - name: Собрать образы
+        run: make release
+
+      - name: Сохранить артефакты
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-images
+          path: kvantos-*.tar.gz

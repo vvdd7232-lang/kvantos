@@ -16,3 +16,6 @@ release/apps/*.kapp
 *~
 .*.swp
 .DS_Store
+
+# Архив релиза
+kvantos-*.tar.gz
