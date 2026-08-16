@@ -1,0 +1,15 @@
+# Промежуточные объектные файлы и каталог сборки
+build/
+*.o
+*.d
+*.elf
+
+# Артефакты SDK
+sdk/build/
+
+# Мусор редакторов
+*~
+.*.swp
+
+# Пустой образ диска — создаётся заново: python3 sdk/mkdisk.py release/kvantos-disk.img 16
+release/kvantos-disk.img
