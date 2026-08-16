@@ -8,6 +8,7 @@
 #define MAX_WIN 8
 #define TITLE_H 22
 #define PANEL_H 28
+#define REVERT_SECONDS 15   /* grace period to confirm a resolution change */
 #define ICON_W  96
 #define ICON_H  74
 
@@ -27,6 +28,11 @@ static int      dragging = -1;
 static i32      drag_dx, drag_dy;
 static int      running = 0;
 static u32     *backbuf = NULL;
+
+/* Pending confirmation of a resolution change (the 15-second undo). */
+static int      revert_armed = 0;
+static vmode_t  revert_mode;
+static u64      revert_deadline = 0;
 static u32      scr_w, scr_h;
 
 /* palette */
@@ -1378,6 +1384,26 @@ static void draw_panel(void) {
     fb_gradient_v(0, py, (i32)scr_w, PANEL_H, 40, 52, 78, 20, 26, 42);
     fb_fill(0, py, (i32)scr_w, 1, fb_rgb(80, 100, 140));
 
+    /* Confirmation banner for a just-applied resolution. Drawn centred
+       near the top so it survives even if the desktop is unreadable. */
+    if (revert_armed) {
+        u64 now = timer_ticks();
+        /* 64-bit division would pull in __udivdi3, which a freestanding
+           kernel does not link: the remaining span fits in 32 bits. */
+        u32 left = (now >= revert_deadline) ? 0
+                 : (u32)(revert_deadline - now) / timer_hz() + 1;
+        char b[96];
+        ksnprintf(b, sizeof(b),
+                  T("Keep this resolution? Enter - yes, Esc - undo (%u s)",
+                    "Оставить это разрешение? Enter - да, Esc - отменить (%u с)"), left);
+        i32 bw = (i32)(utf8_len(b) * 8) + 24;
+        i32 bx0 = ((i32)scr_w - bw) / 2;
+        if (bx0 < 0) bx0 = 0;
+        fb_round_fill(bx0, 14, bw, 30, fb_rgb(150, 40, 40));
+        fb_rect(bx0, 14, bw, 30, C_WHITE);
+        fb_text(bx0 + 12, 22, b, C_WHITE, 0xFFFFFFFF);
+    }
+
     /* the Start button */
     fb_round_fill(6, py + 4, 78, PANEL_H - 8, C_TITLE);
     fb_text(16, py + 10, T("KVANT", "КВАНТ"), C_WHITE, 0xFFFFFFFF);
@@ -1489,6 +1515,77 @@ static void open_app(int app) {
 /* Apply the selected resolution straight from the desktop.
    The back buffer is tied to the old row pitch, so it must be released
    BEFORE the mode change and allocated again for the new size. */
+/* Switch to a mode AND give the desktop a backbuffer for it.
+   Returns VBE_OK only when both succeeded; on any failure the previous
+   mode stays active and remains backed by a buffer. Never leaves the
+   desktop rendering straight into video memory. */
+static int mode_switch_buffered(const vmode_t *want, const vmode_t *fallback) {
+    u32 est_w = (want->width + 15u) & ~15u;   /* the adapter may widen the scanline */
+    u32 need  = est_w * (want->bpp >> 3) * want->height;
+
+    if (backbuf) { kfree(backbuf); backbuf = NULL; }
+    fb_set_target(NULL);
+
+    u32 *nb = (u32 *)kmalloc(need);
+    if (!nb) {
+        backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+        fb_set_target(backbuf);
+        return VBE_ERR_NOVRAM;
+    }
+
+    int r = vbe_set_mode(want->width, want->height, want->bpp);
+    if (r != VBE_OK) {
+        kfree(nb);
+        backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+        fb_set_target(backbuf);
+        return r;
+    }
+
+    /* the adapter may have taken a wider scanline than estimated */
+    if (fb_pitch_get() * fb_height() > need) {
+        kfree(nb);
+        nb = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+        if (!nb) {
+            if (fallback) vbe_set_mode(fallback->width, fallback->height, fallback->bpp);
+            backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
+            fb_set_target(backbuf);
+            scr_w = fb_width();
+            scr_h = fb_height();
+            mouse_set_bounds((i32)scr_w, (i32)scr_h);
+            mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
+            return VBE_ERR_NOVRAM;
+        }
+    }
+
+    scr_w = fb_width();
+    scr_h = fb_height();
+    palette_init();
+    mouse_set_bounds((i32)scr_w, (i32)scr_h);
+    mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
+
+    backbuf = nb;
+    fb_set_target(backbuf);
+
+    /* windows must not be left beyond the edge of the new screen */
+    for (int i = 0; i < MAX_WIN; i++) {
+        if (!wins[i].used) continue;
+        if (wins[i].x > (i32)scr_w - 80) wins[i].x = (i32)scr_w - 80;
+        if (wins[i].y > (i32)scr_h - PANEL_H - TITLE_H)
+            wins[i].y = (i32)scr_h - PANEL_H - TITLE_H;
+        if (wins[i].x < 0) wins[i].x = 0;
+        if (wins[i].y < 0) wins[i].y = 0;
+    }
+    return VBE_OK;
+}
+
+/* Put the previous mode back when the user did not confirm in time. */
+static void mode_revert_now(void) {
+    revert_armed = 0;
+    if (mode_switch_buffered(&revert_mode, NULL) == VBE_OK)
+        set_status(T("Resolution reverted - no confirmation",
+                     "Разрешение возвращено - нет подтверждения"), C_YELLOW);
+}
+
 static void settings_apply(void) {
     int changed = 0;
 
@@ -1499,86 +1596,23 @@ static void settings_apply(void) {
         vbe_current(&cur);
 
         if (m.width != cur.width || m.height != cur.height || m.bpp != cur.bpp) {
-            /* The backbuffer for the TARGET mode is reserved before the
-               adapter is touched. Running the desktop without one means
-               every primitive goes straight into video memory: on real
-               hardware that is uncached MMIO, so a single full redraw of
-               a 1920x1080 screen costs hundreds of milliseconds and a
-               redraw fires on every input event - the machine looks
-               frozen although the kernel keeps running. Emulators hold
-               video memory in ordinary host RAM, which is why the
-               fallback is free there and the fault never shows in QEMU.
-
-               The heap is 10 MiB and a 1920x1080x32 buffer needs 7.91 of
-               them, so the allocation really can fail once a few windows
-               are open. Failing must leave the mode untouched rather
-               than drop into direct rendering. */
-            u32 est_w = (m.width + 15u) & ~15u;      /* the adapter may widen the scanline */
-            u32 need  = est_w * (m.bpp >> 3) * m.height;
-
-            if (backbuf) { kfree(backbuf); backbuf = NULL; }
-            fb_set_target(NULL);
-
-            u32 *nb = (u32 *)kmalloc(need);
-            if (!nb) {
-                /* stay where we are - the current mode is still backed */
-                backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                fb_set_target(backbuf);
-                set_status(T("Not enough kernel memory for this resolution",
-                             "Не хватает памяти ядра для этого разрешения"), C_RED);
-                set_res_sel = -1;
-                return;
-            }
-
-            int r = vbe_set_mode(m.width, m.height, m.bpp);
+            int r = mode_switch_buffered(&m, &cur);
             if (r != VBE_OK) {
-                kfree(nb);
-                set_status(vbe_error_text(r), C_RED);
-                /* restore the buffer for the previous mode */
-                backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                fb_set_target(backbuf);
+                set_status(r == VBE_ERR_NOVRAM
+                             ? T("Not enough kernel memory for this resolution",
+                                 "Не хватает памяти ядра для этого разрешения")
+                             : vbe_error_text(r), C_RED);
                 set_res_sel = -1;
                 return;
             }
 
-            /* The adapter may have taken a wider scanline than estimated. */
-            if (fb_pitch_get() * fb_height() > need) {
-                kfree(nb);
-                nb = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                if (!nb) {
-                    /* Undo rather than run unbuffered at the new size. */
-                    vbe_set_mode(cur.width, cur.height, cur.bpp);
-                    backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                    fb_set_target(backbuf);
-                    scr_w = fb_width();
-                    scr_h = fb_height();
-                    mouse_set_bounds((i32)scr_w, (i32)scr_h);
-                    mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
-                    set_status(T("Not enough kernel memory for this resolution",
-                                 "Не хватает памяти ядра для этого разрешения"), C_RED);
-                    set_res_sel = -1;
-                    return;
-                }
-            }
-
-            scr_w = fb_width();
-            scr_h = fb_height();
-            palette_init();
-            mouse_set_bounds((i32)scr_w, (i32)scr_h);
-            mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
-
-            backbuf = nb;
-            fb_set_target(backbuf);
-
-            /* windows must not be left beyond the edge of the new screen */
-            for (int i = 0; i < MAX_WIN; i++) {
-                if (!wins[i].used) continue;
-                if (wins[i].x > (i32)scr_w - 80) wins[i].x = (i32)scr_w - 80;
-                if (wins[i].y > (i32)scr_h - PANEL_H - TITLE_H)
-                    wins[i].y = (i32)scr_h - PANEL_H - TITLE_H;
-                if (wins[i].x < 0) wins[i].x = 0;
-                if (wins[i].y < 0) wins[i].y = 0;
-            }
+            /* A mode the monitor cannot display leaves the user with a
+               blank screen and no way back. Arm an automatic undo: the
+               change sticks only if it is confirmed, exactly like every
+               desktop OS does. */
+            revert_mode     = cur;
+            revert_deadline = timer_ticks() + (u64)timer_hz() * REVERT_SECONDS;
+            revert_armed    = 1;
             changed = 1;
         }
         set_res_sel = -1;
@@ -2088,12 +2122,34 @@ int gui_run(void) {
     while (running) {
         /* keyboard input */
         int c;
-        while ((c = kbd_getchar_nb()) >= 0) { handle_key(c); full_redraw = 1; }
+        while ((c = kbd_getchar_nb()) >= 0) {
+            /* Any deliberate keystroke proves the screen is readable:
+               Enter/Y confirms the new mode, Esc undoes it at once. */
+            if (revert_armed) {
+                if (c == 27 || c == 'n' || c == 'N') { mode_revert_now(); full_redraw = 1; continue; }
+                revert_armed = 0;
+                set_status(T("Resolution confirmed", "Разрешение подтверждено"), C_GREEN);
+                if (c == '\n' || c == '\r' || c == 'y' || c == 'Y') { full_redraw = 1; continue; }
+            }
+            handle_key(c); full_redraw = 1;
+        }
+
+        /* the user never confirmed - the screen is probably blank */
+        if (revert_armed && timer_ticks() >= revert_deadline) {
+            mode_revert_now();
+            full_redraw = 1;
+        }
 
         /* mouse */
         i32 mx = mouse_x(), my = mouse_y();
         int btn = mouse_buttons() & 1;
-        if (btn && !prev_btn) { handle_click(mx, my, 1); full_redraw = 1; }
+        if (btn && !prev_btn) {
+            if (revert_armed) {
+                revert_armed = 0;
+                set_status(T("Resolution confirmed", "Разрешение подтверждено"), C_GREEN);
+            }
+            handle_click(mx, my, 1); full_redraw = 1;
+        }
         else if (!btn && prev_btn) { handle_click(mx, my, 0); full_redraw = 1; }
         else if (btn && prev_btn) {
             handle_drag(mx, my);
