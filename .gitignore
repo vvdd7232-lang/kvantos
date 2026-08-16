@@ -1,15 +1,18 @@
-# Промежуточные объектные файлы и каталог сборки
+# --- промежуточные результаты сборки ---
 build/
+sdk/build/
 *.o
 *.d
 *.elf
 
-# Артефакты SDK
-sdk/build/
+# --- готовые образы: собираются командой make, а к релизу
+#     прикладываются отдельным архивом, чтобы не раздувать историю ---
+release/*.iso
+release/*.img
+release/*.bin
+release/apps/*.kapp
 
-# Мусор редакторов
+# --- мусор редакторов ---
 *~
 .*.swp
-
-# Пустой образ диска — создаётся заново: python3 sdk/mkdisk.py release/kvantos-disk.img 16
-release/kvantos-disk.img
+.DS_Store
