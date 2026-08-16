@@ -641,10 +641,68 @@ file there, and no disk was attached to that VM.
 Screenshots: `screenshots/37_app_snake.png`, `38_apps_from_iso.png`.
 The user-facing instructions are in `INSTALL.md`.
 
+## Hang when changing resolution (reported from a virtual machine)
+
+Reported symptom: in the Settings application, switching from 1024x768 to
+1920x1080 and pressing Apply blanked the screen and the system stopped
+responding.
+
+### Why it was hard to find
+
+Roughly ten QEMU scenarios came back clean: mode switches from the shell
+(800x600, 1280x720x32, 1920x1080, 1680x1050, 1600x900, 1280x1024, 640x480,
+1366x768 with a width that is not a multiple of 8, 1024x768x24), the GUI on top
+of unusual modes, and the `vmware` and `cirrus` adapters. The fault only
+appears once the backbuffer allocation fails, which needs a heap that is
+already loaded.
+
+It was finally reproduced by shrinking the kernel heap to 5 MiB, where
+1024x768 (3 MiB) still fits but 1920x1080 (7.91 MiB) cannot. The old code then
+produced a visibly broken desktop: the Settings window gone, icon captions
+truncated, the taskbar half drawn (`screenshots/58_bug_unbuffered_desktop.png`).
+
+### Root cause
+
+`settings_apply()` released the backbuffer, switched the mode, and only then
+tried to allocate a buffer for the new geometry. On failure it called
+`fb_set_target(NULL)`, which silently makes every primitive draw straight into
+video memory. At 1920x1080 that is about two million uncached MMIO writes per
+full redraw - hundreds of milliseconds per frame on real hardware - and a full
+redraw is triggered by every input event. The system stays alive but cannot
+repaint, which is indistinguishable from a freeze.
+
+The kernel heap is 10 MiB and a 1920x1080x32 buffer needs 7.91 MiB, so the
+allocation genuinely fails once a few windows are open. Emulators keep video
+memory in ordinary host RAM, so the fallback costs almost nothing there.
+
+### Defects found and fixed
+
+| Defect | Fix |
+|---|---|
+| The desktop could run with no backbuffer after a mode change | The buffer is allocated before the adapter is touched; on failure the mode is left untouched |
+| `gui_run()` started unbuffered when memory was short | It now refuses to start and the shell explains how to lower the resolution |
+| A failed `vbe_mode_get()` left an uninitialised `vmode_t` to be read | The call is checked |
+| No way back from a mode the monitor cannot show | A confirmation banner with a 15-second automatic undo |
+| `vbe_set_refresh()` reprogrammed the legacy CRTC under a linear framebuffer | The CRTC is left alone whenever a framebuffer is active |
+| The row stride was assumed to be `width * bytes` | It is read back from `VIRT_WIDTH` |
+| The MTRR write-combining region kept the previous mode's size | It is re-armed on remap and reuses its own slot |
+
+### Verification
+
+| What | Result |
+|---|---|
+| Six modes in a row from the shell | All applied, `uptime` answers after each |
+| Settings -> 1920x1080 -> Apply (10 MiB heap) | Full desktop, everything drawn, 67 fps |
+| The same with a 5 MiB heap | The change is refused, 1024x768 stays, 177 fps |
+| Waiting out the 15 seconds | 1024x768 restored automatically |
+| Confirming with Enter | 1920x1080 survives past the deadline |
+
+Screenshots: `screenshots/56_revert_banner.png`, `57_auto_reverted.png`,
+`58_bug_unbuffered_desktop.png`.
+
 ## Checksums (current)
 
 | File | Size, B | md5 |
 |---|---|---|
-| release/kvantos.iso | 1 005 568 | `330bbe1dac69a50c4a90c894f6d8cfc7` |
-| release/kvantos-floppy.img | 1 474 560 | `df61defc58c68a7a2d4d0a319b140518` |
-| release/kvant.bin | 166 916 | `52ee2b909f4e7f28bd2a6d24db0d0fff` |
+| release/kvantos.iso | 1 429 504 | `f7e9a63d17ff22fcfbcd0e399262bb37` |
+| release/kvant.bin | 204 336 | `50755791840828f73f2c5c0b19e51418` |

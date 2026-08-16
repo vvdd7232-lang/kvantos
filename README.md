@@ -88,9 +88,15 @@ A graphical counterpart of the `vidmode`/`refresh` commands, with three tabs:
 
 * **Display** — a grid of available resolutions (modes that do not fit into video
   memory are hidden), a refresh rate selector and an Apply button. The resolution
-  changes **while the environment keeps running**: the back buffer is released
-  before switching and allocated anew for the new stride, windows are pulled back
-  inside the screen and the cursor is re-centred.
+  changes **while the environment keeps running**: the buffer for the new stride
+  is allocated *before* the adapter is touched, windows are pulled back inside the
+  screen and the cursor is re-centred. If the buffer cannot be allocated the mode
+  is left untouched — the desktop is never left rendering straight into video
+  memory, which on real hardware means uncached writes and an apparent freeze.
+  After a successful change a banner asks for confirmation: **Enter** keeps the
+  new mode, **Esc** undoes it, and after 15 seconds without input the previous
+  resolution is restored automatically, so an unusable mode can never lock you
+  out (`screenshots/56_revert_banner.png`, `57_auto_reverted.png`).
 * **Appearance** — 6 accent colours (they repaint window titles, the Start button
   and the background), 4 wallpaper styles (gradient, night, grid, plain), plus
   checkboxes for window shadows and seconds in the clock.
