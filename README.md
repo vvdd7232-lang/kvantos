@@ -310,6 +310,21 @@ MIT.
 Frames 01–46 cover the earlier stages: the console, the GUI, video modes,
 applications and installation onto a hard disk.
 
+
+### The file manager and filesystems
+
+| | |
+|---|---|
+| ![Two panes: FAT32 and NTFS](screenshots/47-file-manager.png) | ![Previewing a file](screenshots/48-file-preview.png) |
+| Two panes over real volumes: FAT32 on the left, NTFS on the right | The preview shows text as text, binary as a hex dump |
+| ![Copying from NTFS to FAT32](screenshots/49-copy-ntfs-to-fat32.png) | ![Confirming a deletion](screenshots/50-delete-confirm.png) |
+| Copying a file off a read-only NTFS volume onto FAT32 | Deleting always asks first |
+
+![Volumes in the shell](screenshots/51-shell-volumes.png)
+
+`mount` lists what was found, `vls` reads an NTFS directory, `vcp` copies
+across filesystems.
+
 ## Working test screenshots
 
 The `testshots/` folder holds 64 frames captured from QEMU while debugging:
