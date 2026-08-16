@@ -1,5 +1,5 @@
 /* ============================================================
- *  KvantOS - драйвер мыши PS/2 (IRQ12, 3-байтные пакеты)
+ *  KvantOS - PS/2 mouse driver (IRQ12, 3-byte packets)
  * ============================================================ */
 #include "kernel.h"
 
@@ -23,23 +23,23 @@ static void mouse_cmd(u8 cmd) {
 static void mouse_cb(registers_t *r) {
     (void)r;
     u8 status = inb(0x64);
-    if (!(status & 0x01) || !(status & 0x20)) return;   /* данные не от мыши */
+    if (!(status & 0x01) || !(status & 0x20)) return;   /* the data did not come from the mouse */
     u8 b = inb(0x60);
 
     switch (phase) {
         case 0:
-            if (!(b & 0x08)) return;    /* синхробит потерян - ждём начало пакета */
+            if (!(b & 0x08)) return;    /* sync bit lost - wait for the packet start */
             packet[0] = b; phase = 1; break;
         case 1:
             packet[1] = b; phase = 2; break;
         case 2: {
             packet[2] = b; phase = 0;
             u8 f = packet[0];
-            if (f & 0xC0) break;        /* переполнение - пакет отбрасываем */
+            if (f & 0xC0) break;        /* overflow - the packet is dropped */
             i32 dx = (i32)packet[1] - ((f & 0x10) ? 256 : 0);
             i32 dy = (i32)packet[2] - ((f & 0x20) ? 256 : 0);
             mx += dx;
-            my -= dy;                   /* ось Y экрана направлена вниз */
+            my -= dy;                   /* the screen Y axis points downwards */
             if (mx < 0) mx = 0;
             if (my < 0) my = 0;
             if (mx > lim_w - 1) mx = lim_w - 1;
@@ -56,24 +56,24 @@ void mouse_init(i32 w, i32 h) {
     mx = w / 2; my = h / 2;
     phase = 0; buttons = 0;
 
-    wait_write(); outb(0x64, 0xA8);                 /* включить второй порт */
-    wait_write(); outb(0x64, 0x20);                 /* прочитать конфигурацию */
+    wait_write(); outb(0x64, 0xA8);                 /* enable the second port */
+    wait_write(); outb(0x64, 0x20);                 /* read the configuration */
     wait_read();
     u8 cfg = inb(0x60);
-    cfg |= 0x02;                                    /* разрешить IRQ12 */
-    cfg &= (u8)~0x20;                               /* снять запрет часов */
-    /* Байт конфигурации общий для обоих портов. Раньше мышь могла
-       случайно погасить биты клавиатуры (на реальном i8042 они после
-       BIOS не обязаны быть выставлены) - и ввод пропадал совсем.
-       Явно подтверждаем их здесь. */
-    cfg |= 0x01;                                    /* IRQ1 клавиатуры */
-    cfg &= (u8)~0x10;                               /* тактирование клавиатуры */
-    cfg |= 0x40;                                    /* трансляция в набор 1 */
+    cfg |= 0x02;                                    /* allow IRQ12 */
+    cfg &= (u8)~0x20;                               /* lift the clock inhibit */
+    /* The configuration byte is shared by both ports. The mouse used to
+       clear the keyboard bits by accident (on a real i8042 they are not
+       guaranteed to be set after BIOS) - and input disappeared entirely.
+       They are re-asserted explicitly here. */
+    cfg |= 0x01;                                    /* keyboard IRQ1 */
+    cfg &= (u8)~0x10;                               /* keyboard clock */
+    cfg |= 0x40;                                    /* translation to set 1 */
     wait_write(); outb(0x64, 0x60);
     wait_write(); outb(0x60, cfg);
 
-    mouse_cmd(0xF6);        /* настройки по умолчанию */
-    mouse_cmd(0xF4);        /* разрешить передачу пакетов */
+    mouse_cmd(0xF6);        /* default settings */
+    mouse_cmd(0xF4);        /* enable packet reporting */
 
     irq_install_handler(12, mouse_cb);
     present = 1;

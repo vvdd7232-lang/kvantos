@@ -1,5 +1,5 @@
 /* ============================================================
- *  KvantOS - общий заголовок ядра
+ *  KvantOS - common kernel header
  * ============================================================ */
 #ifndef _KVANT_KERNEL_H
 #define _KVANT_KERNEL_H
@@ -8,6 +8,7 @@
 #include <stddef.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include "i18n.h"
 
 #define KV_NAME     "KvantOS"
 #define KV_VERSION  "0.1.0 \"Photon\""
@@ -22,7 +23,7 @@ typedef int8_t   i8;
 typedef int16_t  i16;
 typedef int32_t  i32;
 
-/* ---------- порты ввода-вывода ---------- */
+/* ---------- I/O ports ---------- */
 static inline void outb(u16 port, u8 val)  { __asm__ volatile("outb %0, %1"::"a"(val),"Nd"(port)); }
 static inline u8   inb(u16 port)           { u8 r; __asm__ volatile("inb %1, %0":"=a"(r):"Nd"(port)); return r; }
 static inline void outw(u16 port, u16 val) { __asm__ volatile("outw %0, %1"::"a"(val),"Nd"(port)); }
@@ -41,7 +42,7 @@ static inline void irq_restore(u32 fl) {
     __asm__ volatile("pushl %0; popfl"::"r"(fl):"memory","cc");
 }
 
-/* ---------- структура регистров при прерывании ---------- */
+/* ---------- register frame on interrupt ---------- */
 typedef struct {
     u32 ds;
     u32 edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
@@ -51,7 +52,7 @@ typedef struct {
 
 typedef void (*isr_t)(registers_t *);
 
-/* ---------- строки / память ---------- */
+/* ---------- strings / memory ---------- */
 void  *memset(void *d, int c, size_t n);
 void  *memcpy(void *d, const void *s, size_t n);
 void  *memmove(void *d, const void *s, size_t n);
@@ -65,7 +66,7 @@ int    atoi(const char *s);
 int    str_isnum(const char *s);
 void   to_upper(char *s);
 
-/* ---------- VGA текстовый режим ---------- */
+/* ---------- VGA text mode ---------- */
 #define VGA_BLACK 0
 #define VGA_BLUE 1
 #define VGA_GREEN 2
@@ -98,12 +99,12 @@ u32  vga_cols(void);
 u32  vga_rows(void);
 int  vga_is_gfx(void);
 
-/* ---------- последовательный порт ---------- */
+/* ---------- serial port ---------- */
 void serial_init(void);
 void serial_putc(char c);
 void serial_puts(const char *s);
 
-/* ---------- форматированный вывод ---------- */
+/* ---------- formatted output ---------- */
 void kputc(char c);
 void kputs(const char *s);
 void kprintf(const char *fmt, ...);
@@ -111,7 +112,7 @@ void ksnprintf(char *buf, size_t size, const char *fmt, ...);
 void kvsnprintf_v(char *buf, size_t size, const char *fmt, va_list ap);
 void kvprintf(void (*emit)(char, void *), void *ctx, const char *fmt, va_list ap);
 
-/* ---------- GDT / IDT / прерывания ---------- */
+/* ---------- GDT / IDT / interrupts ---------- */
 void gdt_init(void);
 void idt_init(void);
 void isr_install_handler(u8 n, isr_t h);
@@ -119,7 +120,7 @@ void irq_install_handler(u8 irq, isr_t h);
 void pic_remap(void);
 void set_kernel_stack(u32 esp0);
 
-/* ---------- таймер, клавиатура, RTC ---------- */
+/* ---------- timer, keyboard, RTC ---------- */
 void  timer_init(u32 hz);
 u64   timer_ticks(void);
 u32   timer_hz(void);
@@ -127,10 +128,10 @@ u32   timer_seconds(void);
 void  sleep_ms(u32 ms);
 
 void  keyboard_init(void);
-int   kbd_getchar_nb(void);      /* -1 если нет символа */
-char  kbd_getchar(void);         /* блокирующее чтение */
-void  kbd_set_leds(u8 mask);     /* биты: 1 Scroll, 2 Num, 4 Caps */
-void  kbd_poll(void);            /* страховка, если IRQ1 не приходит */
+int   kbd_getchar_nb(void);      /* -1 when no character is available */
+char  kbd_getchar(void);         /* blocking read */
+void  kbd_set_leds(u8 mask);     /* bits: 1 Scroll, 2 Num, 4 Caps */
+void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 
 #define KEY_UP     0x81
 #define KEY_DOWN   0x82
@@ -140,7 +141,7 @@ void  kbd_poll(void);            /* страховка, если IRQ1 не пр�
 typedef struct { u8 sec, min, hour, day, month; u16 year; } rtc_time_t;
 void rtc_read(rtc_time_t *t);
 
-/* ---------- физическая память ---------- */
+/* ---------- physical memory ---------- */
 void   pmm_init(u32 mem_upper_kb, u32 mmap_addr, u32 mmap_len);
 u32    pmm_alloc_frame(void);
 void   pmm_free_frame(u32 addr);
@@ -149,13 +150,13 @@ u32    pmm_total_frames(void);
 u32    pmm_used_frames(void);
 u32    pmm_total_bytes(void);
 
-/* ---------- страничная адресация ---------- */
+/* ---------- paging ---------- */
 void   paging_init(void);
 int    paging_map(u32 virt, u32 phys, int rw);
 int    paging_map_range(u32 base, u32 size, int rw);
 u32    paging_phys(u32 virt);
 
-/* ---------- куча ---------- */
+/* ---------- heap ---------- */
 void   heap_init(u32 start, u32 size);
 void  *kmalloc(size_t size);
 void  *kcalloc(size_t n, size_t size);
@@ -163,7 +164,7 @@ void   kfree(void *p);
 void   heap_stats(u32 *total, u32 *used, u32 *blocks);
 char  *kstrdup(const char *s);
 
-/* ---------- планировщик задач ---------- */
+/* ---------- task scheduler ---------- */
 #define TASK_READY    0
 #define TASK_SLEEPING 1
 #define TASK_DEAD     2
@@ -198,7 +199,7 @@ int     ramfs_create(const char *name, const char *data, u32 size);
 int     ramfs_delete(const char *name);
 rfile_t *ramfs_table(void);
 
-/* ---------- диск ATA (PIO, LBA28) ---------- */
+/* ---------- ATA disk (PIO, LBA28) ---------- */
 void        ata_init(void);
 int         ata_count(void);
 int         ata_boot_drive(void);
@@ -209,7 +210,7 @@ u32         ata_size_mb(int i);
 int         ata_read(int idx, u32 lba, u8 count, void *buf);
 int         ata_write(int idx, u32 lba, u8 count, const void *buf);
 
-/* ---------- файловая система на диске (KvFS) ---------- */
+/* ---------- on-disk filesystem (KvFS) ---------- */
 int         kvfs_mount(void);
 int         kvfs_format(void);
 int         kvfs_mounted(void);
@@ -223,7 +224,7 @@ int         kvfs_file_count(void);
 void        kvfs_stats(u32 *total_mb, u32 *used_kb, u32 *files);
 const char *kvfs_error(int code);
 
-/* ---------- установка системы на диск ---------- */
+/* ---------- installing the system onto a disk ---------- */
 int         setup_available(void);
 int         setup_install(int keep_files);
 int         setup_progress(void);
@@ -231,7 +232,7 @@ int         setup_busy(void);
 const char *setup_stage_text(void);
 const char *setup_last_result(void);
 
-/* ---------- приложения .kapp ---------- */
+/* ---------- .kapp applications ---------- */
 int         kapp_load(const char *filename);
 void        kapp_unload(void);
 int         kapp_loaded(void);
@@ -276,17 +277,17 @@ typedef struct {
     u8  fb_blue_position, fb_blue_mask_size;
 } __attribute__((packed)) multiboot_info_t;
 
-/* ---------- перекодировка текста ---------- */
+/* ---------- text transcoding ---------- */
 u8   cp866_from_unicode(u32 cp);
 u32  utf8_next(const char **s);
 u32  utf8_len(const char *s);
 u32  utf8_to_cp866(const char *s, u8 *out, u32 max);
 
-/* ---------- линейный фреймбуфер ---------- */
+/* ---------- linear framebuffer ---------- */
 int  fb_init(const multiboot_info_t *mbi);
 int  fb_map(void);
 
-/* MTRR: write-combining для видеопамяти (ускорение вывода кадра) */
+/* MTRR: write-combining for video memory (faster frame output) */
 int  mtrr_set_wc(u32 base, u32 size);
 int  mtrr_available(void);
 int  mtrr_slot(void);
@@ -315,7 +316,7 @@ void fb_present(const void *back);
 void fb_present_rows(const void *back, u32 y0, u32 y1);
 void fb_scroll_up(u32 top, u32 bottom, u32 dy, u32 bg);
 
-/* ---------- мышь PS/2 ---------- */
+/* ---------- PS/2 mouse ---------- */
 void mouse_init(i32 w, i32 h);
 int  mouse_present(void);
 i32  mouse_x(void);
@@ -325,7 +326,7 @@ u32  mouse_events(void);
 void mouse_set_bounds(i32 w, i32 h);
 void mouse_set_pos(i32 x, i32 y);
 
-/* ---------- шина PCI ---------- */
+/* ---------- PCI bus ---------- */
 #define PCI_MAX_DEV 48
 typedef struct {
     u8  bus, slot, func;
@@ -351,7 +352,7 @@ u32         pci_bar_mem(const pci_dev_t *d, int *which);
 u32         pci_bar_size(pci_dev_t *d, int idx);
 void        pci_enable_device(pci_dev_t *d);
 
-/* ---------- управление видеорежимом ---------- */
+/* ---------- video mode control ---------- */
 enum { GPU_NONE = 0, GPU_FIXED, GPU_BGA, GPU_VMWARE };
 enum {
     VBE_OK = 0,
@@ -383,17 +384,17 @@ u32         vbe_get_refresh(void);
 u32         vbe_measure_hz(void);
 u32         vbe_count_vsync(void);
 
-/* ---------- команды видеоподсистемы ---------- */
+/* ---------- video subsystem commands ---------- */
 void cmd_lspci(int verbose);
 void cmd_gpuinfo(void);
 void cmd_vidmode_list(void);
 void cmd_vidmode(int argc, char **argv);
 void cmd_refresh(int argc, char **argv);
 
-/* ---------- графическая оболочка ---------- */
+/* ---------- graphical shell ---------- */
 int  gui_run(void);
 
-/* ---------- прочее ---------- */
+/* ---------- miscellaneous ---------- */
 void   shell_run(void);
 void   panic(const char *msg, registers_t *r);
 void   cpu_vendor(char *buf13);

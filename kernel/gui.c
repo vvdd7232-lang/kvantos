@@ -1,7 +1,7 @@
 /* ============================================================
- *  KvantOS - графическая оболочка (KvantGUI)
- *  Рабочий стол, окна, панель задач, мышь, мини-приложения.
- *  Отрисовка идёт в задний буфер, затем выгружается на экран.
+ *  KvantOS - the graphical shell (KvantGUI)
+ *  Desktop, windows, taskbar, mouse, mini-applications.
+ *  Drawing goes into a back buffer that is then blitted to screen.
  * ============================================================ */
 #include "kernel.h"
 
@@ -15,13 +15,13 @@ typedef struct {
     i32  x, y, w, h;
     char title[32];
     int  used, visible, minimized;
-    int  app;                 /* какое приложение внутри */
+    int  app;                 /* which application is inside */
     u32  accent;
     i32  scroll;
 } window_t;
 
 static window_t wins[MAX_WIN];
-static int      z_order[MAX_WIN];       /* z_order[0] - самое нижнее */
+static int      z_order[MAX_WIN];       /* z_order[0] is the bottom-most */
 static int      win_count = 0;
 static int      dragging = -1;
 static i32      drag_dx, drag_dy;
@@ -29,40 +29,66 @@ static int      running = 0;
 static u32     *backbuf = NULL;
 static u32      scr_w, scr_h;
 
-/* палитра */
+/* palette */
 static u32 C_DESK1, C_DESK2, C_PANEL, C_PANEL2, C_WIN, C_WINBORDER;
 static u32 C_TITLE, C_TITLE_IN, C_TEXT, C_TEXT_DIM, C_WHITE, C_BLACK;
 static u32 C_ACCENT, C_GREEN, C_RED, C_YELLOW, C_CYAN, C_SHADOW;
 
 enum { APP_ABOUT = 0, APP_SYSMON, APP_FILES, APP_TERM, APP_PAINT, APP_HELP, APP_SETTINGS, APP_EDIT,
-       APP_STORE,      /* установка и запуск программ */
-       APP_USER };     /* окно запущенного приложения .kapp */
+       APP_STORE,      /* installing and launching programs */
+       APP_USER };     /* the window of a running .kapp application */
 
-static const char *app_names[] = {
+/* Application names. A static initialiser cannot contain a function
+   call, so both languages live in separate tables and app_name()
+   returns the right string. */
+static const char *app_names_en[] = {
+    "About", "Monitor", "Files", "Terminal", "Paint", "Help", "Settings", "Notepad",
+    "Programs", "Application"
+};
+static const char *app_names_ru[] = {
     "О системе", "Монитор", "Файлы", "Терминал", "Рисование", "Справка", "Настройки", "Блокнот",
     "Программы", "Приложение"
 };
+static const char *app_name(int i)
+{
+    return kv_pick(app_names_en[i], app_names_ru[i]);
+}
 
-/* ---------- параметры оформления, меняются в «Настройках» ---------- */
-static int  theme_accent = 0;      /* индекс цвета акцента */
-static int  theme_wall   = 0;      /* стиль фона рабочего стола */
-static int  opt_seconds  = 1;      /* показывать секунды в часах */
-static int  opt_shadows  = 1;      /* тени под окнами */
+/* ---------- appearance settings, changed in Settings ---------- */
+static int  theme_accent = 0;      /* accent colour index */
+static int  theme_wall   = 0;      /* desktop background style */
+static int  opt_seconds  = 1;      /* show seconds in the clock */
+static int  opt_shadows  = 1;      /* shadows under windows */
 
-static const struct { const char *name; u8 r, g, b; } accents[] = {
-    { "Синий",      38,  92, 168 },
-    { "Бирюзовый",  20, 130, 140 },
-    { "Изумруд",    32, 132,  84 },
-    { "Пурпур",    118,  62, 156 },
-    { "Гранат",    166,  54,  70 },
-    { "Графит",     70,  78,  96 },
+static const struct { u8 r, g, b; } accents[] = {
+    {  38,  92, 168 },
+    {  20, 130, 140 },
+    {  32, 132,  84 },
+    { 118,  62, 156 },
+    { 166,  54,  70 },
+    {  70,  78,  96 },
 };
+static const char *accent_names_en[] = {
+    "Blue", "Teal", "Emerald", "Purple", "Garnet", "Graphite"
+};
+static const char *accent_names_ru[] = {
+    "Синий", "Бирюзовый", "Изумруд", "Пурпур", "Гранат", "Графит"
+};
+static const char *accent_name(int i)
+{
+    return kv_pick(accent_names_en[i], accent_names_ru[i]);
+}
 #define ACCENT_COUNT ((int)(sizeof(accents) / sizeof(accents[0])))
 
-static const char *wall_names[] = { "Градиент", "Ночь", "Сетка", "Однотонный" };
+static const char *wall_names_en[] = { "Gradient", "Night", "Grid", "Solid" };
+static const char *wall_names_ru[] = { "Градиент", "Ночь", "Сетка", "Однотонный" };
+static const char *wall_name(int i)
+{
+    return kv_pick(wall_names_en[i], wall_names_ru[i]);
+}
 #define WALL_COUNT 4
 
-/* ---------- кликабельные области текущего кадра ---------- */
+/* ---------- clickable areas of the current frame ---------- */
 #define MAX_HIT 96
 typedef struct { i32 x, y, w, h; int id; int win; } hit_t;
 static hit_t hits[MAX_HIT];
@@ -85,18 +111,18 @@ static int hit_test(int win, i32 mx, i32 my) {
     return -1;
 }
 
-/* идентификаторы элементов «Настроек» */
-#define W_TAB      100    /* +номер вкладки */
-#define W_RES      200    /* +номер режима  */
-#define W_HZ       300    /* +номер частоты */
-#define W_ACCENT   400    /* +номер цвета   */
-#define W_WALL     500    /* +номер фона    */
+/* identifiers of the Settings controls */
+#define W_TAB      100    /* + tab number   */
+#define W_RES      200    /* + mode number  */
+#define W_HZ       300    /* + rate number  */
+#define W_ACCENT   400    /* + colour number */
+#define W_WALL     500    /* + background number */
 #define W_APPLY    600
 #define W_SECONDS  601
 #define W_SHADOWS  602
 #define W_QUIT     603
 
-/* ---------- служебное ---------- */
+/* ---------- housekeeping ---------- */
 
 static void palette_init(void) {
     C_DESK1     = fb_rgb(24, 38, 66);
@@ -164,7 +190,7 @@ static void win_close(int id) {
     }
 }
 
-/* ---------- содержимое окон ---------- */
+/* ---------- window contents ---------- */
 
 static void draw_bar(i32 x, i32 y, i32 w, u32 pct, u32 col) {
     if (pct > 100) pct = 100;
@@ -179,12 +205,12 @@ static void app_about(window_t *v, i32 cx, i32 cy, i32 cw) {
     fb_fill(cx + 12, y, cw - 24, 1, fb_rgb(200, 206, 216)); y += 10;
 
     char line[96];
-    ksnprintf(line, sizeof(line), "Архитектура: %s", KV_ARCH);
+    ksnprintf(line, sizeof(line), T("Architecture: %s", "Архитектура: %s"), KV_ARCH);
     fb_text(cx + 12, y, line, C_TEXT, 0xFFFFFFFF); y += 18;
-    fb_text(cx + 12, y, "Загрузчик: GRUB 2 (Multiboot 1)", C_TEXT, 0xFFFFFFFF); y += 18;
-    fb_text(cx + 12, y, "Ядро: монолитное, собственное", C_TEXT, 0xFFFFFFFF); y += 18;
+    fb_text(cx + 12, y, T("Bootloader: GRUB 2 (Multiboot 1)", "Загрузчик: GRUB 2 (Multiboot 1)"), C_TEXT, 0xFFFFFFFF); y += 18;
+    fb_text(cx + 12, y, T("Kernel: monolithic, written from scratch", "Ядро: монолитное, собственное"), C_TEXT, 0xFFFFFFFF); y += 18;
 
-    ksnprintf(line, sizeof(line), "Видеорежим: %ux%u, %u бит",
+    ksnprintf(line, sizeof(line), T("Video mode: %ux%u, %u bpp", "Видеорежим: %ux%u, %u бит"),
               fb_width(), fb_height(), fb_bpp_get());
     fb_text(cx + 12, y, line, C_TEXT, 0xFFFFFFFF); y += 18;
 
@@ -194,7 +220,7 @@ static void app_about(window_t *v, i32 cx, i32 cy, i32 cw) {
     fb_text(cx + 12, y, line, C_TEXT, 0xFFFFFFFF); y += 18;
     fb_text(cx + 12, y, brand, C_TEXT_DIM, 0xFFFFFFFF); y += 22;
 
-    fb_text(cx + 12, y, "Собрано:", C_TEXT_DIM, 0xFFFFFFFF);
+    fb_text(cx + 12, y, T("Built:", "Собрано:"), C_TEXT_DIM, 0xFFFFFFFF);
     fb_text(cx + 12 + 72, y, KV_BUILD, C_TEXT, 0xFFFFFFFF);
 }
 
@@ -206,33 +232,33 @@ static void app_sysmon(window_t *v, i32 cx, i32 cy, i32 cw) {
     u32 used  = pmm_used_frames() * 4096;
     u32 pct   = total ? (used / 1024) * 100u / (total / 1024) : 0;
 
-    fb_text(cx + 12, y, "Физическая память", C_TEXT, 0xFFFFFFFF); y += 20;
-    ksnprintf(line, sizeof(line), "%u из %u МиБ (%u%%)",
+    fb_text(cx + 12, y, T("Physical memory", "Физическая память"), C_TEXT, 0xFFFFFFFF); y += 20;
+    ksnprintf(line, sizeof(line), T("%u of %u MiB (%u%%)", "%u из %u МиБ (%u%%)"),
               used / 1048576, total / 1048576, pct);
     fb_text(cx + 12, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 18;
     draw_bar(cx + 12, y, cw - 24, pct, C_GREEN); y += 26;
 
     u32 ht, hu, hb;
     heap_stats(&ht, &hu, &hb);
-    fb_text(cx + 12, y, "Куча ядра", C_TEXT, 0xFFFFFFFF); y += 20;
-    ksnprintf(line, sizeof(line), "%u КиБ из %u КиБ, блоков %u", hu / 1024, ht / 1024, hb);
+    fb_text(cx + 12, y, T("Kernel heap", "Куча ядра"), C_TEXT, 0xFFFFFFFF); y += 20;
+    ksnprintf(line, sizeof(line), T("%u KiB of %u KiB, %u blocks", "%u КиБ из %u КиБ, блоков %u"), hu / 1024, ht / 1024, hb);
     fb_text(cx + 12, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 18;
     draw_bar(cx + 12, y, cw - 24, ht ? (hu / 64) * 100u / (ht / 64) : 0, C_ACCENT); y += 26;
 
     u32 s = timer_seconds();
-    ksnprintf(line, sizeof(line), "Работает: %u ч %u мин %u с", s / 3600, (s / 60) % 60, s % 60);
+    ksnprintf(line, sizeof(line), T("Uptime: %uh %um %us", "Работает: %u ч %u мин %u с"), s / 3600, (s / 60) % 60, s % 60);
     fb_text(cx + 12, y, line, C_TEXT, 0xFFFFFFFF); y += 18;
-    ksnprintf(line, sizeof(line), "Тиков PIT: %u при %u Гц", (u32)timer_ticks(), timer_hz());
+    ksnprintf(line, sizeof(line), T("PIT ticks: %u at %u Hz", "Тиков PIT: %u при %u Гц"), (u32)timer_ticks(), timer_hz());
     fb_text(cx + 12, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 24;
 
-    ksnprintf(line, sizeof(line), "Задачи планировщика (%u)", task_count());
+    ksnprintf(line, sizeof(line), T("Scheduler tasks (%u)", "Задачи планировщика (%u)"), task_count());
     fb_text(cx + 12, y, line, C_TEXT, 0xFFFFFFFF); y += 20;
 
     task_t *cur = task_current(), *t = cur;
     int guard = 12;
     do {
-        const char *st = t->state == TASK_READY ? "готова" :
-                         t->state == TASK_SLEEPING ? "спит" : "стоп";
+        const char *st = t->state == TASK_READY ? T("ready", "готова") :
+                         t->state == TASK_SLEEPING ? T("sleeping", "спит") : T("stopped", "стоп");
         ksnprintf(line, sizeof(line), "#%u %s", t->id, t->name);
         fb_text(cx + 20, y, line, C_TEXT, 0xFFFFFFFF);
         fb_text(cx + 20 + 150, y, st,
@@ -244,32 +270,32 @@ static void app_sysmon(window_t *v, i32 cx, i32 cy, i32 cw) {
     } while (t != cur && guard-- > 0 && y < v->y + v->h - 20);
 }
 
-/* ==================== Блокнот (редактор текста) ==================== */
+/* ==================== Notepad (text editor) ==================== */
 
-#define ED_ROWS     128        /* строк в документе */
-#define ED_COLS     120        /* символов в строке */
-#define ED_VIEW     20         /* видимых строк без прокрутки */
+#define ED_ROWS     128        /* lines in a document */
+#define ED_COLS     120        /* characters per line */
+#define ED_VIEW     20         /* visible lines without scrolling */
 
 static char ed_buf[ED_ROWS][ED_COLS + 1];
-static int  ed_lines   = 1;    /* сколько строк занято */
-static int  ed_cy      = 0;    /* строка курсора */
-static int  ed_cx      = 0;    /* столбец курсора (в байтах) */
-static int  ed_top     = 0;    /* первая видимая строка */
-static int  ed_dirty   = 0;    /* есть несохранённые изменения */
-static char ed_name[24] = "новый.txt";
+static int  ed_lines   = 1;    /* how many lines are used */
+static int  ed_cy      = 0;    /* cursor line */
+static int  ed_cx      = 0;    /* cursor column (in bytes) */
+static int  ed_top     = 0;    /* first visible line */
+static int  ed_dirty   = 0;    /* there are unsaved changes */
+static char ed_name[24] = "untitled.txt";   /* set in gui_run() when the language changes */
 static char ed_status[64] = "";
 static u64  ed_status_until = 0;
-static int  ed_name_mode = 0;  /* 1 - идёт ввод имени файла */
+static int  ed_name_mode = 0;  /* 1 - a file name is being typed */
 static char ed_name_in[24] = "";
 static int  ed_blink = 0;
 
-/* идентификаторы кнопок панели редактора */
+/* identifiers of the editor toolbar buttons */
 enum { W_ED_NEW = 40, W_ED_OPEN, W_ED_SAVE, W_ED_DEL, W_ED_FILE0 };
-/* «Программы»: 200 - разметить диск, 201 - обновить, 210+ - строка списка,
-   а 300+ - кнопка «Удалить» напротив той же строки. */
+/* Programs window: 200 - format the disk, 201 - refresh, 210+ - a list
+   row, and 300+ - the Delete button next to that same row. */
 enum { W_ST_FORMAT = 200, W_ST_REFRESH = 201, W_ST_ITEM0 = 210, W_ST_DEL0 = 300,
-       W_ST_RAM0 = 400,   /* приложения из ramfs (загрузочный образ) */
-       W_ST_SETUP = 500, W_ST_SETUP_KEEP = 501 };   /* установка на винчестер */
+       W_ST_RAM0 = 400,   /* applications from ramfs (the boot image) */
+       W_ST_SETUP = 500, W_ST_SETUP_KEEP = 501 };   /* installation onto the hard disk */
 
 static void ed_msg(const char *m) {
     u32 i = 0;
@@ -283,7 +309,7 @@ static void ed_reset(void) {
     ed_lines = 1; ed_cy = 0; ed_cx = 0; ed_top = 0; ed_dirty = 0;
 }
 
-/* Загрузка файла из ramfs в буфер строк. */
+/* Load a file from ramfs into the line buffer. */
 static int ed_load(const char *name) {
     rfile_t *f = ramfs_find(name);
     if (!f) return 0;
@@ -311,7 +337,7 @@ static int ed_load(const char *name) {
     return 1;
 }
 
-/* Сохранение буфера в ramfs одним куском. */
+/* Save the buffer into ramfs in one piece. */
 static int ed_save(void) {
     static char out[ED_ROWS * (ED_COLS + 1)];
     u32 n = 0;
@@ -322,30 +348,30 @@ static int ed_save(void) {
     }
     out[n] = 0;
 
-    ramfs_delete(ed_name);            /* перезапись: старый вариант убираем */
+    ramfs_delete(ed_name);            /* rewriting: the old copy is removed */
     int rc = ramfs_create(ed_name, out, n);
-    if (rc >= 0) { ed_dirty = 0; ed_msg("Файл сохранён"); return 1; }
-    if (rc == -5) ed_msg("Имя слишком длинное (макс. 23)");
-    else if (rc == -4) ed_msg("Пустое имя файла");
-    else if (rc == -1) ed_msg("Нет места в ramfs");
-    else ed_msg("Ошибка сохранения");
+    if (rc >= 0) { ed_dirty = 0; ed_msg(T("File saved", "Файл сохранён")); return 1; }
+    if (rc == -5) ed_msg(T("Name too long (max 23)", "Имя слишком длинное (макс. 23)"));
+    else if (rc == -4) ed_msg(T("Empty file name", "Пустое имя файла"));
+    else if (rc == -1) ed_msg(T("No space left in ramfs", "Нет места в ramfs"));
+    else ed_msg(T("Save failed", "Ошибка сохранения"));
     return 0;
 }
 
-/* Вставка символа в позицию курсора со сдвигом хвоста строки. */
+/* Insert a character at the cursor, shifting the rest of the line. */
 static void ed_insert_char(char c) {
     char *line = ed_buf[ed_cy];
     int len = 0; while (line[len]) len++;
-    if (len >= ED_COLS) { ed_msg("Строка заполнена"); return; }
+    if (len >= ED_COLS) { ed_msg(T("Line is full", "Строка заполнена")); return; }
     for (int i = len; i >= ed_cx; i--) line[i + 1] = line[i];
     line[ed_cx] = c;
     ed_cx++;
     ed_dirty = 1;
 }
 
-/* Enter: разрываем строку и сдвигаем остальные вниз. */
+/* Enter: split the line and push the rest down. */
 static void ed_newline(void) {
-    if (ed_lines >= ED_ROWS) { ed_msg("Достигнут предел строк"); return; }
+    if (ed_lines >= ED_ROWS) { ed_msg(T("Line limit reached", "Достигнут предел строк")); return; }
     for (int r = ed_lines; r > ed_cy + 1; r--) {
         int k = 0;
         for (; ed_buf[r - 1][k]; k++) ed_buf[r][k] = ed_buf[r - 1][k];
@@ -362,7 +388,7 @@ static void ed_newline(void) {
     ed_dirty = 1;
 }
 
-/* Backspace: либо удаляем символ, либо склеиваем строку с предыдущей. */
+/* Backspace: either delete a character or join the line with the previous one. */
 static void ed_backspace(void) {
     if (ed_cx > 0) {
         char *line = ed_buf[ed_cy];
@@ -399,7 +425,7 @@ static void ed_scroll_to_cursor(void) {
 
 static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 y = cy + 10;
-    fb_text(cx + 12, y, "ramfs — файлы в оперативной памяти", C_TEXT_DIM, 0xFFFFFFFF);
+    fb_text(cx + 12, y, T("ramfs — files kept in RAM", "ramfs — файлы в оперативной памяти"), C_TEXT_DIM, 0xFFFFFFFF);
     y += 22;
 
     rfile_t *tbl = ramfs_table();
@@ -409,7 +435,7 @@ static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
         if (y > v->y + v->h - 46) break;
         int hovered = 0;
         fb_fill(cx + 8, y - 3, cw - 16, 20, count & 1 ? fb_rgb(246, 247, 250) : C_WIN);
-        /* иконка документа */
+        /* document icon */
         fb_fill(cx + 14, y, 11, 14, C_WHITE);
         fb_rect(cx + 14, y, 11, 14, fb_rgb(150, 158, 175));
         fb_fill(cx + 16, y + 3, 7, 1, C_TEXT_DIM);
@@ -417,19 +443,19 @@ static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
         fb_fill(cx + 16, y + 9, 5, 1, C_TEXT_DIM);
         fb_text(cx + 34, y, tbl[i].name, C_TEXT, 0xFFFFFFFF);
         char sz[24];
-        ksnprintf(sz, sizeof(sz), "%u Б", tbl[i].size);
+        ksnprintf(sz, sizeof(sz), T("%u B", "%u Б"), tbl[i].size);
         fb_text(cx + cw - 80, y, sz, C_TEXT_DIM, 0xFFFFFFFF);
         y += 20;
         count++; bytes += tbl[i].size;
         (void)hovered;
     }
     char foot[64];
-    ksnprintf(foot, sizeof(foot), "Файлов: %u, всего %u байт", count, bytes);
+    ksnprintf(foot, sizeof(foot), T("Files: %u, %u bytes total", "Файлов: %u, всего %u байт"), count, bytes);
     fb_fill(cx + 8, v->y + v->h - 30, cw - 16, 1, fb_rgb(210, 214, 222));
     fb_text(cx + 12, v->y + v->h - 24, foot, C_TEXT_DIM, 0xFFFFFFFF);
 }
 
-/* мини-терминал: показывает вывод последней команды */
+/* a mini terminal: shows the output of the last command */
 #define TERM_ROWS 14
 #define TERM_COLS 56
 static char term_buf[TERM_ROWS][TERM_COLS + 1];
@@ -437,8 +463,8 @@ static int  term_row = 0;
 static char term_input[TERM_COLS];
 static int  term_len = 0;
 
-/* Журнал для приложений: строка попадает в окно «Терминал».
-   Объявлена до term_putline, определение - сразу после него. */
+/* A log for applications: the line lands in the Terminal window.
+   Declared before term_putline, defined right after it. */
 void gui_log(const char *s);
 
 static void term_putline(const char *s) {
@@ -461,7 +487,7 @@ static void term_exec(const char *cmd) {
     if (!strcmp(cmd, "help")) {
         term_putline(" help mem ps ls date uptime clear about");
     } else if (!strcmp(cmd, "mem")) {
-        ksnprintf(out, sizeof(out), " ОЗУ: %u/%u МиБ, страниц %u",
+        ksnprintf(out, sizeof(out), T(" RAM: %u/%u MiB, %u pages", " ОЗУ: %u/%u МиБ, страниц %u"),
                   pmm_used_frames() * 4096 / 1048576,
                   pmm_total_bytes() / 1048576, pmm_total_frames());
         term_putline(out);
@@ -470,8 +496,8 @@ static void term_exec(const char *cmd) {
         int g = 8;
         do {
             ksnprintf(out, sizeof(out), " #%u %s (%s)", t->id, t->name,
-                      t->state == TASK_READY ? "готова" :
-                      t->state == TASK_SLEEPING ? "спит" : "стоп");
+                      t->state == TASK_READY ? T("ready", "готова") :
+                      t->state == TASK_SLEEPING ? T("sleeping", "спит") : T("stopped", "стоп"));
             term_putline(out);
             t = t->next;
         } while (t != cur && g-- > 0);
@@ -489,15 +515,21 @@ static void term_exec(const char *cmd) {
         term_putline(out);
     } else if (!strcmp(cmd, "uptime")) {
         u32 s = timer_seconds();
-        ksnprintf(out, sizeof(out), " %u ч %u мин %u с", s / 3600, (s / 60) % 60, s % 60);
+        ksnprintf(out, sizeof(out), T(" %uh %um %us", " %u ч %u мин %u с"), s / 3600, (s / 60) % 60, s % 60);
         term_putline(out);
     } else if (!strcmp(cmd, "about")) {
-        term_putline(" KvantOS " KV_VERSION " — своё ядро, GRUB, 32 бита");
+        {   /* Literals cannot be concatenated at compile time here:
+               the translation is chosen at run time. */
+            char ab[96];
+            ksnprintf(ab, sizeof(ab), " KvantOS %s%s", KV_VERSION,
+                      T(" — custom kernel, GRUB, 32-bit", " — своё ядро, GRUB, 32 бита"));
+            term_putline(ab);
+        }
     } else if (!strcmp(cmd, "clear")) {
         term_row = 0;
         memset(term_buf, 0, sizeof(term_buf));
     } else if (cmd[0]) {
-        ksnprintf(out, sizeof(out), " команда '%s' не найдена", cmd);
+        ksnprintf(out, sizeof(out), T(" command '%s' not found", " команда '%s' не найдена"), cmd);
         term_putline(out);
     }
 }
@@ -516,17 +548,17 @@ static void app_term(window_t *v, i32 cx, i32 cy, i32 cw) {
     fb_text(cx + 12, y, prompt, C_GREEN, 0xFFFFFFFF);
 }
 
-/* холст для рисования мышью */
+/* the canvas for drawing with the mouse */
 #define PAINT_W 44
 #define PAINT_H 26
 static u8 paint_grid[PAINT_H][PAINT_W];
-static u8 paint_color = 5;   /* по умолчанию чёрный */
+static u8 paint_color = 5;   /* black by default */
 
 static void app_paint(window_t *v, i32 cx, i32 cy, i32 cw) {
     static const u8 pal[6][3] = {
         {250,250,252},{226,78,78},{72,200,120},{64,156,255},{240,190,70},{30,32,40}
     };
-    fb_text(cx + 10, cy + 6, "Рисуйте мышью. Цвет:", C_TEXT_DIM, 0xFFFFFFFF);
+    fb_text(cx + 10, cy + 6, T("Draw with the mouse. Colour:", "Рисуйте мышью. Цвет:"), C_TEXT_DIM, 0xFFFFFFFF);
     for (int i = 0; i < 6; i++) {
         i32 bx = cx + 180 + i * 22, by = cy + 4;
         fb_fill(bx, by, 18, 16, fb_rgb(pal[i][0], pal[i][1], pal[i][2]));
@@ -544,12 +576,12 @@ static void app_paint(window_t *v, i32 cx, i32 cy, i32 cw) {
 
 static const char *gui_gpu_name(void) {
     pci_dev_t *g = pci_gpu();
-    return g ? pci_gpu_model(g->vendor, g->device) : "не обнаружена";
+    return g ? pci_gpu_model(g->vendor, g->device) : T("not detected", "не обнаружена");
 }
 
-/* ---------- виджеты ---------- */
+/* ---------- widgets ---------- */
 
-/* Кнопка-переключатель: рамка + подпись, активная залита акцентом */
+/* A toggle chip: frame plus label, the active one filled with the accent */
 static void widget_chip(int win, int id, i32 x, i32 y, i32 w, i32 h,
                         const char *label, int active) {
     u32 bg = active ? C_TITLE : fb_rgb(226, 229, 236);
@@ -560,12 +592,12 @@ static void widget_chip(int win, int id, i32 x, i32 y, i32 w, i32 h,
     hit_add(win, id, x, y, w, h);
 }
 
-/* Флажок вкл/выкл */
+/* An on/off checkbox */
 static void widget_check(int win, int id, i32 x, i32 y,
                          const char *label, int on) {
     fb_fill(x, y, 16, 16, on ? C_TITLE : C_WHITE);
     fb_rect(x, y, 16, 16, on ? C_TITLE : fb_rgb(170, 176, 190));
-    if (on) {                       /* галочка */
+    if (on) {                       /* the tick */
         for (int i = 0; i < 4; i++) fb_pixel((u32)(x + 4 + i), (u32)(y + 8 + i), C_WHITE);
         for (int i = 0; i < 6; i++) fb_pixel((u32)(x + 7 + i), (u32)(y + 11 - i), C_WHITE);
     }
@@ -578,10 +610,10 @@ static void section(i32 x, i32 y, i32 w, const char *title) {
     fb_fill(x, y + 18, w, 1, fb_rgb(206, 211, 220));
 }
 
-/* ---------- приложение «Настройки» ---------- */
+/* ---------- the Settings application ---------- */
 
-static int  set_tab = 0;                 /* 0 экран, 1 оформление, 2 система */
-static int  set_res_sel = -1;            /* выбранный, но не применённый режим */
+static int  set_tab = 0;                 /* 0 display, 1 appearance, 2 system */
+static int  set_res_sel = -1;            /* a mode selected but not yet applied */
 static u32  set_hz_sel = 0;
 static char set_msg[72] = "";
 static u32  set_msg_color = 0;
@@ -593,15 +625,15 @@ static const u32 hz_list[] = { 50, 60, 70, 72, 75, 85, 100, 120 };
 static void set_status(const char *text, u32 color) {
     strncpy(set_msg, text, sizeof(set_msg));
     set_msg_color = color;
-    set_msg_until = timer_ticks() + timer_hz() * 4;   /* 4 секунды */
+    set_msg_until = timer_ticks() + timer_hz() * 4;   /* 4 seconds */
 }
 
 static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
     int id = -1;
     for (int i = 0; i < MAX_WIN; i++) if (&wins[i] == v) { id = i; break; }
 
-    /* вкладки */
-    static const char *tabs[] = { "Экран", "Оформление", "Система" };
+    /* tabs */
+    const char *tabs[] = { T("Display", "Экран"), T("Appearance", "Оформление"), T("System", "Система") };
     i32 tx = cx + 10, ty = cy + 8;
     for (int i = 0; i < 3; i++) {
         i32 tw = (i32)utf8_len(tabs[i]) * 8 + 24;
@@ -614,23 +646,23 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
     char line[96];
 
     if (set_tab == 0) {
-        /* ---- вкладка «Экран» ---- */
+        /* ---- the Display tab ---- */
         vmode_t cur;
         vbe_current(&cur);
 
-        ksnprintf(line, sizeof(line), "Текущий режим: %u x %u, %u бит",
+        ksnprintf(line, sizeof(line), T("Current mode: %u x %u, %u bpp", "Текущий режим: %u x %u, %u бит"),
                   cur.width, cur.height, cur.bpp);
         fb_text(cx + 14, y, line, C_TEXT, 0xFFFFFFFF);
         y += 18;
-        ksnprintf(line, sizeof(line), "Видеокарта: %s", gui_gpu_name());
+        ksnprintf(line, sizeof(line), T("Adapter: %s", "Видеокарта: %s"), gui_gpu_name());
         fb_text(cx + 14, y, line, C_TEXT_DIM, 0xFFFFFFFF);
         y += 24;
 
-        section(cx + 14, y, cw - 28, "Разрешение экрана");
+        section(cx + 14, y, cw - 28, T("Screen resolution", "Разрешение экрана"));
         y += 26;
 
         if (!vbe_can_modeset()) {
-            fb_text(cx + 14, y, "Видеокарта не поддерживает смену режима",
+            fb_text(cx + 14, y, T("This adapter cannot change mode", "Видеокарта не поддерживает смену режима"),
                     C_RED, 0xFFFFFFFF);
             y += 20;
         } else {
@@ -657,13 +689,13 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
             y = by + 34;
         }
 
-        section(cx + 14, y, cw - 28, "Частота обновления");
+        section(cx + 14, y, cw - 28, T("Refresh rate", "Частота обновления"));
         y += 26;
         {
             i32 bx = cx + 14;
             u32 cur_hz = set_hz_sel ? set_hz_sel : vbe_get_refresh();
             for (int i = 0; i < HZ_COUNT; i++) {
-                ksnprintf(line, sizeof(line), "%u Гц", hz_list[i]);
+                ksnprintf(line, sizeof(line), T("%u Hz", "%u Гц"), hz_list[i]);
                 widget_chip(id, W_HZ + i, bx, y, 66, 24, line, cur_hz == hz_list[i]);
                 bx += 70;
                 if (bx + 66 > cx + cw - 14) { bx = cx + 14; y += 30; }
@@ -671,12 +703,12 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
             y += 34;
         }
 
-        widget_chip(id, W_APPLY, cx + 14, y, 150, 28, "Применить", 1);
+        widget_chip(id, W_APPLY, cx + 14, y, 150, 28, T("Apply", "Применить"), 1);
         y += 38;
 
     } else if (set_tab == 1) {
-        /* ---- вкладка «Оформление» ---- */
-        section(cx + 14, y, cw - 28, "Цвет акцента");
+        /* ---- the Appearance tab ---- */
+        section(cx + 14, y, cw - 28, T("Accent colour", "Цвет акцента"));
         y += 26;
         for (int i = 0; i < ACCENT_COUNT; i++) {
             i32 bx = cx + 14 + (i % 3) * 130;
@@ -687,30 +719,30 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
                 fb_rect(bx - 2, by - 2, 126, 30, C_TEXT);
                 fb_rect(bx - 1, by - 1, 124, 28, C_WHITE);
             }
-            fb_text_center(bx, by + 5, 122, accents[i].name, C_WHITE, 0xFFFFFFFF);
+            fb_text_center(bx, by + 5, 122, accent_name(i), C_WHITE, 0xFFFFFFFF);
             hit_add(id, W_ACCENT + i, bx, by, 122, 26);
         }
         y += ((ACCENT_COUNT + 2) / 3) * 32 + 12;
 
-        section(cx + 14, y, cw - 28, "Фон рабочего стола");
+        section(cx + 14, y, cw - 28, T("Desktop background", "Фон рабочего стола"));
         y += 26;
         for (int i = 0; i < WALL_COUNT; i++) {
             i32 bx = cx + 14 + (i % 2) * 190;
             i32 by = y + (i / 2) * 32;
-            widget_chip(id, W_WALL + i, bx, by, 180, 26, wall_names[i], theme_wall == i);
+            widget_chip(id, W_WALL + i, bx, by, 180, 26, wall_name(i), theme_wall == i);
         }
         y += ((WALL_COUNT + 1) / 2) * 32 + 14;
 
-        section(cx + 14, y, cw - 28, "Прочее");
+        section(cx + 14, y, cw - 28, T("Other", "Прочее"));
         y += 26;
-        widget_check(id, W_SHADOWS, cx + 14, y, "Тени под окнами", opt_shadows);
+        widget_check(id, W_SHADOWS, cx + 14, y, T("Window shadows", "Тени под окнами"), opt_shadows);
         y += 26;
-        widget_check(id, W_SECONDS, cx + 14, y, "Секунды в часах", opt_seconds);
+        widget_check(id, W_SECONDS, cx + 14, y, T("Seconds in the clock", "Секунды в часах"), opt_seconds);
         y += 26;
 
     } else {
-        /* ---- вкладка «Система» ---- */
-        section(cx + 14, y, cw - 28, "Сведения");
+        /* ---- the System tab ---- */
+        section(cx + 14, y, cw - 28, T("Details", "Сведения"));
         y += 26;
 
         ksnprintf(line, sizeof(line), "%s %s", KV_NAME, KV_VERSION);
@@ -722,32 +754,32 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
         fb_text(cx + 14, y, brand, C_TEXT_DIM, 0xFFFFFFFF); y += 24;
 
         u32 total = pmm_total_bytes(), used = pmm_used_frames() * 4096;
-        ksnprintf(line, sizeof(line), "Память: %u из %u МиБ",
+        ksnprintf(line, sizeof(line), T("Memory: %u of %u MiB", "Память: %u из %u МиБ"),
                   used / 1048576, total / 1048576);
         fb_text(cx + 14, y, line, C_TEXT, 0xFFFFFFFF); y += 18;
 
         u32 ht, hu, hb;
         heap_stats(&ht, &hu, &hb);
-        ksnprintf(line, sizeof(line), "Куча: %u из %u КиБ, блоков %u",
+        ksnprintf(line, sizeof(line), T("Heap: %u of %u KiB, %u blocks", "Куча: %u из %u КиБ, блоков %u"),
                   hu / 1024, ht / 1024, hb);
         fb_text(cx + 14, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 18;
 
         u32 s = timer_seconds();
-        ksnprintf(line, sizeof(line), "Работает: %u ч %u мин %u с",
+        ksnprintf(line, sizeof(line), T("Uptime: %uh %um %us", "Работает: %u ч %u мин %u с"),
                   s / 3600, (s / 60) % 60, s % 60);
         fb_text(cx + 14, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 18;
 
-        ksnprintf(line, sizeof(line), "Задач: %u, устройств PCI: %u",
+        ksnprintf(line, sizeof(line), T("Tasks: %u, PCI devices: %u", "Задач: %u, устройств PCI: %u"),
                   task_count(), pci_count());
         fb_text(cx + 14, y, line, C_TEXT_DIM, 0xFFFFFFFF); y += 28;
 
-        section(cx + 14, y, cw - 28, "Сеанс");
+        section(cx + 14, y, cw - 28, T("Session", "Сеанс"));
         y += 26;
-        widget_chip(id, W_QUIT, cx + 14, y, 210, 28, "Выйти в консоль kvsh", 0);
+        widget_chip(id, W_QUIT, cx + 14, y, 210, 28, T("Exit to the kvsh console", "Выйти в консоль kvsh"), 0);
         y += 38;
     }
 
-    /* строка состояния окна (обрезается по ширине клиентской области) */
+    /* the window status line (clipped to the client area width) */
     if (set_msg[0] && timer_ticks() < set_msg_until) {
         u32 maxch = (u32)(cw - 28) / 8;
         char clipped[72];
@@ -768,17 +800,17 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
         set_msg[0] = 0;
 }
 
-/* Отрисовка окна «Блокнот». */
+/* Drawing the Notepad window. */
 static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
     int wid = (int)(v - wins);
     i32 y = cy + 8;
 
-    /* ----- панель инструментов ----- */
+    /* ----- toolbar ----- */
     struct { int id; const char *cap; i32 w; } btns[] = {
-        { W_ED_NEW,  "Создать",   78 },
-        { W_ED_OPEN, "Открыть",   78 },
-        { W_ED_SAVE, "Сохранить", 92 },
-        { W_ED_DEL,  "Удалить",   78 },
+        { W_ED_NEW,  T("New", "Создать"),   78 },
+        { W_ED_OPEN, T("Open", "Открыть"),   78 },
+        { W_ED_SAVE, T("Save", "Сохранить"), 92 },
+        { W_ED_DEL,  T("Delete", "Удалить"),   78 },
     };
     i32 bx = cx + 10;
     for (u32 i = 0; i < sizeof(btns) / sizeof(btns[0]); i++) {
@@ -790,24 +822,24 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
     }
     y += 30;
 
-    /* ----- строка имени файла ----- */
+    /* ----- file name row ----- */
     fb_fill(cx + 10, y, cw - 20, 22, C_WHITE);
     fb_rect(cx + 10, y, cw - 20, 22, ed_name_mode ? C_ACCENT : fb_rgb(200, 206, 216));
     if (ed_name_mode) {
         char tmp[40];
-        ksnprintf(tmp, sizeof(tmp), "Имя: %s%s", ed_name_in, ed_blink < 15 ? "_" : "");
+        ksnprintf(tmp, sizeof(tmp), T("Name: %s%s", "Имя: %s%s"), ed_name_in, ed_blink < 15 ? "_" : "");
         fb_text(cx + 16, y + 4, tmp, C_TEXT, 0xFFFFFFFF);
     } else {
         char tmp[48];
-        ksnprintf(tmp, sizeof(tmp), "%s%s", ed_name, ed_dirty ? "  *изменён" : "");
+        ksnprintf(tmp, sizeof(tmp), "%s%s", ed_name, ed_dirty ? T("  *modified", "  *изменён") : "");
         fb_text(cx + 16, y + 4, tmp, ed_dirty ? C_RED : C_TEXT, 0xFFFFFFFF);
     }
     y += 28;
 
-    /* ----- поле редактирования ----- */
+    /* ----- editing area ----- */
     i32 area_h = v->y + v->h - y - 54;
     if (area_h < 40) area_h = 40;
-    i32 text_w = cw - 132;                 /* справа - список файлов */
+    i32 text_w = cw - 132;                 /* the file list is on the right */
     fb_fill(cx + 10, y, text_w, area_h, C_WHITE);
     fb_rect(cx + 10, y, text_w, area_h, fb_rgb(200, 206, 216));
 
@@ -819,25 +851,25 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
         if (r >= ed_lines) break;
         i32 ly = y + 4 + i * 16;
 
-        /* номер строки */
+        /* line number */
         char num[8];
         ksnprintf(num, sizeof(num), "%u", (u32)(r + 1));
         fb_text(cx + 14, ly, num, fb_rgb(170, 178, 192), 0xFFFFFFFF);
 
-        /* подсветка текущей строки */
+        /* highlight of the current line */
         if (r == ed_cy)
             fb_fill(cx + 44, ly - 1, text_w - 40, 16, fb_rgb(238, 243, 252));
 
         fb_text(cx + 46, ly, ed_buf[r], C_TEXT, 0xFFFFFFFF);
 
-        /* курсор */
+        /* cursor */
         if (r == ed_cy && !ed_name_mode && ed_blink < 15) {
             i32 curx = cx + 46 + ed_cx * 8;
             fb_fill(curx, ly - 1, 2, 15, C_ACCENT);
         }
     }
 
-    /* полоса прокрутки, если документ не помещается */
+    /* a scrollbar when the document does not fit */
     if (ed_lines > vis) {
         i32 track_h = area_h - 8;
         i32 kh = track_h * vis / ed_lines;
@@ -847,9 +879,9 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
         fb_round_fill(cx + 10 + text_w - 7, ky, 5, kh, fb_rgb(176, 184, 198));
     }
 
-    /* ----- список файлов справа ----- */
+    /* ----- the file list on the right ----- */
     i32 lx = cx + text_w + 18;
-    fb_text(lx, y - 18, "Файлы:", C_TEXT_DIM, 0xFFFFFFFF);
+    fb_text(lx, y - 18, T("Files:", "Файлы:"), C_TEXT_DIM, 0xFFFFFFFF);
     fb_fill(lx, y, 108, area_h, fb_rgb(250, 251, 253));
     fb_rect(lx, y, 108, area_h, fb_rgb(210, 215, 224));
 
@@ -865,9 +897,9 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
         fy += 16;
         shown++;
     }
-    if (!shown) fb_text(lx + 6, y + 4, "пусто", C_TEXT_DIM, 0xFFFFFFFF);
+    if (!shown) fb_text(lx + 6, y + 4, T("empty", "пусто"), C_TEXT_DIM, 0xFFFFFFFF);
 
-    /* ----- строка состояния ----- */
+    /* ----- status line ----- */
     i32 sy = v->y + v->h - 24;
     fb_fill(cx + 8, sy - 6, cw - 16, 1, fb_rgb(214, 218, 226));
     char st[80];
@@ -875,17 +907,17 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
         ksnprintf(st, sizeof(st), "%s", ed_status);
         fb_text(cx + 12, sy, st, C_ACCENT, 0xFFFFFFFF);
     } else {
-        ksnprintf(st, sizeof(st), "Строка %u из %u, столбец %u",
+        ksnprintf(st, sizeof(st), T("Line %u of %u, column %u", "Строка %u из %u, столбец %u"),
                   (u32)(ed_cy + 1), (u32)ed_lines, (u32)(ed_cx + 1));
         fb_text(cx + 12, sy, st, C_TEXT_DIM, 0xFFFFFFFF);
     }
 }
 
 /* ============================================================
- *  «Программы» - установка и запуск приложений .kapp
+ *  Programs - installing and launching .kapp applications
  *
- *  Показывает, что за диск найден, размечен ли он, и список
- *  установленных программ. Отсюда же они запускаются и удаляются.
+ *  Shows which disk was found, whether it is formatted, and the list
+ *  of installed programs. They are launched and removed from here too.
  * ============================================================ */
 static char store_msg[80];
 static u64  store_msg_until = 0;
@@ -896,14 +928,14 @@ static void store_say(const char *m) {
     store_msg_until = timer_ticks() + timer_hz() * 4;
 }
 
-/* Список приложений, попавших в ramfs из загрузочного образа.
-   Нужен на машинах без диска: запустить программу можно и оттуда. */
+/* The list of applications that reached ramfs from the boot image.
+   Needed on machines without a disk: programs can be run from there. */
 static void store_apps_from_ram(window_t *v, int wid, i32 x, i32 y, i32 cw) {
     rfile_t *tbl = ramfs_table();
     int shown = 0;
     char line[96];
 
-    fb_text(x, y, "Приложения из загрузочного образа:", C_TEXT, 0xFFFFFFFF);
+    fb_text(x, y, T("Applications from the boot image:", "Приложения из загрузочного образа:"), C_TEXT, 0xFFFFFFFF);
     y += 20;
 
     i32 list_h = v->h - TITLE_H - 40 - (y - v->y);
@@ -914,22 +946,22 @@ static void store_apps_from_ram(window_t *v, int wid, i32 x, i32 y, i32 cw) {
     for (int i = 0; i < RAMFS_MAX_FILES && shown < (list_h - 8) / 20; i++) {
         if (!tbl[i].used) continue;
         u32 l = (u32)strlen(tbl[i].name);
-        if (l < 6 || strcmp(tbl[i].name + l - 5, ".kapp")) continue;   /* только .kapp */
+        if (l < 6 || strcmp(tbl[i].name + l - 5, ".kapp")) continue;   /* .kapp files only */
 
         i32 iy = y + 4 + shown * 20;
         int running = kapp_loaded() && !strcmp(kapp_filename(), tbl[i].name);
         if (running) fb_fill(x + 2, iy - 1, cw - 28, 19, fb_rgb(214, 232, 252));
 
         fb_text(x + 8, iy, tbl[i].name, running ? C_ACCENT : C_TEXT, 0xFFFFFFFF);
-        ksnprintf(line, sizeof(line), "%u КиБ", (tbl[i].size + 1023) / 1024);
+        ksnprintf(line, sizeof(line), T("%u KiB", "%u КиБ"), (tbl[i].size + 1023) / 1024);
         fb_text(x + 270, iy, line, C_TEXT_DIM, 0xFFFFFFFF);
-        fb_text(x + 350, iy, running ? "запущено" : "запустить",
+        fb_text(x + 350, iy, running ? T("running", "запущено") : T("run", "запустить"),
                 running ? C_GREEN : C_ACCENT, 0xFFFFFFFF);
         hit_add(wid, W_ST_RAM0 + i, x + 2, iy - 1, 430, 19);
         shown++;
     }
     if (!shown)
-        fb_text(x + 10, y + 10, "В образе приложений нет.", C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x + 10, y + 10, T("No applications in the image.", "В образе приложений нет."), C_TEXT_DIM, 0xFFFFFFFF);
 }
 
 static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
@@ -937,70 +969,70 @@ static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 x = cx + 12, y = cy + 10;
     char line[96];
 
-    /* --- сведения о диске --- */
+    /* --- disk information --- */
     if (!ata_present()) {
-        fb_text(x, y, "Диск не найден — установка недоступна.", C_YELLOW, 0xFFFFFFFF);
+        fb_text(x, y, T("No disk found — installation unavailable.", "Диск не найден — установка недоступна."), C_YELLOW, 0xFFFFFFFF);
         y += 20;
-        fb_text(x, y, "Программы ниже запускаются прямо из образа.", C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x, y, T("The programs below run straight from the image.", "Программы ниже запускаются прямо из образа."), C_TEXT_DIM, 0xFFFFFFFF);
         y += 26;
-        /* Без диска приложения всё равно доступны: они пришли
-           из загрузочного образа и лежат в ramfs. */
+        /* Applications are available even without a disk: they came
+           from the boot image and live in ramfs. */
         store_apps_from_ram(v, wid, x, y, cw);
         return;
     }
 
     int d = ata_boot_drive();
-    ksnprintf(line, sizeof(line), "Диск: %s", ata_model(d));
+    ksnprintf(line, sizeof(line), T("Disk: %s", "Диск: %s"), ata_model(d));
     fb_text(x, y, line, C_TEXT, 0xFFFFFFFF);
     y += 18;
-    ksnprintf(line, sizeof(line), "Объём: %u МиБ", ata_size_mb(d));
+    ksnprintf(line, sizeof(line), T("Size: %u MiB", "Объём: %u МиБ"), ata_size_mb(d));
     fb_text(x, y, line, C_TEXT_DIM, 0xFFFFFFFF);
     y += 22;
 
-    /* Установка системы на винчестер. Показываем только когда
-       загрузились с носителя: иначе записывать нечего. */
+    /* Installing the system onto the hard disk. Shown only when we
+       booted from media: otherwise there is nothing to write. */
     if (setup_available()) {
         fb_fill(x, y, cw - 24, 58, fb_rgb(252, 248, 232));
         fb_rect(x, y, cw - 24, 58, fb_rgb(228, 208, 150));
-        fb_text(x + 8, y + 6, "Установить KvantOS на этот диск",
+        fb_text(x + 8, y + 6, T("Install KvantOS onto this disk", "Установить KvantOS на этот диск"),
                 fb_rgb(140, 90, 20), 0xFFFFFFFF);
 
         fb_round_fill(x + 8, y + 26, 130, 24, C_ACCENT);
-        fb_text(x + 20, y + 30, "Установить", C_WHITE, 0xFFFFFFFF);
+        fb_text(x + 20, y + 30, T("Install", "Установить"), C_WHITE, 0xFFFFFFFF);
         hit_add(wid, W_ST_SETUP, x + 8, y + 26, 130, 24);
 
         fb_round_fill(x + 148, y + 26, 190, 24, fb_rgb(226, 232, 240));
-        fb_text(x + 158, y + 30, "Установить, сохранив файлы", C_TEXT, 0xFFFFFFFF);
+        fb_text(x + 158, y + 30, T("Install, keeping files", "Установить, сохранив файлы"), C_TEXT, 0xFFFFFFFF);
         hit_add(wid, W_ST_SETUP_KEEP, x + 148, y + 26, 190, 24);
         y += 66;
     }
 
     if (!kvfs_mounted()) {
-        fb_text(x, y, "Файловая система не размечена.", C_YELLOW, 0xFFFFFFFF);
+        fb_text(x, y, T("No filesystem on the disk.", "Файловая система не размечена."), C_YELLOW, 0xFFFFFFFF);
         y += 24;
         fb_round_fill(x, y, 210, 26, C_ACCENT);
-        fb_text(x + 12, y + 5, "Разметить диск (KvFS)", C_WHITE, 0xFFFFFFFF);
+        fb_text(x + 12, y + 5, T("Format disk (KvFS)", "Разметить диск (KvFS)"), C_WHITE, 0xFFFFFFFF);
         hit_add(wid, W_ST_FORMAT, x, y, 210, 26);
         y += 32;
-        fb_text(x, y, "Данные на диске будут потеряны.", C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x, y, T("All data on the disk will be lost.", "Данные на диске будут потеряны."), C_TEXT_DIM, 0xFFFFFFFF);
         y += 26;
 
-        /* Пока диска нет, программы можно запускать прямо из образа.
-           Установка им не нужна - только сохранение файлов. */
+        /* With no disk the programs still run straight from the image.
+           They do not need installing - only saving files does. */
         store_apps_from_ram(v, wid, x, y, cw);
         return;
     }
 
     u32 mb, kb, nf;
     kvfs_stats(&mb, &kb, &nf);
-    ksnprintf(line, sizeof(line), "KvFS: %u файлов, занято %u КиБ", nf, kb);
+    ksnprintf(line, sizeof(line), T("KvFS: %u files, %u KiB used", "KvFS: %u файлов, занято %u КиБ"), nf, kb);
     fb_text(x, y, line, C_GREEN, 0xFFFFFFFF);
     y += 24;
 
-    fb_text(x, y, "Установленные программы:", C_TEXT, 0xFFFFFFFF);
+    fb_text(x, y, T("Installed programs:", "Установленные программы:"), C_TEXT, 0xFFFFFFFF);
     y += 20;
 
-    /* --- список приложений --- */
+    /* --- the application list --- */
     i32 list_y = y;
     i32 list_h = cy + v->h - TITLE_H - 46 - list_y;
     if (list_h < 40) list_h = 40;
@@ -1013,7 +1045,7 @@ static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
     int is_exec;
     for (int i = 0; i < 64 && shown < (list_h - 8) / 20; i++) {
         if (kvfs_list(i, nm, &sz, &is_exec) < 0) break;
-        if (!is_exec) continue;                     /* показываем только программы */
+        if (!is_exec) continue;                     /* only programs are listed */
         i32 iy = list_y + 4 + shown * 20;
 
         int running = kapp_loaded() && !strcmp(kapp_filename(), nm);
@@ -1022,62 +1054,64 @@ static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
         ksnprintf(line, sizeof(line), "%s", nm);
         fb_text(x + 8, iy, line, running ? C_ACCENT : C_TEXT, 0xFFFFFFFF);
 
-        ksnprintf(line, sizeof(line), "%u КиБ", (sz + 1023) / 1024);
+        ksnprintf(line, sizeof(line), T("%u KiB", "%u КиБ"), (sz + 1023) / 1024);
         fb_text(x + 270, iy, line, C_TEXT_DIM, 0xFFFFFFFF);
 
-        fb_text(x + 350, iy, running ? "запущено" : "запустить",
+        fb_text(x + 350, iy, running ? T("running", "запущено") : T("run", "запустить"),
                 running ? C_GREEN : C_ACCENT, 0xFFFFFFFF);
         hit_add(wid, W_ST_ITEM0 + i, x + 2, iy - 1, 430, 19);
 
-        fb_text(x + 450, iy, "удалить", C_RED, 0xFFFFFFFF);
+        fb_text(x + 450, iy, T("delete", "удалить"), C_RED, 0xFFFFFFFF);
         hit_add(wid, W_ST_DEL0 + i, x + 446, iy - 1, 70, 19);
         shown++;
     }
     if (!shown) {
-        fb_text(x + 10, list_y + 10, "Пока ничего не установлено.", C_TEXT_DIM, 0xFFFFFFFF);
-        fb_text(x + 10, list_y + 30, "Соберите пример из sdk/ и запишите", C_TEXT_DIM, 0xFFFFFFFF);
-        fb_text(x + 10, list_y + 48, "на диск командой install.", C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x + 10, list_y + 10, T("Nothing installed yet.", "Пока ничего не установлено."), C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x + 10, list_y + 30, T("Build a sample from sdk/ and put it", "Соберите пример из sdk/ и запишите"), C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(x + 10, list_y + 48, T("on the disk with the install command.", "на диск командой install."), C_TEXT_DIM, 0xFFFFFFFF);
     }
 
-    /* --- нижняя строка --- */
+    /* --- bottom row --- */
     i32 by = cy + v->h - TITLE_H - 32;
     fb_round_fill(x, by, 96, 24, fb_rgb(226, 232, 240));
-    fb_text(x + 16, by + 4, "Обновить", C_TEXT, 0xFFFFFFFF);
+    fb_text(x + 16, by + 4, T("Refresh", "Обновить"), C_TEXT, 0xFFFFFFFF);
     hit_add(wid, W_ST_REFRESH, x, by, 96, 24);
 
     if (store_msg[0] && timer_ticks() < store_msg_until)
         fb_text(x + 110, by + 4, store_msg, C_ACCENT, 0xFFFFFFFF);
     else if (kapp_loaded()) {
-        ksnprintf(line, sizeof(line), "Работает: %s", kapp_name());
+        ksnprintf(line, sizeof(line), T("Running: %s", "Работает: %s"), kapp_name());
         fb_text(x + 110, by + 4, line, C_TEXT_DIM, 0xFFFFFFFF);
     }
 }
 
 /* ============================================================
- *  Окно запущенного приложения
+ *  The window of a running application
  *
- *  Оболочка отдаёт программе прямоугольник клиентской области и
- *  зовёт её обработчики. Всё остальное - рамка, заголовок, строка
- *  состояния - рисует система, чтобы окна выглядели одинаково.
+ *  The shell hands the program the rectangle of its client area and
+ *  calls its handlers. Everything else - the frame, the title, the
+ *  status line - is drawn by the system so that all windows look
+ *  the same.
  * ============================================================ */
 static void app_user(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 ch = v->h - TITLE_H - 2;
 
     if (!kapp_loaded()) {
         fb_fill(cx, cy, cw, ch, C_WIN);
-        fb_text(cx + 14, cy + 16, "Приложение не загружено.", C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(cx + 14, cy + 16, T("No application loaded.", "Приложение не загружено."), C_TEXT_DIM, 0xFFFFFFFF);
         const char *e = kapp_last_error();
         if (e && e[0]) fb_text(cx + 14, cy + 38, e, C_RED, 0xFFFFFFFF);
         return;
     }
 
-    /* Под строку состояния отводим 20 пикселей внизу */
+    /* 20 pixels at the bottom are reserved for the status line */
     i32 sh = 20;
     i32 uh = ch - sh;
     if (uh < 20) uh = ch;
 
-    /* Фон рисуем сами: если приложение забудет очистить холст,
-       в окне останется мусор от прошлого кадра. */
+    /* The background is drawn by us: should the application forget to
+       clear its canvas, the window would keep rubbish from the last
+       frame. */
     fb_fill(cx, cy, cw, uh, C_WIN);
     kapp_tick(cx, cy, cw, uh);
     kapp_draw(cx, cy, cw, uh);
@@ -1093,37 +1127,37 @@ static void app_user(window_t *v, i32 cx, i32 cy, i32 cw) {
 
 static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 y = cy + 10;
-    fb_text(cx + 12, y, "Управление KvantGUI", C_TEXT, 0xFFFFFFFF); y += 22;
+    fb_text(cx + 12, y, T("KvantGUI controls", "Управление KvantGUI"), C_TEXT, 0xFFFFFFFF); y += 22;
     fb_fill(cx + 12, y, cw - 24, 1, fb_rgb(200, 206, 216)); y += 10;
     const char *rows[] = {
-        "Мышь — перетаскивайте окна за заголовок",
-        "Крестик в углу окна — закрыть",
-        "Двойной клик по иконке — открыть программу",
-        "Панель снизу — переключение между окнами",
-        "В «Настройках» меняются разрешение и тема",
+        T("Mouse — drag windows by the title bar", "Мышь — перетаскивайте окна за заголовок"),
+        T("The cross in the corner closes a window", "Крестик в углу окна — закрыть"),
+        T("Double-click an icon to open a program", "Двойной клик по иконке — открыть программу"),
+        T("The bottom panel switches between windows", "Панель снизу — переключение между окнами"),
+        T("Settings changes resolution and theme", "В «Настройках» меняются разрешение и тема"),
         "",
-        "Клавиатура:",
-        "  T — открыть терминал",
-        "  M — монитор системы",
-        "  F — файловый менеджер",
-        "  A — о системе",
-        "  P — рисование",
-        "  E — блокнот (редактор текста)",
-        "  G — программы (установка и запуск)",
-        "  S — настройки экрана и оформления",
-        "  L — предел частоты кадров: нет / 60 / 30",
-        "  Esc или Q — выйти в текстовую консоль",
+        T("Keyboard:", "Клавиатура:"),
+        T("  T — open the terminal", "  T — открыть терминал"),
+        T("  M — system monitor", "  M — монитор системы"),
+        T("  F — file manager", "  F — файловый менеджер"),
+        T("  A — about the system", "  A — о системе"),
+        T("  P — paint", "  P — рисование"),
+        T("  E — notepad (text editor)", "  E — блокнот (редактор текста)"),
+        T("  G — programs (install and run)", "  G — программы (установка и запуск)"),
+        T("  S — display and appearance settings", "  S — настройки экрана и оформления"),
+        T("  L — frame rate cap: off / 60 / 30", "  L — предел частоты кадров: нет / 60 / 30"),
+        T("  Esc or Q — leave for the text console", "  Esc или Q — выйти в текстовую консоль"),
         "",
         "",
-        "Блокнот:",
-        "  стрелки — перемещение курсора",
-        "  Ctrl+S — сохранить, Ctrl+N — новый",
-        "  клик по файлу справа — открыть",
+        T("Notepad:", "Блокнот:"),
+        T("  arrows — move the cursor", "  стрелки — перемещение курсора"),
+        T("  Ctrl+S — save, Ctrl+N — new file", "  Ctrl+S — сохранить, Ctrl+N — новый"),
+        T("  click a file on the right to open it", "  клик по файлу справа — открыть"),
         "",
-        "Программы (значок «Программы»):",
-        "  установка на диск, запуск и удаление",
-        "  приложения переживают перезагрузку",
-        "  как писать свои — файл APPS.md",
+        T("Programs (the Programs icon):", "Программы (значок «Программы»):"),
+        T("  install to disk, run and remove", "  установка на диск, запуск и удаление"),
+        T("  applications survive a reboot", "  приложения переживают перезагрузку"),
+        T("  how to write your own — see APPS.md", "  как писать свои — файл APPS.md"),
     };
     for (u32 i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
         fb_text(cx + 12, y, rows[i], rows[i][0] == ' ' ? C_TEXT_DIM : C_TEXT, 0xFFFFFFFF);
@@ -1131,19 +1165,19 @@ static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
     }
 }
 
-/* ---------- отрисовка окна ---------- */
+/* ---------- window rendering ---------- */
 
 static void draw_window(int id, int active) {
     window_t *v = &wins[id];
     if (!v->used || !v->visible || v->minimized) return;
 
-    /* тень */
+    /* shadow */
     if (opt_shadows) fb_fill(v->x + 4, v->y + 4, v->w, v->h, C_SHADOW);
-    /* корпус */
+    /* body */
     fb_fill(v->x, v->y, v->w, v->h, C_WIN);
     fb_rect(v->x, v->y, v->w, v->h, C_WINBORDER);
 
-    /* заголовок с градиентом */
+    /* title bar with a gradient */
     if (active) {
         u8 r = accents[theme_accent].r;
         u8 g = accents[theme_accent].g;
@@ -1158,7 +1192,7 @@ static void draw_window(int id, int active) {
     }
     fb_text(v->x + 10, v->y + 4, v->title, C_WHITE, 0xFFFFFFFF);
 
-    /* кнопка закрытия */
+    /* close button */
     i32 bx = v->x + v->w - 20, by = v->y + 5;
     fb_fill(bx, by, 14, 13, active ? C_RED : fb_rgb(140, 146, 158));
     for (int i = 0; i < 7; i++) {
@@ -1166,7 +1200,7 @@ static void draw_window(int id, int active) {
         fb_pixel((u32)(bx + 10 - i), (u32)(by + 3 + i), C_WHITE);
     }
 
-    /* клиентская область */
+    /* client area */
     i32 cx = v->x + 1, cy = v->y + TITLE_H + 1, cw = v->w - 2;
     switch (v->app) {
         case APP_ABOUT:  app_about(v, cx, cy, cw); break;
@@ -1182,19 +1216,21 @@ static void draw_window(int id, int active) {
     }
 }
 
-/* ---------- рабочий стол ---------- */
+/* ---------- desktop ---------- */
 
-typedef struct { i32 x, y; int app; const char *label; } icon_t;
+/* The caption under an icon comes from app_name(): that way it
+   follows the chosen language while the table stays static. */
+typedef struct { i32 x, y; int app; } icon_t;
 static icon_t icons[] = {
-    { 30,  50, APP_ABOUT,  "О системе" },
-    { 30, 140, APP_SYSMON, "Монитор"   },
-    { 30, 230, APP_FILES,  "Файлы"     },
-    { 30, 320, APP_TERM,   "Терминал"  },
-    { 30, 410, APP_PAINT,  "Рисование" },
-    { 30, 500, APP_SETTINGS, "Настройки" },
-    { 30, 590, APP_EDIT,   "Блокнот"   },
-    { 30, 680, APP_STORE,  "Программы" },
-    { 30, 770, APP_HELP,   "Справка"   },
+    { 30,  50, APP_ABOUT    },
+    { 30, 140, APP_SYSMON   },
+    { 30, 230, APP_FILES    },
+    { 30, 320, APP_TERM     },
+    { 30, 410, APP_PAINT    },
+    { 30, 500, APP_SETTINGS },
+    { 30, 590, APP_EDIT     },
+    { 30, 680, APP_STORE    },
+    { 30, 770, APP_HELP     },
 };
 #define ICON_COUNT ((int)(sizeof(icons) / sizeof(icons[0])))
 
@@ -1225,14 +1261,14 @@ static void draw_icon_glyph(int app, i32 x, i32 y) {
             fb_text(x + 4, y + 10, ">_", C_GREEN, 0xFFFFFFFF);
             break;
         case APP_STORE:
-            /* коробка с приподнятой крышкой - «поставить программу» */
+            /* a box with a raised lid - "install a program" */
             fb_fill(x + 2, y + 12, 32, 20, fb_rgb(206, 158, 84));
             fb_fill(x + 2, y + 6,  32, 8,  fb_rgb(232, 186, 112));
             fb_fill(x + 14, y + 6, 8, 26, fb_rgb(170, 126, 62));
             fb_fill(x + 6, y + 16, 24, 2, fb_rgb(150, 110, 54));
             break;
         case APP_USER:
-            /* окно с ползунком - «работающая программа» */
+            /* a window with a slider - "a running program" */
             fb_fill(x + 2, y + 4, 32, 26, C_WHITE);
             fb_rect(x + 2, y + 4, 32, 26, fb_rgb(150, 158, 175));
             fb_fill(x + 2, y + 4, 32, 6, C_ACCENT);
@@ -1240,13 +1276,13 @@ static void draw_icon_glyph(int app, i32 x, i32 y) {
             fb_fill(x + 6, y + 22, 20, 3, fb_rgb(120, 130, 150));
             break;
         case APP_EDIT:
-            /* лист бумаги со строчками и карандашом */
+            /* a sheet of ruled paper with a pencil */
             fb_fill(x + 4, y + 2, 26, 32, C_WHITE);
             fb_rect(x + 4, y + 2, 26, 32, fb_rgb(150, 158, 175));
             fb_fill(x + 8, y + 8,  18, 2, fb_rgb(120, 130, 150));
             fb_fill(x + 8, y + 14, 18, 2, fb_rgb(120, 130, 150));
             fb_fill(x + 8, y + 20, 12, 2, fb_rgb(120, 130, 150));
-            fb_fill(x + 22, y + 22, 10, 10, C_YELLOW);      /* карандаш */
+            fb_fill(x + 22, y + 22, 10, 10, C_YELLOW);      /* pencil */
             fb_fill(x + 29, y + 29, 4, 4, fb_rgb(60, 50, 40));
             break;
         case APP_PAINT:
@@ -1258,10 +1294,10 @@ static void draw_icon_glyph(int app, i32 x, i32 y) {
             break;
         case APP_SETTINGS: {
             u32 c = fb_rgb(190, 198, 214);
-            fb_fill(x + 14, y + 4, 10, 28, c);      /* крест-основа */
+            fb_fill(x + 14, y + 4, 10, 28, c);      /* the cross base */
             fb_fill(x + 4, y + 14, 28, 10, c);
-            fb_fill(x + 8, y + 8, 20, 20, c);       /* тело шестерни */
-            fb_fill(x + 13, y + 13, 10, 10, fb_rgb(30, 40, 60));  /* отверстие */
+            fb_fill(x + 8, y + 8, 20, 20, c);       /* the gear body */
+            fb_fill(x + 13, y + 13, 10, 10, fb_rgb(30, 40, 60));  /* the hole */
             break;
         }
         case APP_HELP:
@@ -1279,31 +1315,31 @@ static void draw_desktop(void) {
     u8 ab = accents[theme_accent].b;
 
     switch (theme_wall) {
-        case 1:      /* Ночь - тёмный вертикальный градиент */
+        case 1:      /* Night - a dark vertical gradient */
             fb_gradient_v(0, 0, (i32)scr_w, dh, 12, 14, 24, 2, 3, 8);
             break;
-        case 2: {    /* Сетка - линии в цвете акцента */
+        case 2: {    /* Grid - lines in the accent colour */
             fb_fill(0, 0, (i32)scr_w, dh, fb_rgb(14, 18, 30));
             u32 g = fb_rgb((u8)(ar / 3 + 10), (u8)(ag / 3 + 12), (u8)(ab / 3 + 20));
             for (i32 x = 0; x < (i32)scr_w; x += 40) fb_fill(x, 0, 1, dh, g);
             for (i32 y = 0; y < dh; y += 40) fb_fill(0, y, (i32)scr_w, 1, g);
             break;
         }
-        case 3:      /* Однотонный - приглушённый акцент */
+        case 3:      /* Solid - a muted accent */
             fb_fill(0, 0, (i32)scr_w, dh,
                     fb_rgb((u8)(ar / 3), (u8)(ag / 3), (u8)(ab / 3 + 6)));
             break;
-        default:     /* Градиент - оттенок акцента сверху вниз */
+        default:     /* Gradient - a shade of the accent, top to bottom */
             fb_gradient_v(0, 0, (i32)scr_w, dh,
                           (u8)(ar / 2 + 8), (u8)(ag / 2 + 12), (u8)(ab / 2 + 24),
                           8, 12, 24);
     }
 
-    /* логотип по центру */
+    /* the logo in the centre */
     const char *wm = "KvantOS";
     i32 lx = (i32)scr_w / 2 - 100, ly = (i32)scr_h / 2 - 60;
     for (int s = 0; s < 3; s++) {
-        const char *t = s == 0 ? "K V A N T" : (s == 1 ? "графическая среда" : KV_VERSION);
+        const char *t = s == 0 ? "K V A N T" : (s == 1 ? T("desktop environment", "графическая среда") : KV_VERSION);
         i32 tw = (i32)utf8_len(t) * 8;
         fb_text((i32)scr_w / 2 - tw / 2, ly + s * 22, t,
                 s == 0 ? fb_rgb((u8)(ar / 2 + 40), (u8)(ag / 2 + 45), (u8)(ab / 2 + 60))
@@ -1312,10 +1348,12 @@ static void draw_desktop(void) {
     }
     (void)wm; (void)lx;
 
-    /* Иконки: при низком разрешении (640x480) нижние ряды не помещались
-       и рисовались под панелью задач. Раскладываем в колонки по высоте. */
-    /* Учитываем и верхний отступ (50), и высоту подписи под иконкой (58),
-       иначе нижний ряд упирался в панель задач. */
+    /* Icons: at a low resolution (640x480) the bottom rows did not fit
+       and were drawn underneath the taskbar. They are laid out in
+       columns according to the available height. */
+    /* Both the top margin (50) and the caption height under an icon
+       (58) are taken into account, otherwise the bottom row ran into
+       the taskbar. */
     i32 usable = dh - 50 - 58;
     int per_col = usable / 90 + 1;
     if (per_col < 1) per_col = 1;
@@ -1328,23 +1366,23 @@ static void draw_desktop(void) {
         if (i == sel_icon)
             fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(50, 80, 130));
         draw_icon_glyph(icons[i].app, x + ICON_W / 2 - 24, y);
-        fb_text_center(x - 6, y + 44, ICON_W, icons[i].label, C_WHITE, 0xFFFFFFFF);
+        fb_text_center(x - 6, y + 44, ICON_W, app_name(icons[i].app), C_WHITE, 0xFFFFFFFF);
     }
 }
 
-static u32 gui_fps = 0;      /* кадров в секунду, для замеров */
-static u32 gui_fps_limit = 0;  /* 0 = без ограничения; иначе целевые к/с */
+static u32 gui_fps = 0;      /* frames per second, for measurements */
+static u32 gui_fps_limit = 0;  /* 0 = unlimited; otherwise the target fps */
 
 static void draw_panel(void) {
     i32 py = (i32)scr_h - PANEL_H;
     fb_gradient_v(0, py, (i32)scr_w, PANEL_H, 40, 52, 78, 20, 26, 42);
     fb_fill(0, py, (i32)scr_w, 1, fb_rgb(80, 100, 140));
 
-    /* кнопка «Пуск» */
+    /* the Start button */
     fb_round_fill(6, py + 4, 78, PANEL_H - 8, C_TITLE);
-    fb_text(16, py + 10, "КВАНТ", C_WHITE, 0xFFFFFFFF);
+    fb_text(16, py + 10, T("KVANT", "КВАНТ"), C_WHITE, 0xFFFFFFFF);
 
-    /* кнопки окон */
+    /* window buttons */
     i32 bx = 94;
     for (int i = 0; i < win_count; i++) {
         int id = z_order[i];
@@ -1352,7 +1390,7 @@ static void draw_panel(void) {
         int active = (id == top_window());
         fb_round_fill(bx, py + 4, 132, PANEL_H - 8,
                       active ? fb_rgb(70, 90, 130) : fb_rgb(46, 58, 84));
-        /* обрезаем по символам UTF-8, чтобы текст не вылезал за кнопку */
+        /* clipped by UTF-8 characters so the text stays inside the button */
         char t[40];
         const char *src = wins[id].title;
         u32 nch = 0, bpos = 0;
@@ -1370,7 +1408,7 @@ static void draw_panel(void) {
         if (bx > (i32)scr_w - 260) break;
     }
 
-    /* часы и статистика справа */
+    /* the clock and statistics on the right */
     rtc_time_t tm;
     rtc_read(&tm);
     char clock[32];
@@ -1380,19 +1418,19 @@ static void draw_panel(void) {
     fb_text((i32)scr_w - clw - 14, py + 10, clock, C_WHITE, 0xFFFFFFFF);
 
     char mem[32];
-    ksnprintf(mem, sizeof(mem), "ОЗУ %u МиБ", pmm_used_frames() * 4096 / 1048576);
+    ksnprintf(mem, sizeof(mem), T("RAM %u MiB", "ОЗУ %u МиБ"), pmm_used_frames() * 4096 / 1048576);
     fb_text((i32)scr_w - 190, py + 10, mem, fb_rgb(160, 200, 240), 0xFFFFFFFF);
 
-    /* Счётчик кадров: нужен, чтобы измерять скорость на реальном
-       железе, а не гадать. Обновляется раз в секунду. */
+    /* A frame counter: it exists to measure speed on real hardware
+       instead of guessing. Updated once per second. */
     char fps[24];
-    ksnprintf(fps, sizeof(fps), "%u к/с", gui_fps);
+    ksnprintf(fps, sizeof(fps), T("%u fps", "%u к/с"), gui_fps);
     fb_text((i32)scr_w - 260, py + 10, fps,
             gui_fps >= 25 ? fb_rgb(140, 230, 150) : fb_rgb(240, 200, 120),
             0xFFFFFFFF);
 }
 
-/* курсор мыши — стрелка со «шлейфом» */
+/* the mouse cursor - an arrow with a tail */
 static void draw_cursor(i32 mx, i32 my) {
     static const char *arrow[] = {
         "X           ",
@@ -1422,10 +1460,10 @@ static void draw_cursor(i32 mx, i32 my) {
     }
 }
 
-/* ---------- обработка ввода ---------- */
+/* ---------- input handling ---------- */
 
 static void open_app(int app) {
-    /* если окно этого приложения уже есть — поднять его */
+    /* if a window of this application already exists, raise it */
     for (int i = 0; i < MAX_WIN; i++)
         if (wins[i].used && wins[i].app == app) {
             wins[i].minimized = 0;
@@ -1434,7 +1472,7 @@ static void open_app(int app) {
         }
     i32 w = 420, h = 300;
     if (app == APP_SYSMON) { w = 430; h = 420; }
-    if (app == APP_EDIT)   { w = 660; h = 470; }   /* блокноту нужен простор */
+    if (app == APP_EDIT)   { w = 660; h = 470; }   /* the notepad needs room */
     if (app == APP_TERM)   { w = 480; h = 300; }
     if (app == APP_PAINT)  { w = 390; h = 290; }
     if (app == APP_HELP)   { w = 440; h = 470; }
@@ -1445,12 +1483,12 @@ static void open_app(int app) {
     i32 y = 60 + (win_count % 4) * 28;
     if (x + w > (i32)scr_w) x = (i32)scr_w - w - 10;
     if (y + h > (i32)scr_h - PANEL_H) y = 40;
-    win_open(app_names[app], app, x, y, w, h, C_TITLE);
+    win_open(app_name(app), app, x, y, w, h, C_TITLE);
 }
 
-/* Применить выбранное разрешение прямо из графической среды.
-   Задний буфер привязан к старому шагу строки, поэтому его нужно
-   освободить ДО смены режима и выделить заново под новый размер. */
+/* Apply the selected resolution straight from the desktop.
+   The back buffer is tied to the old row pitch, so it must be released
+   BEFORE the mode change and allocated again for the new size. */
 static void settings_apply(void) {
     int changed = 0;
 
@@ -1460,17 +1498,17 @@ static void settings_apply(void) {
         vbe_current(&cur);
 
         if (m.width != cur.width || m.height != cur.height || m.bpp != cur.bpp) {
-            /* рисуем напрямую в видеопамять, пока буфера нет */
+            /* draw straight into video memory while there is no buffer */
             if (backbuf) { kfree(backbuf); backbuf = NULL; }
             fb_set_target(NULL);
 
             int r = vbe_set_mode(m.width, m.height, m.bpp);
             if (r != VBE_OK) {
                 set_status(vbe_error_text(r), C_RED);
-                /* восстановить буфер под прежний режим;
-                   если памяти не хватило - рисуем прямо в видеопамять */
+                /* restore the buffer for the previous mode;
+                   if memory ran out, draw straight into video memory */
                 backbuf = (u32 *)kmalloc(fb_pitch_get() * fb_height());
-                fb_set_target(backbuf);          /* NULL -> прямая отрисовка */
+                fb_set_target(backbuf);          /* NULL -> direct rendering */
                 set_res_sel = -1;
                 return;
             }
@@ -1485,7 +1523,7 @@ static void settings_apply(void) {
             fb_set_target(backbuf);
             if (!backbuf) fb_set_target(NULL);
 
-            /* окна не должны остаться за краем нового экрана */
+            /* windows must not be left beyond the edge of the new screen */
             for (int i = 0; i < MAX_WIN; i++) {
                 if (!wins[i].used) continue;
                 if (wins[i].x > (i32)scr_w - 80) wins[i].x = (i32)scr_w - 80;
@@ -1502,10 +1540,10 @@ static void settings_apply(void) {
     if (set_hz_sel) {
         int r = vbe_set_refresh(set_hz_sel);
         if (r == VBE_OK) {
-            set_status("Режим и частота применены", C_GREEN);
+            set_status(T("Mode and refresh rate applied", "Режим и частота применены"), C_GREEN);
             changed = 1;
         } else if (r == VBE_WARN_VIRTUAL) {
-            set_status("Частоту задаёт хост-система", C_YELLOW);
+            set_status(T("The host system sets the refresh rate", "Частоту задаёт хост-система"), C_YELLOW);
         } else {
             set_status(vbe_error_text(r), C_RED);
         }
@@ -1513,11 +1551,11 @@ static void settings_apply(void) {
         return;
     }
 
-    set_status(changed ? "Разрешение применено" : "Изменений нет", 
+    set_status(changed ? T("Resolution applied", "Разрешение применено") : T("No changes", "Изменений нет"), 
                changed ? C_GREEN : C_TEXT_DIM);
 }
 
-/* Клик внутри окна «Настройки» */
+/* A click inside the Settings window */
 static int settings_click(int id, i32 mx, i32 my) {
     int w = hit_test(id, mx, my);
     if (w < 0) return 0;
@@ -1526,12 +1564,12 @@ static int settings_click(int id, i32 mx, i32 my) {
 
     if (w >= W_RES && w < W_RES + 64) {
         set_res_sel = w - W_RES;
-        set_status("Нажмите «Применить» для смены режима", C_TEXT_DIM);
+        set_status(T("Press Apply to change the mode", "Нажмите «Применить» для смены режима"), C_TEXT_DIM);
         return 1;
     }
     if (w >= W_HZ && w < W_HZ + HZ_COUNT) {
         set_hz_sel = hz_list[w - W_HZ];
-        set_status("Нажмите «Применить»", C_TEXT_DIM);
+        set_status(T("Press Apply", "Нажмите «Применить»"), C_TEXT_DIM);
         return 1;
     }
     if (w >= W_ACCENT && w < W_ACCENT + ACCENT_COUNT) {
@@ -1558,7 +1596,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
 
     if (!pressed) { dragging = -1; return; }
 
-    /* панель задач */
+    /* taskbar */
     if (my >= py) {
         i32 bx = 94;
         for (int i = 0; i < win_count; i++) {
@@ -1574,7 +1612,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
         return;
     }
 
-    /* окна сверху вниз */
+    /* windows from top to bottom */
     for (int i = win_count - 1; i >= 0; i--) {
         int id = z_order[i];
         window_t *v = &wins[id];
@@ -1583,25 +1621,25 @@ static void handle_click(i32 mx, i32 my, int pressed) {
 
         raise_window(id);
 
-        /* закрытие */
+        /* closing */
         if (my >= v->y + 5 && my < v->y + 18 &&
             mx >= v->x + v->w - 20 && mx < v->x + v->w - 6) {
             win_close(id);
             return;
         }
-        /* перетаскивание за заголовок */
+        /* dragging by the title bar */
         if (my < v->y + TITLE_H) {
             dragging = id;
             drag_dx = mx - v->x;
             drag_dy = my - v->y;
             return;
         }
-        /* элементы управления «Настроек» */
+        /* the Settings controls */
         if (v->app == APP_SETTINGS) {
             if (settings_click(id, mx, my)) return;
         }
 
-        /* «Программы»: разметка диска, запуск и удаление */
+        /* Programs: formatting the disk, launching and removing */
         if (v->app == APP_STORE) {
             for (int k = 0; k < hit_count; k++) {
                 hit_t *ht = &hits[k];
@@ -1610,23 +1648,24 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                 if (my < ht->y || my >= ht->y + ht->h) continue;
 
                 if (ht->id == W_ST_SETUP || ht->id == W_ST_SETUP_KEEP) {
-                    /* Установка занимает секунды: рисуем сообщение
-                       заранее, иначе экран замрёт без объяснений. */
-                    store_say("Установка... подождите");
+                    /* Installation takes seconds: the message is drawn
+                       beforehand, otherwise the screen freezes with no
+                       explanation. */
+                    store_say(T("Installing... please wait", "Установка... подождите"));
                     int rc = setup_install(ht->id == W_ST_SETUP_KEEP);
-                    store_say(rc == 0 ? "Установлено! Извлеките носитель и перезагрузитесь"
+                    store_say(rc == 0 ? T("Installed! Remove the media and reboot", "Установлено! Извлеките носитель и перезагрузитесь")
                                       : setup_last_result());
                     if (rc == 0) { beep(880, 60); beep(1320, 90); }
                     return;
                 }
                 if (ht->id == W_ST_FORMAT) {
                     int rc = kvfs_format();
-                    store_say(rc == 0 ? "Диск размечен, KvFS готова" : kvfs_error(rc));
+                    store_say(rc == 0 ? T("Disk formatted, KvFS ready", "Диск размечен, KvFS готова") : kvfs_error(rc));
                     return;
                 }
                 if (ht->id == W_ST_REFRESH) {
                     kvfs_mount();
-                    store_say("Список обновлён");
+                    store_say(T("List refreshed", "Список обновлён"));
                     return;
                 }
                 if (ht->id >= W_ST_RAM0) {
@@ -1643,7 +1682,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                                 kapp_opened(wins[uw].x + 1, wins[uw].y + TITLE_H + 1,
                                             wins[uw].w - 2, wins[uw].h - TITLE_H - 22);
                             }
-                            store_say("Запущено из образа");
+                            store_say(T("Started from the image", "Запущено из образа"));
                         } else store_say(kapp_last_error());
                     }
                     return;
@@ -1651,21 +1690,21 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                 if (ht->id >= W_ST_DEL0) {
                     char nm[44];
                     if (kvfs_list(ht->id - W_ST_DEL0, nm, NULL, NULL) == 0) {
-                        /* запущенную программу сначала выгружаем */
+                        /* a running program is unloaded first */
                         if (kapp_loaded() && !strcmp(kapp_filename(), nm)) {
                             kapp_unload();
                             for (int q = 0; q < MAX_WIN; q++)
                                 if (wins[q].used && wins[q].app == APP_USER) win_close(q);
                         }
                         int rc = kvfs_delete(nm);
-                        store_say(rc == 0 ? "Программа удалена" : kvfs_error(rc));
+                        store_say(rc == 0 ? T("Program removed", "Программа удалена") : kvfs_error(rc));
                     }
                     return;
                 }
                 if (ht->id >= W_ST_ITEM0) {
                     char nm[44];
                     if (kvfs_list(ht->id - W_ST_ITEM0, nm, NULL, NULL) == 0) {
-                        /* старое окно приложения закрываем: программа одна */
+                        /* the old application window is closed: only one program at a time */
                         for (int q = 0; q < MAX_WIN; q++)
                             if (wins[q].used && wins[q].app == APP_USER) win_close(q);
                         if (kapp_load(nm) == 0) {
@@ -1676,7 +1715,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                                 kapp_opened(wins[uw].x + 1, wins[uw].y + TITLE_H + 1,
                                             wins[uw].w - 2, wins[uw].h - TITLE_H - 22);
                             }
-                            store_say("Запущено");
+                            store_say(T("Started", "Запущено"));
                         } else {
                             store_say(kapp_last_error());
                         }
@@ -1687,7 +1726,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
             return;
         }
 
-        /* Щелчок внутри окна приложения отдаём самой программе */
+        /* A click inside an application window is handed to the program itself */
         if (v->app == APP_USER && kapp_loaded()) {
             i32 ux = v->x + 1, uy = v->y + TITLE_H + 1;
             i32 uw = v->w - 2, uh = v->h - TITLE_H - 2 - 20;
@@ -1696,7 +1735,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
             return;
         }
 
-        /* кнопки и список файлов «Блокнота» */
+        /* the Notepad buttons and file list */
         if (v->app == APP_EDIT) {
             for (int k = 0; k < hit_count; k++) {
                 hit_t *ht = &hits[k];
@@ -1706,29 +1745,29 @@ static void handle_click(i32 mx, i32 my, int pressed) {
 
                 if (ht->id == W_ED_NEW) {
                     ed_reset();
-                    ed_msg("Новый документ");
+                    ed_msg(T("New document", "Новый документ"));
                     return;
                 }
                 if (ht->id == W_ED_SAVE) {
-                    /* просим имя, если файл ещё не назван осмысленно */
+                    /* ask for a name when the file has no meaningful one yet */
                     ed_name_mode = 1;
                     int n = 0;
                     for (; ed_name[n] && n < (int)sizeof(ed_name_in) - 1; n++)
                         ed_name_in[n] = ed_name[n];
                     ed_name_in[n] = 0;
-                    ed_msg("Введите имя и нажмите Enter");
+                    ed_msg(T("Type a name and press Enter", "Введите имя и нажмите Enter"));
                     return;
                 }
                 if (ht->id == W_ED_OPEN) {
-                    ed_msg("Выберите файл в списке справа");
+                    ed_msg(T("Pick a file from the list on the right", "Выберите файл в списке справа"));
                     return;
                 }
                 if (ht->id == W_ED_DEL) {
                     if (ramfs_delete(ed_name) == 0) {
                         ed_reset();
-                        ed_msg("Файл удалён");
+                        ed_msg(T("File deleted", "Файл удалён"));
                     } else {
-                        ed_msg("Файл не найден");
+                        ed_msg(T("File not found", "Файл не найден"));
                     }
                     return;
                 }
@@ -1736,18 +1775,18 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                     rfile_t *tbl = ramfs_table();
                     int fi = ht->id - W_ED_FILE0;
                     if (fi >= 0 && fi < RAMFS_MAX_FILES && tbl[fi].used) {
-                        if (ed_load(tbl[fi].name)) ed_msg("Файл открыт");
-                        else ed_msg("Не удалось открыть");
+                        if (ed_load(tbl[fi].name)) ed_msg(T("File opened", "Файл открыт"));
+                        else ed_msg(T("Could not open", "Не удалось открыть"));
                     }
                     return;
                 }
             }
         }
 
-        /* рисование внутри холста */
+        /* drawing inside the canvas */
         if (v->app == APP_PAINT) {
             i32 gx = v->x + 11, gy = v->y + TITLE_H + 27;
-            /* выбор цвета */
+            /* colour selection */
             i32 by = v->y + TITLE_H + 5;
             for (int k = 0; k < 6; k++) {
                 i32 bx2 = v->x + 181 + k * 22;
@@ -1756,9 +1795,10 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                     return;
                 }
             }
-            /* Деление отрицательных в C округляет к нулю: при mx на 1..7
-               пикселей левее холста (mx-gx == -1) получалось c == 0, то есть
-               ложное попадание в первую клетку. Отсекаем до деления. */
+            /* Division of negatives in C rounds towards zero: with mx
+               1..7 pixels left of the canvas (mx-gx == -1) the result was
+               c == 0, a false hit on the first cell. It is rejected
+               before the division. */
             i32 dx = mx - gx, dy = my - gy;
             if (dx >= 0 && dy >= 0) {
                 i32 c = dx / 8, r = dy / 8;
@@ -1768,13 +1808,13 @@ static void handle_click(i32 mx, i32 my, int pressed) {
         return;
     }
 
-    /* иконки рабочего стола */
+    /* desktop icons */
     for (int i = 0; i < ICON_COUNT; i++) {
         i32 x = icons[i].x - 6, y = icons[i].y - 6;
         if (mx >= x && mx < x + ICON_W && my >= y && my < y + ICON_H) {
             u64 now = timer_ticks();
             if (last_click_icon == i && now - last_click_tick < timer_hz() * 9 / 10)
-                open_app(icons[i].app);       /* двойной клик */
+                open_app(icons[i].app);       /* double click */
             sel_icon = i;
             last_click_icon = i;
             last_click_tick = now;
@@ -1798,8 +1838,9 @@ static void handle_drag(i32 mx, i32 my) {
 static void handle_key(int c) {
     int top = top_window();
 
-    /* ----- Приложение сверху: клавиши уходят ему -----
-       Esc оставляем себе, иначе из зависшей программы не выйти. */
+    /* ----- An application on top: keys go to it -----
+       Esc is kept for ourselves, otherwise a hung program would be
+       impossible to leave. */
     if (top >= 0 && wins[top].app == APP_USER && kapp_loaded() && c != 27) {
         window_t *v = &wins[top];
         kapp_key(c, v->x + 1, v->y + TITLE_H + 1,
@@ -1807,9 +1848,9 @@ static void handle_key(int c) {
         return;
     }
 
-    /* ----- Блокнот сверху: весь ввод забирает редактор ----- */
+    /* ----- Notepad on top: the editor takes all input ----- */
     if (top >= 0 && wins[top].app == APP_EDIT) {
-        /* режим ввода имени файла */
+        /* file name input mode */
         if (ed_name_mode) {
             int len = 0; while (ed_name_in[len]) len++;
             if (c == '\n') {
@@ -1819,11 +1860,11 @@ static void handle_key(int c) {
                     ed_save();
                 } else {
                     ed_name_mode = 0;
-                    ed_msg("Имя не задано");
+                    ed_msg(T("No name given", "Имя не задано"));
                 }
                 return;
             }
-            if (c == 27) { ed_name_mode = 0; ed_msg("Отменено"); return; }
+            if (c == 27) { ed_name_mode = 0; ed_msg(T("Cancelled", "Отменено")); return; }
             if (c == '\b') { if (len) ed_name_in[len - 1] = 0; return; }
             if (c >= 32 && c < 127 && len < (int)sizeof(ed_name_in) - 1) {
                 ed_name_in[len] = (char)c;
@@ -1833,7 +1874,7 @@ static void handle_key(int c) {
         }
 
         switch (c) {
-            case 27:                       /* Esc - закрыть окно */
+            case 27:                       /* Esc - close the window */
                 win_close(top);
                 return;
             case '\n': ed_newline();      ed_scroll_to_cursor(); return;
@@ -1869,9 +1910,9 @@ static void handle_key(int c) {
                 }
                 ed_scroll_to_cursor();
                 return;
-            case 19:                       /* Ctrl+S - сохранить */
-                /* Спрашиваем имя, иначе документ молча уходил под
-                   именем по умолчанию «новый.txt». */
+            case 19:                       /* Ctrl+S - save */
+                /* Ask for a name, otherwise the document was silently
+                   saved under the default name. */
                 ed_name_mode = 1;
                 {
                     int n = 0;
@@ -1879,11 +1920,11 @@ static void handle_key(int c) {
                         ed_name_in[n] = ed_name[n];
                     ed_name_in[n] = 0;
                 }
-                ed_msg("Имя файла и Enter (Esc - отмена)");
+                ed_msg(T("File name then Enter (Esc cancels)", "Имя файла и Enter (Esc - отмена)"));
                 return;
-            case 14:                       /* Ctrl+N - новый документ */
+            case 14:                       /* Ctrl+N - new document */
                 ed_reset();
-                ed_msg("Новый документ");
+                ed_msg(T("New document", "Новый документ"));
                 return;
             case '\t':
                 for (int i = 0; i < 4; i++) ed_insert_char(' ');
@@ -1893,7 +1934,7 @@ static void handle_key(int c) {
         return;
     }
 
-    /* если открыт терминал и он сверху — ввод идёт в него */
+    /* when the terminal is open and on top, input goes there */
     if (top >= 0 && wins[top].app == APP_TERM) {
         if (c == '\n') {
             term_input[term_len] = 0;
@@ -1932,9 +1973,9 @@ static void handle_key(int c) {
         case 'p': case 'P': open_app(APP_PAINT); break;
         case 'e': case 'E': open_app(APP_EDIT); break;
         case 'h': case 'H': case '?': open_app(APP_HELP); break;
-        /* Клавиша L переключает предел частоты кадров.
-           Без предела картинка максимально плавная, но процессор
-           загружен полностью - на ноутбуке это расход батареи. */
+        /* The L key toggles the frame rate cap.
+           Without a cap the picture is as smooth as possible but the
+           CPU is fully loaded - on a laptop that drains the battery. */
         case 'l': case 'L':
             if      (gui_fps_limit == 0)  gui_fps_limit = 60;
             else if (gui_fps_limit == 60) gui_fps_limit = 30;
@@ -1949,7 +1990,7 @@ static void handle_key(int c) {
     }
 }
 
-/* ---------- главный цикл ---------- */
+/* ---------- main loop ---------- */
 
 int gui_run(void) {
     if (!fb_active()) return -1;
@@ -1960,7 +2001,7 @@ int gui_run(void) {
 
     u32 bytes = fb_pitch_get() * scr_h;
     backbuf = (u32 *)kmalloc(bytes);
-    /* при нехватке памяти рисуем напрямую в видеопамять */
+    /* when memory runs short, draw straight into video memory */
     fb_set_target(backbuf);
 
     memset(wins, 0, sizeof(wins));
@@ -1968,16 +2009,16 @@ int gui_run(void) {
     memset(paint_grid, 0, sizeof(paint_grid));
     term_row = 0; term_len = 0; term_input[0] = 0;
     memset(term_buf, 0, sizeof(term_buf));
-    term_putline("KvantGUI терминал. Наберите help.");
+    term_putline(T("KvantGUI terminal. Type help.", "KvantGUI терминал. Наберите help."));
 
     mouse_set_bounds((i32)scr_w, (i32)scr_h);
     mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
 
-    /* Учёт изменившейся области экрана. Полная выгрузка кадра
-       (3 МиБ при 1024x768) - самая дорогая операция в цикле, поэтому
-       отправляем в видеопамять только полосу строк, которая реально
-       менялась: окна, панель, курсор. */
-    int full_redraw = 1;                 /* первый кадр выгружаем целиком */
+    /* Tracking the changed screen area. A full frame blit (3 MiB at
+       1024x768) is the most expensive operation in the loop, so only
+       the band of rows that actually changed is sent to video memory:
+       windows, the panel, the cursor. */
+    int full_redraw = 1;                 /* the first frame is blitted in full */
     int frame_tick = 0;
     u32 fps_frames = 0;
     u64 fps_mark = timer_ticks();
@@ -1990,11 +2031,11 @@ int gui_run(void) {
     int prev_btn = 0;
 
     while (running) {
-        /* ввод с клавиатуры */
+        /* keyboard input */
         int c;
         while ((c = kbd_getchar_nb()) >= 0) { handle_key(c); full_redraw = 1; }
 
-        /* мышь */
+        /* mouse */
         i32 mx = mouse_x(), my = mouse_y();
         int btn = mouse_buttons() & 1;
         if (btn && !prev_btn) { handle_click(mx, my, 1); full_redraw = 1; }
@@ -2004,11 +2045,11 @@ int gui_run(void) {
             full_redraw = 1;
             int top = top_window();
             if (dragging < 0 && top >= 0 && wins[top].app == APP_PAINT)
-                handle_click(mx, my, 1);      /* непрерывное рисование */
+                handle_click(mx, my, 1);      /* continuous drawing */
         }
         prev_btn = btn;
 
-        /* кадр */
+        /* frame */
         u64 frame_start = timer_ticks();
         hit_reset();
         draw_desktop();
@@ -2019,11 +2060,12 @@ int gui_run(void) {
 
         if (backbuf) {
             if (full_redraw) {
-                fb_present(backbuf);          /* содержимое изменилось целиком */
+                fb_present(backbuf);          /* the contents changed entirely */
             } else {
-                /* Ничего структурно не поменялось: в видеопамять уходят
-                   только полоса курсора (старое и новое место) и панель
-                   с часами. Это десятки килобайт вместо трёх мегабайт. */
+                /* Nothing changed structurally: only the cursor band
+                   (its old and new place) and the panel with the clock
+                   are sent to video memory. That is tens of kilobytes
+                   instead of three megabytes. */
                 i32 cy0 = (my < prev_my ? my : prev_my) - 2;
                 i32 cy1 = (my > prev_my ? my : prev_my) + 22;
                 if (cy0 < 0) cy0 = 0;
@@ -2038,30 +2080,32 @@ int gui_run(void) {
         prev_mx = mx; prev_my = my;
         full_redraw = 0;
 
-        /* Окно «Монитор» показывает живые счётчики, а часы на панели
-           идут сами по себе. Раз в 8 кадров (примерно четверть секунды)
-           выгружаем экран целиком, чтобы такие изменения не застывали. */
+        /* The Monitor window shows live counters and the panel clock
+           ticks on its own. Every 8 frames (roughly a quarter of a
+           second) the whole screen is blitted so that such changes do
+           not freeze. */
         if (++frame_tick >= 8) { frame_tick = 0; full_redraw = 1; }
 
-        /* Замер частоты кадров по системному таймеру (100 Гц). */
+        /* Measuring the frame rate with the system timer (100 Hz). */
         fps_frames++;
         u64 now = timer_ticks();
         u32 hz = timer_hz();
         if (now - fps_mark >= hz) {
-            u32 span = (u32)(now - fps_mark);      /* около секунды, влезает */
+            u32 span = (u32)(now - fps_mark);      /* about a second, it fits */
             gui_fps = span ? (fps_frames * hz / span) : 0;
             fps_frames = 0;
             fps_mark = now;
         }
 
-        /* Ограничения частоты кадров нет: рисуем настолько быстро,
-           насколько позволяет железо. Планировщику всё равно уступаем
-           управление, иначе фоновые задачи не получат процессор.
-           gui_fps_limit = 0 - без предела, иначе - целевые к/с. */
+        /* There is no frame rate cap: we draw as fast as the hardware
+           allows. Control is still yielded to the scheduler, otherwise
+           background tasks would never get the CPU.
+           gui_fps_limit = 0 means unlimited, otherwise it is the
+           target fps. */
         if (gui_fps_limit) {
             u32 hz     = timer_hz();
-            u32 budget = hz / gui_fps_limit;                   /* тиков на кадр */
-            u32 spent  = (u32)(timer_ticks() - frame_start);   /* всегда мало */
+            u32 budget = hz / gui_fps_limit;                   /* ticks per frame */
+            u32 spent  = (u32)(timer_ticks() - frame_start);   /* always too few */
             if (spent < budget) {
                 u32 left_ms = (budget - spent) * 1000u / hz;
                 if (left_ms) task_sleep(left_ms);
@@ -2070,7 +2114,7 @@ int gui_run(void) {
                 task_yield();
             }
         } else {
-            task_yield();      /* без лимита - только уступаем процессор */
+            task_yield();      /* no limit - just yield the CPU */
         }
     }
 

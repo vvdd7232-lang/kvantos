@@ -1,6 +1,6 @@
-/* Змейка - пример игры для KvantOS
-   KAPP_NAME "Змейка"
-   Стрелки - поворот, пробел - заново. */
+/* Snake - a sample game for KvantOS
+   KAPP_NAME "Snake"
+   Arrows turn, space restarts. */
 #include "kvapp.h"
 #define W 20
 #define H 14
@@ -23,7 +23,7 @@ static void restart(void) {
     for (int i = 0; i < slen; i++) { sx[i] = 5 - i; sy[i] = 7; }
     place_food();
     last_step = sys->ticks();
-    sys->status("Стрелки - поворот, пробел - заново");
+    sys->status(KV_T(sys, "Arrows turn, space restarts", "Стрелки - поворот, пробел - заново"));
 }
 static void step_game(void) {
     if (dead) return;
@@ -53,9 +53,9 @@ static void on_draw(void) {
     for (int i = 0; i < slen; i++)
         sys->fill(sx[i]*CELL+2, sy[i]*CELL+2, CELL-4, CELL-4, i ? body : head);
     char buf[48];
-    sys->format(buf, sizeof(buf), "Счёт: %u", (kv_u32)score);
+    sys->format(buf, sizeof(buf), KV_T(sys, "Score: %u", "Счёт: %u"), (kv_u32)score);
     sys->text(6, H*CELL+6, buf, white, 0xFFFFFFFF);
-    if (dead) sys->text(W*CELL/2-60, H*CELL/2-8, "Игра окончена", white, sys->rgb(160,40,40));
+    if (dead) sys->text(W*CELL/2-60, H*CELL/2-8, KV_T(sys, "Game over", "Игра окончена"), white, sys->rgb(160,40,40));
 }
 static void on_key(kv_i32 k) {
     if (k==KV_KEY_LEFT  && dx==0) { dx=-1; dy=0; }
@@ -64,6 +64,12 @@ static void on_key(kv_i32 k) {
     else if (k==KV_KEY_DOWN  && dy==0) { dx=0; dy=1; }
     else if (k==' ') restart();
 }
-static kv_app_t me = { .title="Змейка", .width=W*CELL, .height=H*CELL+26,
+static kv_app_t me = { .title="Snake", .width=W*CELL, .height=H*CELL+26,
     .on_open=restart, .on_draw=on_draw, .on_key=on_key, .on_tick=on_tick };
-kv_app_t *kapp_main(const kv_api_t *api){ sys=api; return &me; }
+kv_app_t *kapp_main(const kv_api_t *api) {
+    sys = api;
+    /* The language is only known at run time, so the title is set
+       here rather than in the initialiser. */
+    me.title = KV_T(sys, "Snake", "Змейка");
+    return &me;
+}

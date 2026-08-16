@@ -1,54 +1,53 @@
 /* ============================================================
- *  KvantOS - загрузчик приложений .kapp и таблица системных вызовов
+ *  KvantOS - the .kapp application loader and syscall table
  *
- *  Как это работает:
- *    1. Файл читается с диска (KvFS) в буфер.
- *    2. Проверяется заголовок: подпись, версия ABI, размеры.
- *    3. Образ копируется по фиксированному адресу KAPP_LOAD_BASE,
- *       хвост bss обнуляется.
- *    4. Вызывается kapp_main(&api) - приложение возвращает описание
- *       себя с обработчиками событий.
- *    5. Оболочка дальше сама зовёт on_draw/on_key/on_click.
+ *  How it works:
+ *    1. The file is read from disk (KvFS) into a buffer.
+ *    2. The header is validated: signature, ABI version, sizes.
+ *    3. The image is copied to the fixed address KAPP_LOAD_BASE and
+ *       the bss tail is zeroed.
+ *    4. kapp_main(&api) is called - the application returns its own
+ *       description together with event handlers.
+ *    5. From then on the shell calls on_draw/on_key/on_click itself.
  *
- *  Приложение собрано под абсолютный адрес KAPP_LOAD_BASE, поэтому
- *  перемещать его не нужно - никаких таблиц релокаций. Плата за
- *  простоту: одновременно запущено может быть одно приложение.
- *  Для системы такого размера это честный размен.
+ *  An application is built for the absolute address KAPP_LOAD_BASE, so
+ *  it needs no relocation - there are no relocation tables at all. The
+ *  price of that simplicity: exactly one application can run at a time.
+ *  For a system of this size that is an honest trade.
  *
- *  Приложение работает в кольце ядра. Чтобы кривая программа не
- *  утащила за собой всю систему, вокруг каждого её вызова стоит
- *  «страховочная сетка»: обработчик исключений запоминает, что
- *  сбой произошёл внутри приложения, и вместо паники ядра
- *  выгружает виновника (см. kapp_guard_* ниже).
+ *  Applications run in the kernel ring. To stop a broken program from
+ *  dragging the whole system down, every call into it is wrapped in a
+ *  "safety net": the exception handler notes that the fault happened
+ *  inside an application and unloads the culprit instead of panicking
+ *  the kernel (see kapp_guard_* below).
  * ============================================================ */
 #include "kernel.h"
 #include "kvapp.h"
 
-/* ---------- состояние загруженного приложения ---------- */
+/* ---------- state of the loaded application ---------- */
 static int        loaded = 0;
 static kv_app_t  *app    = NULL;
 static char       app_file[40];
 static char       app_title[64];
 static char       last_error[96];
 
-/* Клиентская область, куда рисует приложение. Оболочка выставляет
-   её перед каждым вызовом обработчика: приложение считает, что
-   начало координат - левый верхний угол его окна. */
+/* The client area the application draws into. The shell sets it
+   before every handler call: the application assumes the origin is
+   the top left corner of its own window. */
 static i32 cl_x, cl_y, cl_w, cl_h;
 
 /* ============================================================
- *  Страховочная сетка
+ *  The safety net
  *
- *  Приложение работает в кольце ядра, поэтому его ошибка - это
- *  исключение процессора, которое обычно means panic и остановка
- *  системы. Так вести себя нельзя: из-за кривой игры не должна
- *  умирать вся ОС.
+ *  An application runs in the kernel ring, so a bug in it raises a CPU
+ *  exception, which normally means a panic and a halted system. That
+ *  behaviour is unacceptable: a broken game must not kill the whole OS.
  *
- *  Поэтому перед каждым входом в приложение мы запоминаем точку
- *  возврата (регистры esp, ebp, ebx, esi, edi и адрес продолжения),
- *  а обработчик исключений, увидев флаг in_app, не паникует, а
- *  прыгает обратно в эту точку - как longjmp в обычном Си.
- *  Приложение снимается, оболочка продолжает работать.
+ *  Therefore, before every entry into an application we record a
+ *  return point (registers esp, ebp, ebx, esi, edi and the resume
+ *  address). When the exception handler sees the in_app flag it does
+ *  not panic but jumps back to that point - just like longjmp in plain
+ *  C. The application is unloaded and the shell keeps running.
  * ============================================================ */
 typedef struct { u32 esp, ebp, ebx, esi, edi, eip; } kapp_jmp_t;
 
@@ -57,14 +56,15 @@ static volatile int  in_app = 0;
 static volatile int  app_faulted = 0;
 static char          fault_reason[64];
 
-/* Сохранение точки возврата.
+/* Saving the return point.
  *
- *  Тонкость, на которой легко обжечься: сохранять регистры обязана
- *  не отдельная функция, а САМ вызывающий код. Если спрятать это
- *  в функцию, она запомнит esp своей собственной рамки, вернётся,
- *  рамка исчезнет - и прыжок обратно уйдёт в затёртый стек.
- *  Поэтому здесь макрос: он разворачивается прямо в теле enter(),
- *  чья рамка живёт всё время работы обработчика приложения.
+ *  A subtlety that is easy to get burned by: the registers must be
+ *  saved by the CALLING code itself, not by a separate function. Hide
+ *  this in a function and it will record the esp of its own frame,
+ *  return, the frame disappears - and the jump back lands in an
+ *  overwritten stack. Hence a macro: it expands directly inside
+ *  enter(), whose frame lives for as long as the application handler
+ *  is running.
  */
 #define GUARD_SET(b, res)                        \
     __asm__ volatile(                            \
@@ -83,7 +83,7 @@ static char          fault_reason[64];
         : "r"(b)                                 \
         : "memory", "cc")
 
-/* Вернуться в сохранённую точку. Обратно уже не возвращается. */
+/* Jump back to the saved point. Never returns. */
 static __attribute__((noreturn)) void guard_jump(kapp_jmp_t *b) {
     __asm__ volatile(
         "movl 0(%0), %%esp\n\t"
@@ -101,12 +101,12 @@ int kapp_in_app(void) { return in_app; }
 
 void kapp_note_fault(const char *why) {
     app_faulted = 1;
-    strncpy(fault_reason, why ? why : "исключение", sizeof(fault_reason));
+    strncpy(fault_reason, why ? why : T("exception", "исключение"), sizeof(fault_reason));
     fault_reason[sizeof(fault_reason) - 1] = 0;
 }
 
-/* Вызывается обработчиком исключений вместо panic(), если сбой
-   произошёл внутри приложения. Управление сюда не возвращается. */
+/* Called by the exception handler instead of panic() when the fault
+   happened inside an application. Control never returns here. */
 void kapp_recover(const char *why) {
     kapp_note_fault(why);
     in_app = 0;
@@ -114,7 +114,7 @@ void kapp_recover(const char *why) {
 }
 
 /* ============================================================
- *  Реализация системных функций для приложений
+ *  Implementation of the system functions offered to applications
  * ============================================================ */
 
 static kv_i32 api_width(void)  { return cl_w; }
@@ -122,9 +122,10 @@ static kv_i32 api_height(void) { return cl_h; }
 
 static kv_u32 api_rgb(kv_u8 r, kv_u8 g, kv_u8 b) { return fb_rgb(r, g, b); }
 
-/* Прямоугольник в координатах окна, обрезанный по клиентской области.
-   Именно здесь приложение теряет возможность рисовать поверх чужих
-   окон и панели задач: всё лишнее отсекается до вызова fb_fill. */
+/* A rectangle in window coordinates, clipped to the client area.
+   This is exactly where an application loses the ability to draw over
+   other windows and the taskbar: everything outside is cut away before
+   fb_fill is called. */
 static void clip_fill(kv_i32 x, kv_i32 y, kv_i32 w, kv_i32 h, kv_u32 c) {
     if (w <= 0 || h <= 0) return;
     i32 ax = cl_x + x, ay = cl_y + y;
@@ -156,8 +157,8 @@ static void api_rect(kv_i32 x, kv_i32 y, kv_i32 w, kv_i32 h, kv_u32 c) {
     clip_fill(x + w - 1, y, 1, h, c);
 }
 
-/* Отрезок по Брезенхэму: без него любая диаграмма превращается
-   в мучение из отдельных точек. */
+/* A Bresenham line: without it any chart turns into an ordeal of
+   individual dots. */
 static void api_line(kv_i32 x0, kv_i32 y0, kv_i32 x1, kv_i32 y1, kv_u32 c) {
     i32 dx = x1 - x0, dy = y1 - y0;
     i32 sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
@@ -173,8 +174,8 @@ static void api_line(kv_i32 x0, kv_i32 y0, kv_i32 x1, kv_i32 y1, kv_u32 c) {
     }
 }
 
-/* Текст с обрезкой по правому краю окна: рисуем посимвольно и
-   останавливаемся, когда очередной знак уже не помещается. */
+/* Text clipped at the right edge of the window: drawn character by
+   character, stopping as soon as the next one no longer fits. */
 static void api_text(kv_i32 x, kv_i32 y, const char *s, kv_u32 fg, kv_u32 bg) {
     if (!s) return;
     if (y + KV_CHAR_H <= 0 || y >= cl_h) return;
@@ -191,7 +192,7 @@ static kv_i32 api_text_width(const char *s) {
     return s ? (kv_i32)(utf8_len(s) * KV_CHAR_W) : 0;
 }
 
-/* Строку состояния приложение пишет в буфер, оболочка рисует её сама */
+/* The application writes the status line into a buffer, the shell draws it */
 static char app_status[96];
 static void api_status(const char *s) {
     strncpy(app_status, s ? s : "", sizeof(app_status));
@@ -215,7 +216,7 @@ static void api_clock(kv_i32 *h, kv_i32 *m, kv_i32 *s) {
 }
 
 static void api_beep(kv_u32 f, kv_u32 ms) {
-    if (ms > 1000) ms = 1000;      /* приложение не должно вешать систему писком */
+    if (ms > 1000) ms = 1000;      /* an application must not hang the system with beeping */
     beep(f, ms);
 }
 
@@ -244,8 +245,8 @@ static void api_format(char *buf, kv_u32 size, const char *fmt, ...) {
     va_end(ap);
 }
 
-/* Линейный конгруэнтный генератор: приложениям хватает,
-   а тянуть что-то серьёзное в ядро незачем. */
+/* A linear congruential generator: good enough for applications,
+   and there is no reason to drag anything serious into the kernel. */
 static u32 rnd_state = 2463534242u;
 static kv_u32 api_random(void) {
     rnd_state = rnd_state * 1664525u + 1013904223u;
@@ -253,6 +254,9 @@ static kv_u32 api_random(void) {
 }
 
 static void api_log(const char *s) { gui_log(s); }
+
+/* The system language for an application: 0 - English, 1 - Russian. */
+static kv_u32 api_lang(void) { return (kv_u32)kv_lang_get(); }
 
 static const kv_api_t api_table = {
     .api_version = KV_API_VERSION,
@@ -272,10 +276,11 @@ static const kv_api_t api_table = {
     .str_len = api_strlen, .str_cmp = api_strcmp, .str_copy = api_strcpy,
     .format = api_format,
     .random = api_random,  .log = api_log,
+    .lang = api_lang,
 };
 
 /* ============================================================
- *  Загрузка и выгрузка
+ *  Loading and unloading
  * ============================================================ */
 
 const char *kapp_last_error(void) { return last_error; }
@@ -286,38 +291,39 @@ const char *kapp_filename(void)   { return loaded ? app_file : ""; }
 kv_i32 kapp_pref_w(void) { return (loaded && app && app->width  > 0) ? app->width  : 420; }
 kv_i32 kapp_pref_h(void) { return (loaded && app && app->height > 0) ? app->height : 300; }
 
-/* Проверка заголовка отдельной функцией: диагностика для пользователя
-   важнее краткости - невнятное «не запускается» бесит больше всего. */
+/* Header validation lives in its own function: clear diagnostics
+   matter more than brevity - a vague "it does not start" is the most
+   infuriating message of all. */
 static int check_header(const kapp_header_t *h, u32 filesize) {
     if (h->magic[0] != KAPP_MAGIC0 || h->magic[1] != KAPP_MAGIC1 ||
         h->magic[2] != KAPP_MAGIC2 || h->magic[3] != KAPP_MAGIC3) {
-        strncpy(last_error, "это не приложение KvantOS (нет подписи KAPP)", sizeof(last_error));
+        strncpy(last_error, T("not a KvantOS application (no KAPP signature)", "это не приложение KvantOS (нет подписи KAPP)"), sizeof(last_error));
         return -1;
     }
     if (h->version != KAPP_FORMAT_VERSION) {
         ksnprintf(last_error, sizeof(last_error),
-                  "формат файла версии %u, ядро понимает %u", h->version, KAPP_FORMAT_VERSION);
+                  T("file format version %u, the kernel speaks %u", "формат файла версии %u, ядро понимает %u"), h->version, KAPP_FORMAT_VERSION);
         return -1;
     }
     if (h->api_version != KV_API_VERSION) {
         ksnprintf(last_error, sizeof(last_error),
-                  "приложение собрано под ABI %u, в системе ABI %u", h->api_version, KV_API_VERSION);
+                  T("built against ABI %u, the system provides ABI %u", "приложение собрано под ABI %u, в системе ABI %u"), h->api_version, KV_API_VERSION);
         return -1;
     }
     if (h->load_base != KAPP_LOAD_BASE) {
-        strncpy(last_error, "неверный адрес загрузки в заголовке", sizeof(last_error));
+        strncpy(last_error, T("bad load address in the header", "неверный адрес загрузки в заголовке"), sizeof(last_error));
         return -1;
     }
     if (h->code_size == 0 || h->code_size > filesize - h->header_size) {
-        strncpy(last_error, "размер кода в заголовке не совпадает с файлом", sizeof(last_error));
+        strncpy(last_error, T("code size in the header does not match the file", "размер кода в заголовке не совпадает с файлом"), sizeof(last_error));
         return -1;
     }
     if (h->code_size + h->bss_size > KAPP_MAX_SIZE) {
-        strncpy(last_error, "приложение больше 2 МиБ", sizeof(last_error));
+        strncpy(last_error, T("application larger than 2 MiB", "приложение больше 2 МиБ"), sizeof(last_error));
         return -1;
     }
     if (h->entry < KAPP_LOAD_BASE || h->entry >= KAPP_LOAD_BASE + h->code_size) {
-        strncpy(last_error, "точка входа вне образа приложения", sizeof(last_error));
+        strncpy(last_error, T("entry point outside the application image", "точка входа вне образа приложения"), sizeof(last_error));
         return -1;
     }
     return 0;
@@ -340,34 +346,34 @@ void kapp_unload(void) {
     app_status[0] = 0;
 }
 
-/* Загружает приложение из файла KvFS. 0 - успех, иначе см. kapp_last_error() */
+/* Loads an application from a KvFS file. 0 on success, otherwise see kapp_last_error() */
 int kapp_load(const char *filename) {
     last_error[0] = 0;
     app_faulted = 0;
 
     if (loaded) kapp_unload();
 
-    /* Ищем приложение сначала на диске, затем в ramfs.
-       Второе позволяет запускать программы, вложенные в загрузочный
-       образ: на машине без размеченного диска это единственный
-       способ вообще что-то запустить. */
+    /* Look for the application on the disk first, then in ramfs.
+       The latter allows running programs embedded in the boot image:
+       on a machine with no formatted disk that is the only way to run
+       anything at all. */
     u32 fsize = kvfs_mounted() ? kvfs_size(filename) : 0;
     rfile_t *rf = fsize ? NULL : ramfs_find(filename);
 
     if (!fsize && !rf) {
-        ksnprintf(last_error, sizeof(last_error), "файл '%s' не найден", filename);
+        ksnprintf(last_error, sizeof(last_error), T("file '%s' not found", "файл '%s' не найден"), filename);
         return -1;
     }
     if (!fsize) fsize = rf->size;
 
     if (fsize < sizeof(kapp_header_t)) {
-        strncpy(last_error, "файл слишком мал для приложения", sizeof(last_error));
+        strncpy(last_error, T("file too small to be an application", "файл слишком мал для приложения"), sizeof(last_error));
         return -1;
     }
 
     u8 *tmp = (u8 *)kmalloc(fsize);
     if (!tmp) {
-        strncpy(last_error, "не хватает памяти для загрузки", sizeof(last_error));
+        strncpy(last_error, T("not enough memory to load it", "не хватает памяти для загрузки"), sizeof(last_error));
         return -1;
     }
 
@@ -380,7 +386,7 @@ int kapp_load(const char *filename) {
     }
     if (got < (int)sizeof(kapp_header_t)) {
         kfree(tmp);
-        strncpy(last_error, "ошибка чтения файла", sizeof(last_error));
+        strncpy(last_error, T("file read error", "ошибка чтения файла"), sizeof(last_error));
         return -1;
     }
 
@@ -388,13 +394,13 @@ int kapp_load(const char *filename) {
     memcpy(&hdr, tmp, sizeof(hdr));
     if (check_header(&hdr, (u32)got) < 0) { kfree(tmp); return -1; }
 
-    /* Разворачиваем образ по фиксированному адресу */
+    /* Unpack the image at the fixed address */
     u8 *dst = (u8 *)KAPP_LOAD_BASE;
     memcpy(dst, tmp + hdr.header_size, hdr.code_size);
     if (hdr.bss_size) memset(dst + hdr.code_size, 0, hdr.bss_size);
     kfree(tmp);
 
-    /* Сбрасываем кэш инструкций: мы только что записали код данными */
+    /* Flush the instruction cache: we have just written code as data */
     __asm__ volatile("" ::: "memory");
 
     strncpy(app_file, filename, sizeof(app_file));
@@ -403,7 +409,7 @@ int kapp_load(const char *filename) {
     app_title[sizeof(app_title) - 1] = 0;
     app_status[0] = 0;
 
-    /* Вызов точки входа под страховкой */
+    /* Call the entry point under the safety net */
     kapp_entry_t entry = (kapp_entry_t)hdr.entry;
     kv_app_t *result = NULL;
     int grc;
@@ -415,11 +421,11 @@ int kapp_load(const char *filename) {
     }
 
     if (app_faulted) {
-        ksnprintf(last_error, sizeof(last_error), "сбой при запуске: %s", fault_reason);
+        ksnprintf(last_error, sizeof(last_error), T("startup failure: %s", "сбой при запуске: %s"), fault_reason);
         return -1;
     }
     if (!result) {
-        strncpy(last_error, "kapp_main() вернула ноль", sizeof(last_error));
+        strncpy(last_error, T("kapp_main() returned null", "kapp_main() вернула ноль"), sizeof(last_error));
         return -1;
     }
 
@@ -433,29 +439,30 @@ int kapp_load(const char *filename) {
 }
 
 /* ============================================================
- *  Вызов обработчиков из оболочки
+ *  Calling the handlers from the shell
  *
- *  Каждый вход в приложение обрамляется установкой окна и флага
- *  in_app. Если внутри случится исключение, panic() увидит флаг,
- *  напишет об этом и выгрузит приложение вместо остановки системы.
+ *  Every entry into an application is framed by setting the window and
+ *  the in_app flag. Should an exception occur inside, panic() sees the
+ *  flag, reports it and unloads the application instead of halting the
+ *  system.
  * ============================================================ */
 
 static int enter(i32 x, i32 y, i32 w, i32 h) {
     if (!loaded || !app) return 0;
     if (app_faulted) { kapp_unload(); return 0; }
     cl_x = x; cl_y = y; cl_w = w; cl_h = h;
-    /* Ставим точку возврата: если приложение упадёт, обработчик
-       исключений вернёт управление сюда со значением 1. */
+    /* Set the return point: if the application crashes, the exception
+       handler brings control back here with a value of 1. */
     int rc;
     GUARD_SET(&guard_buf, rc);
-    if (rc != 0) return 0;        /* сюда возвращает guard_jump после сбоя */
+    if (rc != 0) return 0;        /* guard_jump returns here after a fault */
     in_app = 1;
     return 1;
 }
 static void leave(void) {
     in_app = 0;
     if (app_faulted) {
-        ksnprintf(last_error, sizeof(last_error), "приложение снято: %s", fault_reason);
+        ksnprintf(last_error, sizeof(last_error), T("application terminated: %s", "приложение снято: %s"), fault_reason);
         kapp_unload();
     }
 }

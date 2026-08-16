@@ -1,20 +1,19 @@
 /* ============================================================
- *  Заметки - пример работы с файлами и клавиатурой
- *  KAPP_NAME "Заметки"
+ *  Notes - a sample showing files and keyboard input
+ *  KAPP_NAME "Notes"
  *
- *  Показывает то, чего нет в примере «Часы»:
- *    - ввод текста с клавиатуры;
- *    - сохранение и чтение файла на диске;
- *    - собственные кнопки и обработка щелчков.
+ *  Demonstrates what the Clock sample does not:
+ *    - typing text from the keyboard;
+ *    - saving and reading a file on disk;
+ *    - custom buttons and click handling.
  *
- *  Заметка хранится на диске в файле notes.txt, поэтому
- *  переживает перезагрузку.
+ *  The note is kept on disk in notes.txt, so it survives a reboot.
  * ============================================================ */
 #include "kvapp.h"
 
 #define FILE_NAME "notes.txt"
 #define MAX_LEN   1024
-#define LINE_MAX  46           /* символов в строке при ширине окна 400 */
+#define LINE_MAX  46           /* characters per line for a window width of 400 */
 
 static const kv_api_t *sys;
 
@@ -40,11 +39,11 @@ static void load(void) {
     if (got > 0) {
         len = (kv_u32)got;
         text[len] = 0;
-        sys->status("Заметка загружена с диска");
+        sys->status(KV_T(sys, "Note loaded from disk", "Заметка загружена с диска"));
     } else {
         len = 0;
         text[0] = 0;
-        sys->status("Новая заметка. Пишите и нажмите Ctrl+S");
+        sys->status(KV_T(sys, "New note. Type and press Ctrl+S", "Новая заметка. Пишите и нажмите Ctrl+S"));
     }
     dirty = 0;
 }
@@ -53,15 +52,15 @@ static void save(void) {
     kv_i32 rc = sys->file_write(FILE_NAME, text, len);
     if (rc == 0) {
         dirty = 0;
-        sys->status("Сохранено на диск");
+        sys->status(KV_T(sys, "Saved to disk", "Сохранено на диск"));
         sys->beep(1200, 40);
     } else {
-        sys->status("Не удалось сохранить: нет диска или места");
+        sys->status(KV_T(sys, "Could not save: no disk or no space", "Не удалось сохранить: нет диска или места"));
     }
 }
 
-/* Кнопки: координаты считаем один раз, чтобы рисование и щелчки
-   пользовались одними и теми же числами. */
+/* Buttons: the coordinates are computed once so that drawing and
+   clicking use the very same numbers. */
 static void button_box(int index, kv_i32 *x, kv_i32 *y, kv_i32 *w, kv_i32 *h) {
     *w = 96; *h = 26;
     *x = 12 + index * (*w + 10);
@@ -80,16 +79,16 @@ static void on_draw(void) {
     kv_i32 w = sys->width(), h = sys->height();
     sys->clear(col_bg);
 
-    draw_button(0, "Сохранить", dirty ? col_btn : col_dim);
-    draw_button(1, "Загрузить", col_btn);
-    draw_button(2, "Очистить",  col_accent);
+    draw_button(0, KV_T(sys, "Save", "Сохранить"), dirty ? col_btn : col_dim);
+    draw_button(1, KV_T(sys, "Load", "Загрузить"), col_btn);
+    draw_button(2, KV_T(sys, "Clear", "Очистить"),  col_accent);
 
-    /* лист с текстом */
+    /* a sheet with text */
     kv_i32 py = 46;
     sys->fill(10, py, w - 20, h - py - 10, col_paper);
     sys->rect(10, py, w - 20, h - py - 10, sys->rgb(196, 204, 218));
 
-    /* Перенос по ширине: считаем сами, ядро этого не делает */
+    /* Word wrapping is done here: the kernel does not do it */
     kv_i32 tx = 18, ty = py + 8;
     kv_u32 col = 0;
     for (kv_u32 i = 0; i < len; i++) {
@@ -108,15 +107,15 @@ static void on_draw(void) {
         col++;
     }
 
-    /* мигающий курсор: полсекунды виден, полсекунды нет */
+    /* a blinking cursor: half a second on, half a second off */
     kv_u32 hz = sys->hz();
     if (hz && ((sys->ticks() - blink_mark) / (hz / 2)) % 2 == 0)
         if (ty + KV_CHAR_H <= h - 14)
             sys->fill(tx, ty, 2, KV_CHAR_H, col_text);
 
-    /* счётчик символов */
+    /* character counter */
     char info[48];
-    sys->format(info, sizeof(info), "%u из %u символов%s",
+    sys->format(info, sizeof(info), KV_T(sys, "%u of %u characters%s", "%u из %u символов%s"),
                 len, (kv_u32)MAX_LEN, dirty ? "  *" : "");
     sys->text(12, h - 8 - KV_CHAR_H + 2, info, col_dim, 0xFFFFFFFF);
 }
@@ -133,7 +132,7 @@ static void on_key(kv_i32 key) {
         if (len < MAX_LEN) { text[len++] = '\n'; text[len] = 0; dirty = 1; }
         return;
     }
-    /* Обычные символы. Управляющие коды и спецклавиши пропускаем. */
+    /* Ordinary characters. Control codes and special keys are skipped. */
     if (key >= 32 && key < 256 && len < MAX_LEN) {
         text[len++] = (char)key;
         text[len] = 0;
@@ -149,7 +148,7 @@ static void on_click(kv_i32 mx, kv_i32 my, kv_i32 button) {
         if (mx >= x && mx < x + w && my >= y && my < y + h) {
             if (i == 0) save();
             else if (i == 1) load();
-            else { len = 0; text[0] = 0; dirty = 1; sys->status("Очищено"); }
+            else { len = 0; text[0] = 0; dirty = 1; sys->status(KV_T(sys, "Cleared", "Очищено")); }
             return;
         }
     }
@@ -158,11 +157,11 @@ static void on_click(kv_i32 mx, kv_i32 my, kv_i32 button) {
 static void on_open(void) {
     blink_mark = sys->ticks();
     load();
-    sys->log("Заметки: запущены");
+    sys->log(KV_T(sys, "Notes: started", "Заметки: запущены"));
 }
 
 static kv_app_t me = {
-    .title  = "Заметки",
+    .title  = "Notes",   /* localised in kapp_main */
     .width  = 400,
     .height = 300,
     .on_open  = on_open,
@@ -173,6 +172,9 @@ static kv_app_t me = {
 
 kv_app_t *kapp_main(const kv_api_t *api) {
     sys = api;
+    /* The window title cannot be set in a static initialiser:
+       the language is only known at run time. */
+    me.title = KV_T(sys, "Notes", "Заметки");
     recolor();
     return &me;
 }

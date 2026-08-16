@@ -1,4 +1,4 @@
-/* KvantOS: компоновка ядра по физическому адресу 1 MiB */
+/* KvantOS: the kernel is linked at physical address 1 MiB */
 ENTRY(_start)
 
 SECTIONS

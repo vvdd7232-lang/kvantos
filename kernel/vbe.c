@@ -1,14 +1,14 @@
 /* ============================================================
- *  KvantOS - управление видеорежимом без BIOS.
+ *  KvantOS - video mode control without the BIOS.
  *
- *  Из защищённого режима вызвать int 0x10 нельзя, поэтому смена
- *  разрешения делается через регистры видеокарты напрямую:
+ *  int 0x10 cannot be called from protected mode, so the resolution
+ *  is changed through the adapter registers directly:
  *
- *   1) Bochs/QEMU/VirtualBox VBE Extensions (BGA) - порты 0x1CE/0x1CF.
- *      Позволяют задать произвольные ширину, высоту и глубину цвета.
- *   2) VMware SVGA II - регистровый интерфейс через BAR0.
- *   3) Частота кадров задаётся программированием CRTC-таймингов VGA
- *      (только для режимов, где адаптер отдаёт управление таймингами).
+ *   1) Bochs/QEMU/VirtualBox VBE Extensions (BGA) - ports 0x1CE/0x1CF.
+ *      They allow arbitrary width, height and colour depth.
+ *   2) VMware SVGA II - a register interface through BAR0.
+ *   3) The frame rate is set by programming the VGA CRTC timings
+ *      (only for modes where the adapter hands over timing control).
  * ============================================================ */
 #include "kernel.h"
 
@@ -35,7 +35,7 @@
 #define VBE_DISPI_ID0           0xB0C0
 #define VBE_DISPI_ID5           0xB0C5
 
-/* ---- регистры VGA ---- */
+/* ---- VGA registers ---- */
 #define CRTC_INDEX 0x3D4
 #define CRTC_DATA  0x3D5
 #define VGA_MISC_W 0x3C2
@@ -56,13 +56,13 @@
 
 static int   backend = GPU_NONE;
 static u16   bga_version = 0;
-static u16   svga_io = 0;         /* базовый порт ввода-вывода VMware */
+static u16   svga_io = 0;         /* the VMware base I/O port */
 static u32   svga_fb = 0;
 
-/* текущий режим */
+/* current mode */
 static vmode_t cur;
 
-static void vram_probe(void);      /* определяется ниже */
+static void vram_probe(void);      /* determined below */
 
 /* ---------- BGA ---------- */
 static void bga_write(u16 index, u16 value) {
@@ -107,11 +107,11 @@ static int svga_detect(pci_dev_t *gpu) {
     return 1;
 }
 
-/* ---------- программирование текстового режима VGA 80x25 ----------
-   Отключения BGA недостаточно: QEMU сохраняет регистры CRTC от
-   графического режима, и развёртка остаётся 1024x768. Поэтому
-   загружаем полный набор регистров стандартного режима 0x03
-   (720x400, 9x16 знакоместо) вручную. */
+/* ---------- programming VGA text mode 80x25 ----------
+   Switching BGA off is not enough: QEMU keeps the CRTC registers of
+   the graphics mode and the scan-out stays at 1024x768. So the full
+   register set of the standard mode 0x03 (720x400, a 9x16 cell) is
+   loaded by hand. */
 
 #define VGA_AC_INDEX  0x3C0
 #define VGA_AC_WRITE  0x3C0
@@ -149,10 +149,10 @@ int vbe_force_text(void) {
 
     u32 fl = irq_save();
 
-    /* тактовая частота и полярность синхроимпульсов режима 0x03 */
+    /* the clock rate and sync polarity of mode 0x03 */
     outb(VGA_MISC_W, 0x67);
 
-    /* Sequencer: сброс, загрузка, снятие сброса */
+    /* Sequencer: reset, load, release the reset */
     outb(VGA_SEQ_INDEX, 0x00); outb(VGA_SEQ_DATA, 0x01);
     for (u8 i = 1; i < 5; i++) {
         outb(VGA_SEQ_INDEX, i);
@@ -160,7 +160,7 @@ int vbe_force_text(void) {
     }
     outb(VGA_SEQ_INDEX, 0x00); outb(VGA_SEQ_DATA, 0x03);
 
-    /* CRTC: снять защиту регистров 0-7, затем загрузить все 25 */
+    /* CRTC: unprotect registers 0-7, then load all 25 */
     outb(CRTC_INDEX, 0x11);
     outb(CRTC_DATA, (u8)(inb(CRTC_DATA) & 0x7F));
     for (u8 i = 0; i < 25; i++) {
@@ -174,7 +174,7 @@ int vbe_force_text(void) {
         outb(VGA_GC_DATA, mode3_gc[i]);
     }
 
-    /* Attribute Controller: сброс триггера чтением 0x3DA */
+    /* Attribute Controller: reset the flip-flop by reading 0x3DA */
     (void)inb(VGA_INSTAT);
     for (u8 i = 0; i < 21; i++) {
         (void)inb(VGA_INSTAT);
@@ -182,17 +182,17 @@ int vbe_force_text(void) {
         outb(VGA_AC_WRITE, mode3_ac[i]);
     }
     (void)inb(VGA_INSTAT);
-    outb(VGA_AC_INDEX, 0x20);      /* включить вывод на экран */
+    outb(VGA_AC_INDEX, 0x20);      /* enable output to the screen */
 
     irq_restore(fl);
     return 1;
 }
 
-/* ---------- инициализация ---------- */
+/* ---------- initialisation ---------- */
 void vbe_init(void) {
     pci_dev_t *gpu = pci_gpu();
 
-    vram_probe();      /* один раз: запись в BAR недопустима на горячем пути */
+    vram_probe();      /* once only: writing to a BAR is unacceptable on the hot path */
 
     cur.width  = fb_width();
     cur.height = fb_height();
@@ -215,10 +215,10 @@ u16  vbe_bga_version(void) { return bga_version; }
 
 const char *vbe_backend_name(void) {
     switch (backend) {
-        case GPU_BGA:    return "Bochs VBE Extensions (порты 0x1CE/0x1CF)";
-        case GPU_VMWARE: return "VMware SVGA II (регистры BAR0)";
-        case GPU_FIXED:  return "фиксированный режим от загрузчика";
-        default:         return "не обнаружен";
+        case GPU_BGA:    return T("Bochs VBE Extensions (ports 0x1CE/0x1CF)", "Bochs VBE Extensions (порты 0x1CE/0x1CF)");
+        case GPU_VMWARE: return T("VMware SVGA II (BAR0 registers)", "VMware SVGA II (регистры BAR0)");
+        case GPU_FIXED:  return T("fixed mode from the bootloader", "фиксированный режим от загрузчика");
+        default:         return T("not detected", "не обнаружен");
     }
 }
 
@@ -226,14 +226,14 @@ int vbe_can_modeset(void) { return backend == GPU_BGA || backend == GPU_VMWARE; 
 
 void vbe_current(vmode_t *m) { *m = cur; }
 
-/* ---------- список поддерживаемых режимов ---------- */
+/* ---------- list of supported modes ---------- */
 static const vmode_t mode_table[] = {
     {  640,  480, 32, 0, 0, 60 },
     {  800,  600, 32, 0, 0, 60 },
     { 1024,  768, 32, 0, 0, 60 },
     { 1152,  864, 32, 0, 0, 60 },
     { 1280,  720, 32, 0, 0, 60 },
-    { 1366,  768, 32, 0, 0, 60 },   /* родное для ноутбуков 14" HD */
+    { 1366,  768, 32, 0, 0, 60 },   /* native for 14" HD laptops */
     { 1280, 1024, 32, 0, 0, 60 },
     { 1440,  900, 32, 0, 0, 60 },
     { 1600,  900, 32, 0, 0, 60 },
@@ -252,19 +252,19 @@ int vbe_mode_get(u32 i, vmode_t *m) {
     return 1;
 }
 
-/* Проверить, влезает ли режим в видеопамять */
+/* Check whether a mode fits into video memory */
 int vbe_mode_fits(u32 w, u32 h, u32 bpp) {
     u32 need = w * h * (bpp >> 3);
     u32 have = vbe_vram_bytes();
     return have == 0 || need <= have;
 }
 
-/* Объём видеопамяти.
-   ВАЖНО: определение размера BAR требует записи 0xFFFFFFFF в регистр,
-   что на мгновение снимает декодирование памяти устройством. Делать это
-   на каждом кадре (список режимов в GUI перерисовывается 30 раз в секунду)
-   нельзя - на реальном железе это приводит к сбоям вывода. Поэтому
-   значение определяется один раз при инициализации и кэшируется. */
+/* The amount of video memory.
+   IMPORTANT: determining the BAR size requires writing 0xFFFFFFFF into
+   the register, which momentarily removes the device's memory
+   decoding. Doing that every frame (the GUI mode list is redrawn 30
+   times per second) is not allowed - on real hardware it corrupts the
+   output. The value is therefore probed once at init and cached. */
 static u32 vram_cached = 0;
 
 static void vram_probe(void) {
@@ -279,7 +279,7 @@ static void vram_probe(void) {
 
 u32 vbe_vram_bytes(void) { return vram_cached; }
 
-/* ---------- собственно смена режима ---------- */
+/* ---------- the mode switch itself ---------- */
 int vbe_set_mode(u32 w, u32 h, u32 bpp) {
     if (!vbe_can_modeset()) return VBE_ERR_UNSUPPORTED;
     if (w < 320 || h < 200 || w > 1920 || h > 1200) return VBE_ERR_BADPARAM;
@@ -299,14 +299,14 @@ int vbe_set_mode(u32 w, u32 h, u32 bpp) {
         bga_write(VBE_DISPI_INDEX_ENABLE,
                   VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
 
-        /* проверяем, что адаптер принял запрошенное */
+        /* verify the adapter accepted what was asked */
         if (bga_read(VBE_DISPI_INDEX_XRES) != (u16)w ||
             bga_read(VBE_DISPI_INDEX_YRES) != (u16)h)
             return VBE_ERR_REJECTED;
 
         pci_dev_t *gpu = pci_gpu();
         if (gpu) { int i = -1; phys = pci_bar_mem(gpu, &i); }
-        if (!phys) phys = fb_base();          /* оставляем прежний адрес */
+        if (!phys) phys = fb_base();          /* keep the previous address */
         pitch = w * (bpp >> 3);
 
     } else {  /* VMware SVGA II */
@@ -322,7 +322,7 @@ int vbe_set_mode(u32 w, u32 h, u32 bpp) {
         if (!phys) phys = svga_fb;
     }
 
-    /* перепривязать драйвер фреймбуфера к новому режиму */
+    /* rebind the framebuffer driver to the new mode */
     if (fb_remap(phys, w, h, pitch, (u8)bpp) < 0) return VBE_ERR_MAP;
 
     cur.width = w; cur.height = h; cur.bpp = bpp;
@@ -332,21 +332,21 @@ int vbe_set_mode(u32 w, u32 h, u32 bpp) {
 
 const char *vbe_error_text(int code) {
     switch (code) {
-        case VBE_OK:              return "успешно";
-        case VBE_ERR_UNSUPPORTED: return "видеокарта не поддерживает смену режима из ОС";
-        case VBE_ERR_BADPARAM:    return "недопустимые параметры режима";
-        case VBE_ERR_NOVRAM:      return "не хватает видеопамяти для такого режима";
-        case VBE_ERR_REJECTED:    return "видеокарта отклонила запрошенный режим";
-        case VBE_ERR_MAP:         return "не удалось отобразить видеопамять";
-        default:                  return "неизвестная ошибка";
+        case VBE_OK:              return T("success", "успешно");
+        case VBE_ERR_UNSUPPORTED: return T("the adapter cannot change mode from the OS", "видеокарта не поддерживает смену режима из ОС");
+        case VBE_ERR_BADPARAM:    return T("invalid mode parameters", "недопустимые параметры режима");
+        case VBE_ERR_NOVRAM:      return T("not enough video memory for this mode", "не хватает видеопамяти для такого режима");
+        case VBE_ERR_REJECTED:    return T("the adapter rejected the requested mode", "видеокарта отклонила запрошенный режим");
+        case VBE_ERR_MAP:         return T("could not map the video memory", "не удалось отобразить видеопамять");
+        default:                  return T("unknown error", "неизвестная ошибка");
     }
 }
 
 /* ============================================================
- *  Частота обновления экрана.
- *  Перепрограммируем тайминги CRTC: частота = пиксельная частота /
- *  (полная ширина x полная высота). Меняя размеры гасящих интервалов,
- *  сдвигаем частоту кадров. Работает на адаптерах с классическим CRTC.
+ *  Screen refresh rate.
+ *  We reprogram the CRTC timings: rate = pixel clock / (total width x
+ *  total height). Changing the size of the blanking intervals shifts
+ *  the frame rate. Works on adapters with a classic CRTC.
  * ============================================================ */
 
 static u32 refresh_hz = 60;
@@ -354,13 +354,13 @@ static u32 refresh_hz = 60;
 static void crtc_unlock(void) {
     outb(CRTC_INDEX, 0x11);
     u8 v = inb(CRTC_DATA);
-    outb(CRTC_DATA, (u8)(v & 0x7F));      /* снять защиту регистров 0-7 */
+    outb(CRTC_DATA, (u8)(v & 0x7F));      /* unprotect registers 0-7 */
 }
 
-/* Оценить текущую частоту по регистрам CRTC и выбранной пиксельной частоте */
+/* Estimate the current rate from the CRTC registers and the chosen pixel clock */
 u32 vbe_measure_hz(void) {
-    /* В режиме линейного буфера регистры CRTC не описывают реальную
-       развёртку - тайминги формирует сама видеокарта или хост. */
+    /* In linear framebuffer mode the CRTC registers do not describe the
+       real scan-out - the timings come from the adapter or the host. */
     if (fb_active() && (backend == GPU_BGA || backend == GPU_VMWARE)) return 0;
 
     u8 misc = inb(VGA_MISC_R);
@@ -377,22 +377,22 @@ u32 vbe_measure_hz(void) {
     return pixclk / denom;
 }
 
-/* Изменить частоту кадров.
+/* Change the frame rate.
 
-   Менять один только Vertical Total нельзя: импульс кадровой синхронизации
-   останется на старом месте, сигнал станет неконсистентным и монитор
-   (или эмулятор) погасит картинку. Поэтому пересчитываем весь блок
-   вертикальных таймингов: Total -> Sync Start -> Sync End, сохраняя
-   видимую часть (Vertical Display End) неизменной. */
+   Changing Vertical Total alone is not allowed: the vertical sync pulse
+   would stay in its old place, the signal would become inconsistent and
+   the monitor (or emulator) would blank the picture. So the whole block
+   of vertical timings is recomputed: Total -> Sync Start -> Sync End,
+   keeping the visible part (Vertical Display End) unchanged. */
 int vbe_set_refresh(u32 hz) {
     if (hz < 50 || hz > 120) return VBE_ERR_BADPARAM;
 
-    /* На эмулируемых адаптерах в режиме LFB тайминги задаёт хост:
-       CRTC там декоративный, поэтому честно сообщаем об этом. */
+    /* On emulated adapters in LFB mode the host dictates the timings:
+       the CRTC there is decorative, so we say so honestly. */
     if (backend == GPU_BGA || backend == GPU_VMWARE) {
         if (fb_active()) {
             refresh_hz = hz;
-            return VBE_WARN_VIRTUAL;   /* значение принято, но задаёт его хост */
+            return VBE_WARN_VIRTUAL;   /* the value is accepted, but the host decides */
         }
     }
 
@@ -403,7 +403,7 @@ int vbe_set_refresh(u32 hz) {
     u32 htotal = (u32)inb(CRTC_DATA) + 5;
     if (!htotal) return VBE_ERR_UNSUPPORTED;
 
-    /* видимая высота кадра в строках развёртки */
+    /* visible frame height in scan lines */
     outb(CRTC_INDEX, 0x12); u32 vde = inb(CRTC_DATA);
     outb(CRTC_INDEX, 0x07); u8 ovf = inb(CRTC_DATA);
     vde |= ((u32)(ovf & 0x02) << 7) | ((u32)(ovf & 0x40) << 3);
@@ -411,19 +411,19 @@ int vbe_set_refresh(u32 hz) {
 
     u32 vtotal = pixclk / (htotal * 8u * hz);
 
-    /* кадр обязан вмещать видимую часть плюс интервал гашения */
+    /* a frame must hold the visible part plus the blanking interval */
     u32 vmin = vde + 3 + 2 + 8;          /* front porch + sync + back porch */
     if (vtotal < vmin) return VBE_ERR_BADPARAM;
     if (vtotal > 1023) return VBE_ERR_BADPARAM;
 
-    u32 vsync_start = vde + 3;                    /* передний порог */
-    u32 vsync_end   = vsync_start + 2;            /* ширина импульса - 2 строки */
+    u32 vsync_start = vde + 3;                    /* front porch */
+    u32 vsync_end   = vsync_start + 2;            /* pulse width - 2 lines */
     if (vsync_end >= vtotal) return VBE_ERR_BADPARAM;
 
     u32 fl = irq_save();
     crtc_unlock();
 
-    /* Vertical Total (0x06) + старшие биты в Overflow (0x07) */
+    /* Vertical Total (0x06) + the high bits in Overflow (0x07) */
     u32 vt = vtotal - 2;
     outb(CRTC_INDEX, 0x06);
     outb(CRTC_DATA, (u8)(vt & 0xFF));
@@ -431,7 +431,7 @@ int vbe_set_refresh(u32 hz) {
     outb(CRTC_INDEX, 0x07);
     u8 o = inb(CRTC_DATA);
     o = (u8)((o & ~0x21) | ((vt >> 8) & 0x01) | (((vt >> 9) & 0x01) << 5));
-    /* старшие биты Vertical Retrace Start */
+    /* high bits of Vertical Retrace Start */
     o = (u8)((o & ~0x84) | (((vsync_start >> 8) & 0x01) << 2)
                           | (((vsync_start >> 9) & 0x01) << 7));
     outb(CRTC_DATA, o);
@@ -440,7 +440,7 @@ int vbe_set_refresh(u32 hz) {
     outb(CRTC_INDEX, 0x10);
     outb(CRTC_DATA, (u8)(vsync_start & 0xFF));
 
-    /* Vertical Retrace End (0x11): младшие 4 бита, старший бит - защита 0-7 */
+    /* Vertical Retrace End (0x11): low 4 bits, the top bit protects 0-7 */
     outb(CRTC_INDEX, 0x11);
     u8 vre = inb(CRTC_DATA);
     vre = (u8)((vre & 0xF0) | (vsync_end & 0x0F));
@@ -455,15 +455,15 @@ int vbe_set_refresh(u32 hz) {
 
 u32 vbe_get_refresh(void) { return refresh_hz; }
 
-/* Замер реальной частоты по сигналу вертикального гашения (порт 0x3DA).
-   Считаем фронты за 500 мс по таймеру PIT.
+/* Measure the real rate from the vertical blanking signal (port
+   0x3DA). Edges are counted over 500 ms of the PIT timer.
 
-   Важно: в режиме линейного буфера эмуляторы (QEMU/Bochs) часто не
-   моделируют бит 3 регистра 0x3DA - он либо всегда нулевой, либо
-   переключается на каждом чтении. Такой результат бессмысленно
-   выдавать за частоту кадров, поэтому проверяем правдоподобие. */
+   Important: in linear framebuffer mode emulators (QEMU/Bochs) often
+   do not model bit 3 of register 0x3DA - it is either always zero or
+   toggles on every read. Passing such a result off as a frame rate
+   would be meaningless, so the plausibility is checked. */
 u32 vbe_count_vsync(void) {
-    u32 target = (u32)timer_ticks() + timer_hz() / 2;      /* полсекунды */
+    u32 target = (u32)timer_ticks() + timer_hz() / 2;      /* half a second */
     u32 edges = 0, samples = 0, high = 0;
     int prev = (inb(0x3DA) & 0x08) ? 1 : 0;
 
@@ -478,9 +478,9 @@ u32 vbe_count_vsync(void) {
 
     u32 hz = edges * 2;
 
-    /* Сигнал всегда в одном состоянии - развёртка не эмулируется */
+    /* The signal never changes state - the scan-out is not emulated */
     if (high == 0 || high == samples) return 0;
-    /* Больше 300 Гц физически невозможно: значит, бит шумит на каждом чтении */
+    /* Above 300 Hz is physically impossible: the bit is just noisy on every read */
     if (hz > 300) return 0;
     return hz;
 }

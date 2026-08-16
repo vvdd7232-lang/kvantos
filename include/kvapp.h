@@ -1,65 +1,66 @@
 /* ============================================================
- *  KvantOS - интерфейс приложений (KvApp ABI), версия 1
+ *  KvantOS - application interface (KvApp ABI), version 2
  *
- *  Этот файл - единственный договор между ядром и программой.
- *  Его включает и ядро, и любое приложение, поэтому здесь нет
- *  ничего, кроме определений: ни кода, ни зависимостей от libc.
+ *  This file is the only contract between the kernel and a program.
+ *  Both the kernel and every application include it, so it holds
+ *  nothing but definitions: no code, no dependency on libc.
  *
- *  Приложение - это плоский двоичный файл .kapp, который ядро
- *  загружает по фиксированному адресу и вызывает одну-единственную
- *  функцию kapp_main(). Она возвращает описание приложения с
- *  набором обработчиков событий - дальше всё делает оболочка.
+ *  An application is a flat .kapp binary that the kernel loads at a
+ *  fixed address before calling one single function, kapp_main().
+ *  That function returns a description of the application together
+ *  with a set of event handlers - the shell does the rest.
  *
- *  Программа работает в кольце ядра (ring 0) и обращается к системе
- *  через таблицу функций kv_api_t, указатель на которую получает
- *  при запуске. Прямых вызовов функций ядра по имени нет: так
- *  приложение не зависит от адресов внутри конкретной сборки ядра.
+ *  The program runs in the kernel ring (ring 0) and reaches the
+ *  system through the kv_api_t function table, a pointer to which it
+ *  receives at start-up. Kernel functions are never called by name:
+ *  this way an application does not depend on the addresses inside
+ *  one particular kernel build.
  * ============================================================ */
 #ifndef _KVANT_KVAPP_H
 #define _KVANT_KVAPP_H
 
-/* Собственные типы: заголовок обязан собираться и без stdint.h */
+/* Private types: this header must compile without stdint.h too */
 typedef unsigned char      kv_u8;
 typedef unsigned short     kv_u16;
 typedef unsigned int       kv_u32;
 typedef signed   int       kv_i32;
 
-/* Версия интерфейса. Ядро откажется запускать приложение,
-   собранное для несовместимой версии, и honestly скажет об этом. */
-#define KV_API_VERSION   1
+/* Interface version. The kernel refuses to start an application
+   built for an incompatible version and says so explicitly. */
+#define KV_API_VERSION   2
 
-/* Формат файла .kapp */
+/* The .kapp file format */
 #define KAPP_MAGIC0 'K'
 #define KAPP_MAGIC1 'A'
 #define KAPP_MAGIC2 'P'
 #define KAPP_MAGIC3 'P'
 #define KAPP_FORMAT_VERSION 1
 
-/* Адрес, по которому ядро разворачивает приложение.
-   Область 14-16 МиБ зарезервирована в диспетчере памяти. */
+/* The address at which the kernel unpacks an application.
+   The 14-16 MiB region is reserved in the memory manager. */
 #define KAPP_LOAD_BASE   0x00E00000u
-#define KAPP_MAX_SIZE    0x00200000u      /* 2 МиБ на код, данные и bss */
+#define KAPP_MAX_SIZE    0x00200000u      /* 2 MiB for code, data and bss */
 
-/* Флаги в заголовке */
-#define KAPP_FLAG_WINDOW  0x0001u         /* оконное приложение */
+/* Header flags */
+#define KAPP_FLAG_WINDOW  0x0001u         /* windowed application */
 
-/* Заголовок файла .kapp - ровно 64 байта, дальше идёт образ памяти */
+/* The .kapp header is exactly 64 bytes, the memory image follows */
 typedef struct {
     char   magic[4];        /* 'K','A','P','P'                        */
-    kv_u16 version;         /* версия формата файла                   */
-    kv_u16 header_size;     /* размер этого заголовка (64)            */
-    kv_u32 api_version;     /* версия ABI, под которую собрано        */
+    kv_u16 version;         /* file format version                    */
+    kv_u16 header_size;     /* size of this header (64)               */
+    kv_u32 api_version;     /* ABI version it was built against       */
     kv_u32 flags;           /* KAPP_FLAG_*                            */
-    kv_u32 load_base;       /* адрес загрузки, должен быть KAPP_LOAD_BASE */
-    kv_u32 entry;           /* абсолютный адрес функции kapp_main     */
-    kv_u32 code_size;       /* сколько байт читать из файла           */
-    kv_u32 bss_size;        /* сколько байт обнулить следом           */
-    char   name[32];        /* название для рабочего стола            */
+    kv_u32 load_base;       /* load address, must be KAPP_LOAD_BASE   */
+    kv_u32 entry;           /* absolute address of kapp_main          */
+    kv_u32 code_size;       /* how many bytes to read from the file   */
+    kv_u32 bss_size;        /* how many bytes to zero afterwards      */
+    char   name[32];        /* name shown on the desktop              */
 } kapp_header_t;
 
-/* ---------- события клавиатуры ----------
-   Обычные символы приходят кодом ASCII/CP866. Специальные клавиши -
-   значениями выше 255, они совпадают с внутренними кодами ядра. */
+/* ---------- keyboard events ----------
+   Ordinary characters arrive as ASCII/CP866 codes. Special keys use
+   values above 255 that match the kernel's internal codes. */
 #define KV_KEY_UP     0x100
 #define KV_KEY_DOWN   0x101
 #define KV_KEY_LEFT   0x102
@@ -69,94 +70,103 @@ typedef struct {
 #define KV_KEY_BKSP   8
 #define KV_KEY_TAB    9
 
-/* Размер знакоместа встроенного шрифта - нужен для вёрстки */
+/* Cell size of the built-in font - needed for layout */
 #define KV_CHAR_W 8
 #define KV_CHAR_H 16
 
 /* ============================================================
- *  Таблица системных функций
+ *  System function table
  *
- *  Указатель на неё приложение получает в kapp_main() и обязано
- *  сохранить. Все координаты рисования отсчитываются от левого
- *  верхнего угла клиентской области окна; выход за её границы
- *  обрезается ядром, испортить чужое окно невозможно.
+ *  The application receives a pointer to it in kapp_main() and must
+ *  keep it. All drawing coordinates are measured from the top left
+ *  corner of the window client area; anything outside is clipped by
+ *  the kernel, so corrupting another window is impossible.
  * ============================================================ */
 typedef struct kv_api {
-    kv_u32 api_version;          /* совпадает с KV_API_VERSION */
+    kv_u32 api_version;          /* matches KV_API_VERSION */
 
-    /* ---- размеры холста ---- */
-    kv_i32 (*width)(void);       /* ширина клиентской области, пикселей */
-    kv_i32 (*height)(void);      /* высота клиентской области           */
+    /* ---- canvas size ---- */
+    kv_i32 (*width)(void);       /* client area width, pixels  */
+    kv_i32 (*height)(void);      /* client area height         */
 
-    /* ---- рисование ---- */
+    /* ---- drawing ---- */
     kv_u32 (*rgb)(kv_u8 r, kv_u8 g, kv_u8 b);
     void   (*clear)(kv_u32 color);
     void   (*pixel)(kv_i32 x, kv_i32 y, kv_u32 color);
     void   (*fill)(kv_i32 x, kv_i32 y, kv_i32 w, kv_i32 h, kv_u32 color);
     void   (*rect)(kv_i32 x, kv_i32 y, kv_i32 w, kv_i32 h, kv_u32 color);
     void   (*line)(kv_i32 x0, kv_i32 y0, kv_i32 x1, kv_i32 y1, kv_u32 color);
-    /* Текст в кодировке UTF-8: кириллица допустима. bg = 0xFFFFFFFF - прозрачный фон */
+    /* Text is UTF-8: Cyrillic is fine. bg = 0xFFFFFFFF means a transparent background */
     void   (*text)(kv_i32 x, kv_i32 y, const char *s, kv_u32 fg, kv_u32 bg);
-    kv_i32 (*text_width)(const char *s);   /* ширина строки в пикселях */
+    kv_i32 (*text_width)(const char *s);   /* string width in pixels */
 
-    /* ---- строка состояния окна ---- */
+    /* ---- window status line ---- */
     void   (*status)(const char *s);
 
-    /* ---- память ---- */
+    /* ---- memory ---- */
     void  *(*alloc)(kv_u32 size);
     void   (*release)(void *p);
 
-    /* ---- время и звук ---- */
-    kv_u32 (*ticks)(void);       /* тиков системного таймера с загрузки */
-    kv_u32 (*hz)(void);          /* частота таймера, тиков в секунду    */
-    kv_u32 (*seconds)(void);     /* секунд с загрузки                   */
-    void   (*clock)(kv_i32 *h, kv_i32 *m, kv_i32 *s);   /* часы реального времени */
+    /* ---- time and sound ---- */
+    kv_u32 (*ticks)(void);       /* system timer ticks since boot       */
+    kv_u32 (*hz)(void);          /* timer frequency, ticks per second   */
+    kv_u32 (*seconds)(void);     /* seconds since boot                  */
+    void   (*clock)(kv_i32 *h, kv_i32 *m, kv_i32 *s);   /* real-time clock */
     void   (*beep)(kv_u32 freq, kv_u32 ms);
 
-    /* ---- файлы на диске (KvFS) ----
-       Возвращают число байт либо отрицательный код ошибки. */
+    /* ---- files on the disk (KvFS) ----
+       Return a byte count or a negative error code. */
     kv_i32 (*file_read)(const char *name, void *buf, kv_u32 max);
     kv_i32 (*file_write)(const char *name, const void *buf, kv_u32 size);
     kv_i32 (*file_delete)(const char *name);
     kv_i32 (*file_list)(kv_i32 index, char *name40, kv_u32 *size);
     kv_i32 (*file_exists)(const char *name);
 
-    /* ---- строки и память: у приложения нет libc ---- */
+    /* ---- strings and memory: an application has no libc ---- */
     void  *(*mem_set)(void *d, int c, kv_u32 n);
     void  *(*mem_copy)(void *d, const void *s, kv_u32 n);
     kv_u32 (*str_len)(const char *s);
     kv_i32 (*str_cmp)(const char *a, const char *b);
     void   (*str_copy)(char *d, const char *s, kv_u32 max);
-    /* Форматирование в буфер: поддерживает %d %u %x %s %c %% */
+    /* Formatting into a buffer: supports %d %u %x %s %c %% */
     void   (*format)(char *buf, kv_u32 size, const char *fmt, ...);
 
-    /* ---- прочее ---- */
-    kv_u32 (*random)(void);      /* псевдослучайное число */
-    void   (*log)(const char *s);/* строка в системный журнал (терминал) */
+    /* ---- miscellaneous ---- */
+    kv_u32 (*random)(void);      /* pseudo-random number */
+    void   (*log)(const char *s);/* a line into the system log (terminal) */
+
+    /* Interface language: 0 - English, 1 - Russian. An application can
+       label its buttons in the same language as the system.
+       Added in ABI 2. */
+    kv_u32 (*lang)(void);
 } kv_api_t;
 
+/* Picks a string according to the current system language. Requires the
+   application to hold a kv_api_t pointer (see the samples in sdk/apps). */
+#define KV_T(api, en, ru)  ((api)->lang() ? (ru) : (en))
+
 /* ============================================================
- *  Описание приложения
+ *  Application description
  *
- *  kapp_main() заполняет эту структуру и возвращает указатель
- *  на неё. Структура обязана жить всё время работы программы -
- *  проще всего объявить её статической.
+ *  kapp_main() fills this structure in and returns a pointer to it.
+ *  The structure must live for as long as the program runs - the
+ *  simplest way is to declare it static.
  *
- *  Любой обработчик можно оставить нулевым, если он не нужен.
+ *  Any handler may be left null when it is not needed.
  * ============================================================ */
 typedef struct kv_app {
-    const char *title;           /* заголовок окна                     */
-    kv_i32      width, height;   /* желаемый размер клиентской области */
+    const char *title;           /* window title                       */
+    kv_i32      width, height;   /* desired client area size           */
 
-    void (*on_open)(void);                       /* окно открыли        */
-    void (*on_draw)(void);                       /* нарисовать кадр     */
-    void (*on_key)(kv_i32 key);                  /* нажата клавиша      */
-    void (*on_click)(kv_i32 x, kv_i32 y, kv_i32 button);  /* щелчок мышью */
-    void (*on_tick)(void);                       /* раз в кадр, до draw */
-    void (*on_close)(void);                      /* окно закрывают      */
+    void (*on_open)(void);                       /* the window was opened  */
+    void (*on_draw)(void);                       /* draw a frame           */
+    void (*on_key)(kv_i32 key);                  /* a key was pressed      */
+    void (*on_click)(kv_i32 x, kv_i32 y, kv_i32 button);  /* mouse click */
+    void (*on_tick)(void);                       /* once per frame, before draw */
+    void (*on_close)(void);                      /* the window is closing  */
 } kv_app_t;
 
-/* Точка входа, которую обязано определить каждое приложение */
+/* The entry point every application must define */
 typedef kv_app_t *(*kapp_entry_t)(const kv_api_t *api);
 
 #endif /* _KVANT_KVAPP_H */

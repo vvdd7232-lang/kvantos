@@ -1,13 +1,13 @@
-/* CPUID, перезагрузка и выключение */
+/* CPUID, reboot and power-off */
 #include "kernel.h"
 
 static inline void cpuid(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(leaf), "c"(0));
 }
 
-/* На 386/486 инструкции cpuid нет: её выполнение выдаёт #UD и роняет
-   ядро сразу после старта. Наличие определяется по возможности
-   переключить бит 21 (ID) в EFLAGS. */
+/* The 386/486 has no cpuid instruction: executing it raises #UD and
+   kills the kernel right after start-up. Its presence is detected by
+   trying to toggle bit 21 (ID) in EFLAGS. */
 static int cpuid_supported(void) {
     u32 res;
     __asm__ volatile(
@@ -39,9 +39,9 @@ void cpu_vendor(char *buf13) {
 
 void cpu_brand(char *buf49) {
     u32 a, b, c, d;
-    if (!cpuid_supported()) { strcpy(buf49, "процессор без CPUID (386/486)"); return; }
+    if (!cpuid_supported()) { strcpy(buf49, T("CPU without CPUID (386/486)", "процессор без CPUID (386/486)")); return; }
     cpuid(0x80000000, &a, &b, &c, &d);
-    if (a < 0x80000004) { strcpy(buf49, "неизвестный процессор"); return; }
+    if (a < 0x80000004) { strcpy(buf49, T("unknown CPU", "неизвестный процессор")); return; }
     u32 *p = (u32 *)buf49;
     for (u32 leaf = 0x80000002; leaf <= 0x80000004; leaf++) {
         cpuid(leaf, &a, &b, &c, &d);
@@ -53,17 +53,17 @@ void cpu_brand(char *buf49) {
 void kv_reboot(void) {
     u8 st = 0x02;
     while (st & 0x02) st = inb(0x64);
-    outb(0x64, 0xFE);          /* импульс сброса через контроллер клавиатуры */
+    outb(0x64, 0xFE);          /* reset pulse through the keyboard controller */
     cli();
     for (;;) hlt();
 }
 
 void kv_poweroff(void) {
-    /* ACPI-выключение QEMU/Bochs */
+    /* ACPI power-off for QEMU/Bochs */
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
-    kprintf("\nВыключение не поддерживается этой машиной. Останов CPU.\n");
+    kprintf(T("\nPower-off is not supported by this machine. Halting the CPU.\n", "\nВыключение не поддерживается этой машиной. Останов CPU.\n"));
     cli();
     for (;;) hlt();
 }

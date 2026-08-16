@@ -1,4 +1,4 @@
-/* Страничная адресация: identity-mapping первых 16 MiB */
+/* Paging: identity mapping of the first 16 MiB */
 #include "kernel.h"
 
 #define PAGE_PRESENT 0x1
@@ -6,24 +6,24 @@
 #define PAGE_USER    0x4
 
 #define IDENTITY_MB  16
-#define PT_COUNT     (IDENTITY_MB)      /* 1 таблица = 4 MiB... нет, 1024*4K = 4MiB */
+#define PT_COUNT     (IDENTITY_MB)      /* one table = 1024 * 4K = 4 MiB */
 
 static u32 page_directory[1024] __attribute__((aligned(4096)));
 static u32 page_tables[IDENTITY_MB / 4][1024] __attribute__((aligned(4096)));
 
 static void page_fault(registers_t *r) {
     u32 addr = read_cr2();
-    /* Сбой внутри приложения - не повод останавливать систему:
-       снимаем виновника и возвращаемся в оболочку. Сообщение на
-       экран не печатаем, оно испортило бы графический режим. */
+    /* A fault inside an application is no reason to stop the system:
+       kill the culprit and return to the shell. Nothing is printed to
+       the screen - that would corrupt the graphics mode. */
     if (kapp_in_app()) {
         static char why[64];
-        ksnprintf(why, sizeof(why), "обращение к памяти по адресу 0x%08x", addr);
+        ksnprintf(why, sizeof(why), T("memory access at address 0x%08x", "обращение к памяти по адресу 0x%08x"), addr);
         kapp_recover(why);
     }
-    kprintf("\n[PF] адрес=%p %s%s%s\n", (void *)addr,
-            (r->err_code & 1) ? "защита " : "не-присутствует ",
-            (r->err_code & 2) ? "запись " : "чтение ",
+    kprintf(T("\n[PF] address=%p %s%s%s\n", "\n[PF] адрес=%p %s%s%s\n"), (void *)addr,
+            (r->err_code & 1) ? T("protection ", "защита ") : T("not-present ", "не-присутствует "),
+            (r->err_code & 2) ? T("write ", "запись ") : T("read ", "чтение "),
             (r->err_code & 4) ? "user" : "kernel");
     panic("Page fault", r);
 }
@@ -40,9 +40,9 @@ void paging_init(void) {
         page_directory[t] = ((u32)page_tables[t]) | PAGE_PRESENT | PAGE_RW;
     }
 
-    /* Нулевую страницу НЕ отображаем: разыменование NULL должно
-       давать честное исключение, а не молча портить таблицу
-       прерываний. Первая страница ядру не нужна - оно живёт с 1 МиБ. */
+    /* Page zero is deliberately NOT mapped: dereferencing NULL must
+       raise an honest exception instead of silently trashing the
+       interrupt table. The kernel does not need it - it lives at 1 MiB. */
     page_tables[0][0] = 0;
 
     isr_install_handler(14, page_fault);
@@ -63,7 +63,7 @@ int paging_map(u32 virt, u32 phys, int rw) {
     return 0;
 }
 
-/* Отобразить диапазон физических адресов один-в-один (для MMIO/фреймбуфера) */
+/* Identity-map a range of physical addresses (for MMIO/framebuffer) */
 int paging_map_range(u32 base, u32 size, int rw) {
     u32 start = base & ~0xFFFu;
     u32 end   = (base + size + 0xFFF) & ~0xFFFu;

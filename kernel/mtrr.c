@@ -1,18 +1,18 @@
-/* MTRR: режим write-combining для видеопамяти.
+/* MTRR: write-combining mode for video memory.
  *
- * Зачем это нужно. По умолчанию после включения страничной адресации
- * фреймбуфер отображается как обычная память, но на реальном железе
- * область PCI/PCIe остаётся некешируемой (UC): КАЖДАЯ запись в пиксель
- * уходит отдельной транзакцией по шине и процессор ждёт её завершения.
- * Копирование кадра 1024x768x32 (3 МиБ) в таком режиме занимает десятки
- * миллисекунд - отсюда 10-15 кадров в секунду на ноутбуке.
+ * Why this is needed. By default, once paging is enabled, the
+ * framebuffer is mapped like ordinary memory, but on real hardware the
+ * PCI/PCIe region stays uncacheable (UC): EVERY pixel write becomes a
+ * separate bus transaction and the CPU waits for it to complete.
+ * Copying a 1024x768x32 frame (3 MiB) that way takes tens of
+ * milliseconds - hence 10-15 frames per second on a laptop.
  *
- * Режим write-combining (WC) разрешает процессору накапливать записи в
- * буфере и отправлять их пачками по 64 байта. Для линейного вывода
- * кадра это даёт многократное ускорение.
+ * Write-combining (WC) lets the CPU accumulate writes in a buffer and
+ * send them in 64-byte bursts. For linear frame output that is several
+ * times faster.
  *
- * В QEMU разницы почти нет (вся память - обычное ОЗУ хоста), поэтому
- * эффект проявляется именно на живом железе.
+ * Under QEMU there is almost no difference (all memory is ordinary host
+ * RAM), so the effect shows up on live hardware.
  */
 #include "kernel.h"
 
@@ -37,7 +37,7 @@ static inline void cpuid_raw(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
                              : "a"(leaf), "c"(0));
 }
 
-/* Проверяем бит 21 (ID) в EFLAGS: без CPUID нет и MSR. */
+/* Check bit 21 (ID) in EFLAGS: without CPUID there are no MSRs either. */
 static int has_cpuid(void) {
     u32 res;
     __asm__ volatile(
@@ -57,14 +57,14 @@ static int has_cpuid(void) {
     return res != 0;
 }
 
-/* Округляем длину вниз до степени двойки: MTRR умеет только такие. */
+/* Round the length down to a power of two: MTRRs handle nothing else. */
 static u32 pow2_floor(u32 v) {
     u32 p = 1;
     while ((p << 1) && (p << 1) <= v) p <<= 1;
     return p;
 }
 
-/* Кадровый буфер должен быть выровнен на собственный размер. */
+/* The framebuffer must be aligned to its own size. */
 static u32 fit_size(u32 base, u32 size) {
     u32 s = pow2_floor(size);
     while (s >= 0x100000u && (base & (s - 1))) s >>= 1;
@@ -73,25 +73,25 @@ static u32 fit_size(u32 base, u32 size) {
 
 int mtrr_available(void) { return mtrr_ok; }
 
-/* Возвращает 1, если удалось назначить WC на область. */
+/* Returns 1 if WC was successfully assigned to the region. */
 int mtrr_set_wc(u32 base, u32 size) {
     if (!has_cpuid()) return 0;
 
     u32 a, b, c, d;
     cpuid_raw(1, &a, &b, &c, &d);
-    if (!(d & (1u << 12))) return 0;      /* бит 12 EDX: поддержка MTRR */
-    if (!(d & (1u << 5)))  return 0;      /* бит 5: наличие MSR */
+    if (!(d & (1u << 12))) return 0;      /* EDX bit 12: MTRR support */
+    if (!(d & (1u << 5)))  return 0;      /* bit 5: MSRs present */
 
     u32 cap_lo, cap_hi;
     rdmsr(IA32_MTRRCAP, &cap_lo, &cap_hi);
-    u32 vcnt = cap_lo & 0xFF;             /* число переменных регистров */
-    if (!(cap_lo & (1u << 10))) return 0; /* бит 10: поддержка WC */
+    u32 vcnt = cap_lo & 0xFF;             /* number of variable registers */
+    if (!(cap_lo & (1u << 10))) return 0; /* bit 10: WC support */
     if (!vcnt) return 0;
 
     u32 len = fit_size(base, size);
-    if (len < 0x100000u) return 0;        /* меньше 1 МиБ смысла нет */
+    if (len < 0x100000u) return 0;        /* anything below 1 MiB is pointless */
 
-    /* Ищем свободную пару регистров (valid = 0 в MASK). */
+    /* Look for a free register pair (valid = 0 in MASK). */
     int slot = -1;
     for (u32 i = 0; i < vcnt; i++) {
         u32 mlo, mhi;
@@ -102,8 +102,8 @@ int mtrr_set_wc(u32 base, u32 size) {
 
     u32 fl = irq_save();
 
-    /* Стандартная последовательность смены MTRR: отключить кеш,
-       сбросить содержимое, снять глобальное разрешение MTRR. */
+    /* The standard MTRR change sequence: disable the cache, flush it,
+       clear the global MTRR enable. */
     u32 cr0;
     __asm__ volatile("movl %%cr0, %0" : "=r"(cr0));
     __asm__ volatile("movl %0, %%cr0" : : "r"((cr0 | 0x40000000u) & ~0x20000000u));
@@ -113,7 +113,7 @@ int mtrr_set_wc(u32 base, u32 size) {
     rdmsr(IA32_MTRR_DEF_TYPE, &def_lo, &def_hi);
     wrmsr(IA32_MTRR_DEF_TYPE, def_lo & ~(1u << 11), def_hi);
 
-    /* PHYSBASE: адрес + тип; PHYSMASK: маска длины + бит valid. */
+    /* PHYSBASE: address + type; PHYSMASK: length mask + valid bit. */
     wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2,
           (base & 0xFFFFF000u) | MTRR_TYPE_WC, 0);
     wrmsr(IA32_MTRR_PHYSBASE0 + slot * 2 + 1,

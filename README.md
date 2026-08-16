@@ -1,8 +1,10 @@
-# KvantOS 0.1.0 «Photon»
+# KvantOS 0.1.0 "Photon"
 
-Полностью самописная **32-битная операционная система** для архитектуры i386.
-Собственное монолитное ядро, загрузка через **GRUB 2** по спецификации Multiboot 1.
-Никакой стандартной библиотеки C — только freestanding-заголовки компилятора.
+*Read this in [Русский](README.ru.md).*
+
+A completely hand-written **32-bit operating system** for the i386 architecture.
+Own monolithic kernel, booted by **GRUB 2** through the Multiboot 1 specification.
+No C standard library — only the compiler's freestanding headers.
 
 ```
    ██╗  ██╗██╗   ██╗ █████╗ ███╗   ██╗████████╗
@@ -13,315 +15,360 @@
    ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝
 ```
 
-## Быстрый старт
+## Quick start
 
 ```bash
-make          # собрать ядро build/kvant.bin
-make iso      # собрать загрузочный образ build/kvantos.iso
-make run      # запустить в QEMU (лог ядра дублируется в COM1/stdout)
+make          # build the kernel, build/kvant.bin
+make iso      # build the bootable image, build/kvantos.iso
+make run      # run in QEMU (the kernel log is mirrored to COM1/stdout)
 ```
 
-Образ загружается и на реальном железе: запишите `kvantos.iso` на флешку
-(`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) или подключите как CD в VirtualBox/VMware.
+The image boots on real hardware too: write `kvantos.iso` to a USB stick
+(`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) or attach it as a CD in
+VirtualBox/VMware.
 
-## Что реализовано
+## Interface language
 
-### Загрузка
-* Multiboot 1 заголовок, точка входа на ассемблере (`boot/boot.asm`)
-* Разбор структуры multiboot: карта памяти (`mmap`), имя загрузчика, объём ОЗУ
-* Меню GRUB на русском языке с несколькими пунктами
+The whole system speaks **English by default** and can switch to **Russian at
+run time** — the entire interface, shell, GUI and bundled applications.
 
-### Ядро
-| Подсистема | Детали |
+| How | What to do |
 |---|---|
-| **GDT** | 5 дескрипторов: код/данные ring 0 и ring 3, плюс TSS для будущего userspace |
-| **IDT** | 32 обработчика исключений, 16 IRQ, вектор `0x80` под системные вызовы |
-| **PIC 8259** | Ремаппинг IRQ на векторы 32–47, корректная отправка EOI |
-| **PIT** | Системный таймер 100 Гц, источник вытеснения задач |
-| **PMM** | Битовая карта физических страниц 4 КиБ на основе multiboot mmap |
-| **Paging** | Identity-mapping первых 16 МиБ, `CR3`/`CR0.PG`, обработчик `#PF` с дампом `CR2` |
-| **Куча** | 10 МиБ, `kmalloc`/`kfree`/`kcalloc`, first-fit, разбиение и слияние соседних блоков, magic-числа против порчи |
-| **Планировщик** | Round-robin с вытеснением по IRQ0, переключение контекста на ассемблере, состояния готова/спит/завершена, автоматическая уборка мёртвых задач |
-| **ramfs** | Плоская ФС в ОЗУ: создание, чтение, удаление файлов |
+| GRUB menu | pick the second entry, *KvantOS - Russian interface* |
+| Kernel command line | add `lang=ru` |
+| Inside the system | type `lang ru` (and `lang en` to switch back) |
 
-### Графический режим — команда `guimenu`
+The mechanism is a single macro, `T(en, ru)`, declared in `include/i18n.h`: it
+picks a string from a pair at run time, so both languages live in one binary and
+switching costs nothing. Applications reach the same switch through the ABI —
+`sys->lang()` or the `KV_T(sys, en, ru)` macro. Every source comment, build
+script and document in the repository is in English; the Russian documents are
+kept beside them as `*.ru.md`.
 
-Полноценная оконная среда **KvantGUI** поверх линейного фреймбуфера VBE,
-который запрашивается у GRUB через видеополя Multiboot-заголовка (1024×768×32).
+## What is implemented
 
-* **Рабочий стол** — градиентный фон, 6 иконок с нарисованной пиксельной графикой
-* **Окна** — заголовок с градиентом, тень, кнопка закрытия, перетаскивание мышью,
-  z-порядок (клик поднимает окно наверх)
-* **Панель задач** — кнопки открытых окон, часы из RTC, счётчик памяти
-* **Мышь PS/2** — драйвер на IRQ12, аппаратный курсор рисуется программно,
-  поддержка клика, перетаскивания и двойного клика
-* **Двойная буферизация** — кадр собирается в буфере в куче и выгружается
-  на экран целиком, поэтому нет мерцания
-* **Мини-приложения**: «О системе», «Монитор» (память, куча, задачи в реальном
-  времени), «Файлы» (ramfs), «Терминал» (help/mem/ps/ls/date/uptime/about/clear),
-  «Рисование» (холст 44×26 с палитрой), «Настройки», «Справка»
+### Booting
+* Multiboot 1 header, assembly entry point (`boot/boot.asm`)
+* Parsing of the multiboot structure: memory map (`mmap`), bootloader name, RAM size
+* A GRUB menu with nine entries, including safe mode, text mode and Russian interface
 
-#### Приложение «Настройки»
-
-Графический аналог команд `vidmode`/`refresh` — три вкладки:
-
-* **Экран** — сетка доступных разрешений (режимы, не влезающие в видеопамять,
-  скрыты), выбор частоты обновления, кнопка «Применить». Разрешение меняется
-  **прямо во время работы среды**: задний буфер освобождается до переключения
-  и выделяется заново под новый шаг строки, окна подтягиваются в границы
-  экрана, курсор перецентрируется.
-* **Оформление** — 6 цветов акцента (перекрашивают заголовки окон, кнопку
-  «Пуск» и фон), 4 стиля обоев (градиент, ночь, сетка, однотонный),
-  флажки теней под окнами и секунд в часах.
-* **Система** — версия, процессор, память, куча, время работы, число задач
-  и устройств PCI, выход в консоль.
-
-Внутри реализована система *hit-областей*: каждый кадр виджеты регистрируют
-свои прямоугольники, а клик мышью ищет попадание в обратном порядке отрисовки.
-
-Управление: `T` терминал, `M` монитор, `F` файлы, `A` о системе, `P` рисование,
-`S` настройки, `H` справка, `W` закрыть окно, стрелки + Enter — выбор иконки,
-`Esc`/`Q` — выход обратно в текстовую консоль.
-
-### Видеокарта, разрешение и частота
-
-Ядро само управляет видеоадаптером, без обращения к BIOS: из защищённого
-режима `int 0x10` недоступен, поэтому регистры программируются напрямую.
-
-| Команда | Назначение |
+### Kernel
+| Subsystem | Details |
 |---|---|
-| `lspci` / `lspci -v` | перечисление устройств PCI, классы, BAR, IRQ |
-| `gpu` | модель видеокарты, объём видеопамяти, драйвер, текущий режим |
-| `vidmode` | таблица из 12 режимов с проверкой, влезают ли они в видеопамять |
-| `vidmode 6` | переключиться на режим №6 из таблицы |
-| `vidmode 1280 720 32` | произвольное разрешение и глубина цвета |
-| `refresh` | текущая частота: расчёт по CRTC и замер по сигналу VSync |
-| `refresh 75` | задать частоту кадров |
+| **GDT** | 5 descriptors: ring 0 and ring 3 code/data, plus a TSS for a future userspace |
+| **IDT** | 32 exception handlers, 16 IRQs, vector `0x80` reserved for system calls |
+| **PIC 8259** | IRQs remapped to vectors 32–47, proper EOI handling |
+| **PIT** | 100 Hz system timer, the source of task preemption |
+| **PMM** | A bitmap of 4 KiB physical pages built from the multiboot mmap |
+| **Paging** | Identity mapping of the first 16 MiB, `CR3`/`CR0.PG`, a `#PF` handler dumping `CR2` |
+| **Heap** | 10 MiB, `kmalloc`/`kfree`/`kcalloc`, first fit, splitting and merging of neighbouring blocks, magic numbers against corruption |
+| **Scheduler** | Round robin with preemption on IRQ0, context switching in assembly, ready/sleeping/finished states, automatic reaping of dead tasks |
+| **ramfs** | A flat in-RAM filesystem: create, read and delete files |
 
-**Как это устроено.** Шина PCI перебирается через порты `0xCF8`/`0xCFC`
-(256 шин × 32 слота, с учётом многофункциональных устройств); объём
-видеопамяти определяется записью маски в BAR. Смена разрешения выполняется
-через **Bochs VBE Extensions** (порты `0x1CE`/`0x1CF`) — их понимают QEMU,
-Bochs и VirtualBox; для VMware реализован путь через регистры SVGA II в BAR0.
-После переключения драйвер заново отображает видеопамять в адресное
-пространство, пересчитывает формат пикселя (BGRX для 32/24 бит, RGB565 для 16)
-и перестраивает сетку консоли — например, 1280×1024 даёт 160×64 символа.
-Графическая среда `guimenu` подхватывает новое разрешение автоматически.
+### Graphics mode — the `guimenu` command
 
-**Частота кадров** меняется перепрограммированием вертикальных таймингов CRTC:
-пересчитываются Vertical Total, Retrace Start и Retrace End сразу, единым
-блоком. Менять только Vertical Total нельзя — импульс синхронизации остался бы
-на прежнем месте, сигнал стал бы некорректным и монитор погасил бы картинку
-(этот баг был пойман на скриншотах и исправлен). В режиме линейного буфера
-развёрткой управляет хост, поэтому система честно сообщает об этом вместо
-того, чтобы показывать выдуманное число.
+A full windowing environment, **KvantGUI**, on top of the linear VBE framebuffer
+requested from GRUB through the video fields of the Multiboot header (1024×768×32).
 
-### Драйверы
-* **Консоль** — работает в двух режимах: классический VGA 80×25 через 0xB8000
-  со своим шрифтом в плоскости 2, либо программная отрисовка глифов прямо
-  в фреймбуфер (128×48 символов при 1024×768). Переключается автоматически
-* **Фреймбуфер VBE** — 32/24/16 бит на пиксель, заливки, градиенты,
-  скруглённые прямоугольники, текст, аппаратная прокрутка области
-* **Мышь PS/2** — IRQ12, 3-байтные пакеты, контроль синхробита и переполнения
-* **Кириллица** — шрифт в раскладке CP866 генерируется из системных PSF
-  (`tools/mkfont.py`), драйвер на лету декодирует UTF-8 → CP866
-* **PS/2 клавиатура** — набор скан-кодов 1, Shift/Ctrl/CapsLock, стрелки,
-  кольцевой буфер, обработка в прерывании
-* **RTC/CMOS** — чтение даты и времени, поддержка BCD и 12/24-часового формата
-* **COM1** — дублирование всего вывода ядра в последовательный порт для отладки
-* **PC-Speaker** — генерация звука через канал 2 PIT
+* **Desktop** — a gradient background and 9 icons with hand-drawn pixel art
+* **Windows** — a gradient title bar, a shadow, a close button, dragging with the
+  mouse, z-order (a click raises the window)
+* **Taskbar** — buttons for open windows, an RTC clock, a memory gauge
+* **PS/2 mouse** — an IRQ12 driver, the cursor drawn in software, support for
+  clicks, dragging and double clicks
+* **Double buffering** — a frame is composed in a heap buffer and flushed to the
+  screen as a whole, so there is no flicker
+* **Mini-applications**: About, Monitor (memory, heap and tasks in real time),
+  Files (ramfs), Terminal (help/mem/ps/ls/date/uptime/about/clear), Paint
+  (a 44×26 canvas with a palette), Settings, Help, Programs
 
-### Оболочка kvsh
-Интерактивная командная строка с историей (стрелки ↑↓), Ctrl+L, Ctrl+C.
+#### The Settings application
+
+A graphical counterpart of the `vidmode`/`refresh` commands, with three tabs:
+
+* **Display** — a grid of available resolutions (modes that do not fit into video
+  memory are hidden), a refresh rate selector and an Apply button. The resolution
+  changes **while the environment keeps running**: the back buffer is released
+  before switching and allocated anew for the new stride, windows are pulled back
+  inside the screen and the cursor is re-centred.
+* **Appearance** — 6 accent colours (they repaint window titles, the Start button
+  and the background), 4 wallpaper styles (gradient, night, grid, plain), plus
+  checkboxes for window shadows and seconds in the clock.
+* **System** — version, CPU, memory, heap, uptime, the number of tasks and PCI
+  devices, and a way back to the console.
+
+Internally there is a system of *hit areas*: every frame the widgets register
+their rectangles, and a mouse click looks for a hit in reverse drawing order.
+
+Keys: `T` terminal, `M` monitor, `F` files, `A` about, `P` paint, `S` settings,
+`H` help, `G` programs, `E` close window, arrows + Enter to pick an icon,
+`Esc`/`Q` to return to the text console.
+
+### Video adapter, resolution and refresh rate
+
+The kernel drives the video adapter itself, without asking the BIOS: `int 0x10`
+is unreachable from protected mode, so the registers are programmed directly.
+
+| Command | Purpose |
+|---|---|
+| `lspci` / `lspci -v` | enumerate PCI devices, classes, BARs, IRQs |
+| `gpu` | video adapter model, video memory size, driver, current mode |
+| `vidmode` | a table of 12 modes with a check whether they fit into video memory |
+| `vidmode 6` | switch to mode #6 from the table |
+| `vidmode 1280 720 32` | an arbitrary resolution and colour depth |
+| `refresh` | the current rate: computed from CRTC and measured against VSync |
+| `refresh 75` | set the frame rate |
+
+**How it works.** The PCI bus is scanned through ports `0xCF8`/`0xCFC`
+(256 buses × 32 slots, multifunction devices included); the amount of video
+memory is determined by writing a mask into a BAR. Resolution changes go through
+the **Bochs VBE Extensions** (ports `0x1CE`/`0x1CF`) — understood by QEMU, Bochs
+and VirtualBox; for VMware there is a path through the SVGA II registers in BAR0.
+After a switch the driver re-maps video memory into the address space,
+recomputes the pixel format (BGRX for 32/24 bits, RGB565 for 16) and rebuilds the
+console grid — 1280×1024, for instance, yields 160×64 characters. The `guimenu`
+environment picks the new resolution up automatically.
+
+**The frame rate** is changed by reprogramming the vertical CRTC timings:
+Vertical Total, Retrace Start and Retrace End are recomputed together, in one
+go. Changing only Vertical Total is not allowed — the sync pulse would stay
+where it was, the signal would become invalid and the monitor would blank the
+picture (this bug was caught on screenshots and fixed). In linear framebuffer
+mode the scan-out is owned by the host, so the system says so honestly instead
+of showing an invented number.
+
+### Drivers
+* **Console** — works in two modes: classic VGA 80×25 through 0xB8000 with its
+  own font in plane 2, or software glyph rendering straight into the framebuffer
+  (128×48 characters at 1024×768). The choice is automatic
+* **VBE framebuffer** — 32/24/16 bits per pixel, fills, gradients, rounded
+  rectangles, text, hardware scrolling of an area
+* **PS/2 mouse** — IRQ12, 3-byte packets, sync-bit and overflow checks
+* **Cyrillic** — a CP866 font generated from system PSF files
+  (`tools/mkfont.py`); the driver decodes UTF-8 → CP866 on the fly
+* **PS/2 keyboard** — scan code set 1, Shift/Ctrl/CapsLock, arrows, a ring
+  buffer, handling inside the interrupt
+* **RTC/CMOS** — reading date and time, BCD and 12/24-hour support
+* **COM1** — every kernel message is mirrored to the serial port for debugging
+* **PC speaker** — sound generated through PIT channel 2
+
+### The kvsh shell
+An interactive command line with history (↑↓ arrows), Ctrl+L and Ctrl+C.
 
 ```
 help      about     clear     echo      mem       cpu
 uptime    date      ps        spawn     ls        cat
-write     rm        colors    beep      alloc     sleep
+write     rm        colors    beep      alloc     lang
 history   crash     reboot    poweroff  guimenu   gfx
-lspci     gpu       vidmode   refresh
+lspci     gpu       vidmode   refresh   setup     disk
+format    df        dls       dcat      install   uninstall
+apps      hwreport
 ```
 
-`guimenu` — запуск графической среды, `gfx` — сведения о видеорежиме.
+`guimenu` starts the graphical environment, `gfx` reports the video mode,
+`lang` switches the interface language.
 
-Живая строка состояния сверху обновляется отдельной фоновой задачей
-и показывает использование ОЗУ, число задач и время работы системы.
+A live status line at the top is updated by a separate background task and shows
+RAM usage, the number of tasks and the system uptime.
 
-## Структура проекта
+## Project layout
 
 ```
 kvantos/
 ├── boot/
-│   ├── boot.asm        точка входа, Multiboot, GDT/IDT/paging/переключение контекста
-│   └── isr.asm         48 заглушек прерываний + общий диспетчер
-├── include/kernel.h    единый заголовок ядра
+│   ├── boot.asm        entry point, Multiboot, GDT/IDT/paging/context switch
+│   └── isr.asm         48 interrupt stubs + the common dispatcher
+├── include/
+│   ├── kernel.h        the single kernel header
+│   ├── i18n.h          the T() macro and run-time language switching
+│   └── kvapp.h         the application ABI, version 2
 ├── kernel/
-│   ├── main.c          инициализация подсистем
-│   ├── gdt.c  idt.c    дескрипторные таблицы, PIC
-│   ├── pmm.c  paging.c heap.c    управление памятью
-│   ├── sched.c         планировщик задач
-│   ├── vga.c  serial.c printf.c  вывод
-│   ├── keyboard.c timer.c rtc.c cpu.c   драйверы
-│   ├── fb.c            драйвер линейного фреймбуфера (VBE)
-│   ├── pci.c           перечисление шины PCI, чтение BAR
-│   ├── vbe.c           смена разрешения (BGA/SVGA) и таймингов CRTC
-│   ├── cmd_video.c     команды lspci / gpu / vidmode / refresh
-│   ├── gui.c           графическая среда: окна, панель, приложения
-│   ├── mouse.c         драйвер мыши PS/2
+│   ├── main.c          subsystem initialisation
+│   ├── i18n.c          the current language and its selector
+│   ├── gdt.c  idt.c    descriptor tables, PIC
+│   ├── pmm.c  paging.c heap.c    memory management
+│   ├── sched.c         the task scheduler
+│   ├── vga.c  serial.c printf.c  output
+│   ├── keyboard.c timer.c rtc.c cpu.c   drivers
+│   ├── fb.c            the linear framebuffer (VBE) driver
+│   ├── pci.c           PCI bus enumeration, BAR reading
+│   ├── vbe.c           resolution (BGA/SVGA) and CRTC timing changes
+│   ├── cmd_video.c     the lspci / gpu / vidmode / refresh commands
+│   ├── gui.c           the graphical environment: windows, panel, applications
+│   ├── kapp.c          the .kapp application loader
+│   ├── kvfs.c ata.c    the disk filesystem and its ATA driver
+│   ├── setup.c         installation onto a hard disk
+│   ├── mouse.c         the PS/2 mouse driver
 │   ├── charset.c       UTF-8 -> CP866
 │   ├── ramfs.c shell.c panic.c string.c
-│   └── font8x16.c      сгенерированный VGA-шрифт с кириллицей
-├── grub/grub.cfg       меню загрузчика
-├── tools/mkfont.py     генератор шрифта
-├── linker.ld           ядро по адресу 1 МиБ
+│   └── font8x16.c      the generated VGA font with Cyrillic
+├── sdk/                the application SDK: samples, linker script, packer
+├── grub/grub.cfg       the bootloader menu
+├── tools/mkfont.py     the font generator
+├── linker.ld           the kernel at address 1 MiB
 └── Makefile
 ```
 
-## Технические решения
+## Technical decisions
 
-**Почему свой шрифт.** Штатный знакогенератор VGA содержит только CP437 —
-кириллицы там нет. Ядро при старте перепрограммирует VGA Sequencer и Graphics
-Controller, записывает 256 глифов 8×16 в плоскость 2 и возвращает адаптер
-в текстовый режим. Исходники остаются в UTF-8, драйвер конвертирует их
-в CP866 потоковым декодером.
+**Why a custom font.** The stock VGA character generator only carries CP437 —
+there is no Cyrillic in it. At start-up the kernel reprograms the VGA Sequencer
+and Graphics Controller, writes 256 glyphs of 8×16 into plane 2 and returns the
+adapter to text mode. The sources stay in UTF-8; the driver converts them to
+CP866 with a streaming decoder.
 
-**Отображение фреймбуфера.** Видеопамять лежит около `0xFD000000`, далеко за
-пределами identity-mapping первых 16 МиБ. Поэтому `fb_init` только разбирает
-поля Multiboot, а страницы буфера отображаются один-в-один сразу после
-включения пейджинга — иначе первое же обращение вызвало бы `#PF`.
+**Mapping the framebuffer.** Video memory sits around `0xFD000000`, far beyond
+the identity mapping of the first 16 MiB. That is why `fb_init` only parses the
+Multiboot fields, while the buffer pages are mapped one-to-one right after
+paging is enabled — otherwise the very first access would raise a `#PF`.
 
-**Без libgcc.** Компоновка идёт напрямую через `ld` без стандартных библиотек,
-поэтому 64-битные деления (`__udivdi3`) заменены на арифметику из 32-битных
-операций — ядро не тянет никаких внешних зависимостей.
+**No libgcc.** Linking goes straight through `ld` without standard libraries, so
+64-bit divisions (`__udivdi3`) are replaced by arithmetic built from 32-bit
+operations — the kernel drags in no external dependencies.
 
-**Переключение контекста.** `context_switch` сохраняет `EFLAGS`, `ebp`, `ebx`,
-`esi`, `edi` на стеке старой задачи и восстанавливает их из стека новой.
-Стек создаваемой задачи заполняется точно таким же кадром, поэтому первый
-`ret` уводит выполнение прямо в её точку входа, а под ней лежит адрес
-`task_exit` — задача корректно завершится, просто вернувшись из своей функции.
+**Context switching.** `context_switch` saves `EFLAGS`, `ebp`, `ebx`, `esi` and
+`edi` on the stack of the old task and restores them from the stack of the new
+one. The stack of a newly created task is filled with exactly the same frame, so
+the first `ret` takes execution straight to its entry point, and underneath it
+lies the address of `task_exit` — a task finishes correctly simply by returning
+from its function.
 
-## Лицензия
+## Licence
 
 MIT.
 
-## Рабочие скриншоты тестов
+## Screenshots
 
-Папка `testshots/` — 32 кадра из QEMU, снятых во время отладки: замеры
-частоты кадров и оба прогона блокнота, включая снимки самих багов.
-Опись — `testshots/README.md`, галерея одним файлом — `testshots/index.html`.
-В отличие от `screenshots/`, это черновики диагностики, а не витрина.
+| File | What it shows |
+|---|---|
+| `screenshots/47_en_shell.png` | The kvsh shell in English: `gpu`, `df`, `lang` |
+| `screenshots/48_en_help.png` | The full command list |
+| `screenshots/49_en_settings.png` | The Settings application, the Display tab |
+| `screenshots/50_en_programs.png` | The Programs window |
+| `screenshots/51_grub_menu_lang.png` | The GRUB menu with the Russian entry |
+| `screenshots/52_ru_help.png` | The same help after booting with `lang=ru` |
+| `screenshots/53_ru_gui.png` | The graphical environment in Russian |
+| `screenshots/54_lang_switch_runtime.png` | Switching with the `lang ru` command at run time |
 
-## Приложения
+Frames 01–46 cover the earlier stages: the console, the GUI, video modes,
+applications and installation onto a hard disk.
 
-KvantOS умеет **устанавливать программы на диск** — они переживают
-перезагрузку, как в настоящей системе.
+## Working test screenshots
 
-Приложение — это файл `.kapp`: плоский образ с 64-байтным заголовком,
-который ядро загружает по фиксированному адресу и вызывает у него
-функцию `kapp_main()`. Программа получает таблицу из 30 системных
-функций (рисование, клавиатура, мышь, файлы, время, звук) и рисует
-в своём окне на рабочем столе.
+The `testshots/` folder holds 64 frames captured from QEMU while debugging:
+frame-rate measurements and both runs of the notes editor, including shots of
+the bugs themselves. The index is `testshots/README.md`, and the whole gallery in
+one file is `testshots/index.html`. Unlike `screenshots/`, these are diagnostic
+drafts rather than a showcase.
 
-Быстрый старт — вложить программу в загрузочный образ:
+## Applications
+
+KvantOS can **install programs onto a disk** — they survive a reboot, as in a
+real system.
+
+An application is a `.kapp` file: a flat image with a 64-byte header that the
+kernel loads at a fixed address and whose `kapp_main()` function it calls. The
+program receives a table of 30 system functions (drawing, keyboard, mouse, files,
+time, sound) and draws inside its own window on the desktop.
+
+The quickest start is to embed a program into the boot image:
 
 ```bash
-cd sdk && make                       # собрать примеры
+cd sdk && make                       # build the samples
 cd .. && ./sdk/addapp.sh sdk/build/snake.kapp
 ```
 
-Готовый `release/kvantos.iso` можно подключить к VMware/VirtualBox
-или записать на диск: приложения окажутся в системе сразу, **без
-жёсткого диска**. Диск нужен только чтобы программы могли сохранять
-свои файлы.
+The resulting `release/kvantos.iso` can be attached to VMware/VirtualBox or
+burned to a disc: the applications will be in the system straight away, **with no
+hard disk at all**. A disk is only needed so that programs can save their files.
 
-В системе: значок **«Программы»** (клавиша **G**) — список, запуск,
-удаление. Из оболочки: `disk`, `format`, `install`, `apps`, `dls`.
+Inside the system: the **Programs** icon (key **G**) lists, launches and removes
+them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
-В комплекте два примера с подробными комментариями: **«Часы»**
-(аналоговый циферблат, тригонометрия на целых числах) и **«Заметки»**
-(редактор, хранящий текст на диске).
+Three richly commented samples are bundled: **Clock** (an analogue dial, integer
+trigonometry), **Notes** (an editor keeping its text on disk) and **Snake**
+(a small game).
 
-Если приложение упадёт, система его снимет и продолжит работать —
-это проверено отдельным тестом.
+If an application crashes, the system removes it and keeps running — this is
+verified by a dedicated test.
 
-**Полное руководство разработчика — [APPS.md](APPS.md)**: формат файла,
-справочник всех функций ABI, жизненный цикл, сборка, установка,
-отладка, справочник ошибок и список того, чего делать нельзя.
+**The full developer guide is [APPS.md](APPS.md)**: the file format, a reference
+for every ABI function, the life cycle, building, installing, debugging, an error
+reference and a list of things you must not do.
 
-## Установка на жёсткий диск
+## Installing onto a hard disk
 
-KvantOS умеет ставить себя на винчестер и грузиться с него сама —
-без флешки и диска в приводе.
+KvantOS can install itself onto a hard disk and boot from it unaided — with no
+USB stick and no disc in the drive.
 
-Загрузитесь с ISO или дискеты и выполните в оболочке:
+Boot from the ISO or the floppy and run in the shell:
 
 ```
-setup            # показать сведения о диске и предупреждение
-setup --yes      # установить (файловая система создаётся заново)
-setup --yes --keep   # установить, сохранив уже имеющиеся файлы
+setup            # show disk information and a warning
+setup --yes      # install (the filesystem is created anew)
+setup --yes --keep   # install, keeping the files already there
 ```
 
-То же самое в графическом режиме: значок **«Программы»** → кнопка
-**«Установить»**. Кнопка видна только когда система запущена
-с носителя; после установки она исчезает.
+The same thing in graphics mode: the **Programs** icon → the **Install** button.
+The button is only visible while the system runs from removable media; after
+installation it disappears.
 
-Затем `poweroff`, извлеките носитель, включите машину — загрузка пойдёт
-с жёсткого диска.
+Then run `poweroff`, remove the medium and switch the machine on — it will boot
+from the hard disk.
 
-### Что происходит при установке
+### What happens during installation
 
-| Область диска | Содержимое |
+| Disk area | Contents |
 |---|---|
-| сектор 0 | MBR: код GRUB (446 байт) + таблица разделов |
-| секторы 1–2047 | тело загрузчика GRUB (`hdboot.img`, ~386 КиБ) |
-| сектор 2048 | суперблок KvFS |
-| секторы 2049–2056 | каталог файлов |
-| сектор 2057 и далее | данные файлов |
+| sector 0 | MBR: GRUB code (446 bytes) + the partition table |
+| sectors 1–2047 | the body of the GRUB bootloader (`hdboot.img`, ~386 KiB) |
+| sector 2048 | the KvFS superblock |
+| sectors 2049–2056 | the file directory |
+| sector 2057 onwards | file data |
 
-Раздел создаётся один: активный, тип `0x83`, от сектора 2048 до конца диска.
-Ядро и приложения лежат внутри самого образа загрузчика, поэтому
-отдельный служебный раздел не нужен. После записи загрузчика установщик
-переносит в KvFS все файлы из ramfs — программы остаются на месте.
+A single partition is created: active, type `0x83`, from sector 2048 to the end
+of the disk. The kernel and the applications live inside the bootloader image
+itself, so no separate service partition is needed. After writing the
+bootloader the installer moves every ramfs file into KvFS — the programs stay
+where they were.
 
-**Внимание:** установка перезаписывает загрузочную запись диска, всё его
-прежнее содержимое становится недоступным. В виртуальной машине диск
-должен быть **IDE**, а не SCSI.
+**Warning:** installation overwrites the boot record of the disk and everything
+previously on it becomes unreachable. In a virtual machine the disk must be
+**IDE**, not SCSI.
 
-Подробная пошаговая инструкция, в том числе для реального железа, —
-в файле [КАК-УСТАНОВИТЬ.md](КАК-УСТАНОВИТЬ.md).
+A detailed step-by-step guide, including real hardware, is in
+[INSTALL.ru.md](INSTALL.ru.md) (Russian).
 
-## Аудит кода
+## Code audit
 
-Полный разбор найденных и исправленных дефектов (14 пунктов: кэширование
-размера видеопамяти, переполнения в куче, CapsLock, раскладка иконок при
-640×480 и др.) — в файле [AUDIT.md](AUDIT.md).
-
-## Носители и сборка
-
-| Файл | Размер | Когда использовать |
-|------|--------|--------------------|
-| `release/kvantos.iso` | ~918 КБ | Основной вариант: CD/DVD или USB (образ гибридный) |
-| `release/kvantos-floppy.img` | 1.44 МБ | Если привод изношен и GRUB виснет на «Welcome to GRUB!» |
-
-Оба образа **монолитные**: модули GRUB, `grub.cfg` и само ядро вложены
-внутрь загрузочного образа, поэтому с носителя ничего не дочитывается.
-
-```
-make iso      # загрузочный ISO
-make floppy   # образ дискеты 1.44 МБ
-make run      # запуск в QEMU
-```
-
-### Проверено на реальном железе
-
-Samsung RV410 (NP-RV410L): Pentium T4500, чипсет GL40 + ICH9M,
-GMA 4500M, 2 ГБ ОЗУ — загрузка с образа дискеты, консоль kvsh работает.
-
-### Диагностика без экрана
-
-- **Загорелся NumLock** — ядро дошло до инициализации клавиатуры.
-- **Мигнули три индикатора + сигнал** — система загружена полностью.
-- Команда `hwreport` — сводка по процессору, ОЗУ, PCI и видеорежиму.
-
-Полный список найденных и исправленных дефектов (38 пунктов) — в
+A full account of the defects found and fixed (74 items: video memory size
+caching, heap overflows, CapsLock, the icon layout at 640×480 and more) is in
 [AUDIT.md](AUDIT.md).
+
+## Media and building
+
+| File | Size | When to use it |
+|------|------|----------------|
+| `release/kvantos.iso` | ~1.4 MB | The main option: CD/DVD or USB (the image is hybrid) |
+| `release/kvantos-floppy.img` | 1.44 MB | When the drive is worn out and GRUB hangs at "Welcome to GRUB!" |
+
+Both images are **monolithic**: the GRUB modules, `grub.cfg` and the kernel
+itself are embedded inside the boot image, so nothing is read from the medium
+afterwards.
+
+```
+make iso      # the bootable ISO
+make floppy   # a 1.44 MB floppy image
+make run      # run in QEMU
+```
+
+### Verified on real hardware
+
+Samsung RV410 (NP-RV410L): Pentium T4500, GL40 + ICH9M chipset, GMA 4500M, 2 GB
+of RAM — booted from the floppy image, the kvsh console works.
+
+### Diagnosis without a screen
+
+- **NumLock lit up** — the kernel reached keyboard initialisation.
+- **Three indicators blinked plus a beep** — the system is fully up.
+- The `hwreport` command prints a summary of CPU, RAM, PCI and video mode.

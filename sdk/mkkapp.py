@@ -1,43 +1,42 @@
 #!/usr/bin/env python3
 # ============================================================
-#  KvantOS SDK - упаковщик приложений
+#  KvantOS SDK - application packer
 #
-#  Превращает собранный ELF в файл .kapp: вырезает готовый
-#  образ памяти и приписывает спереди 64-байтный заголовок,
-#  который читает загрузчик ядра.
+#  Turns a linked ELF into a .kapp file: cuts out the ready memory
+#  image and prepends the 64-byte header the kernel loader reads.
 #
-#  Запуск:
-#     python3 mkkapp.py вход.elf выход.kapp "Название"
+#  Usage:
+#     python3 mkkapp.py input.elf output.kapp "Title"
 # ============================================================
 import struct
 import subprocess
 import sys
 
-LOAD_BASE      = 0x00E00000     # обязан совпадать с KAPP_LOAD_BASE
+LOAD_BASE      = 0x00E00000     # must match KAPP_LOAD_BASE
 API_VERSION    = 1
 FORMAT_VERSION = 1
 HEADER_SIZE    = 64
-MAX_SIZE       = 0x00200000     # 2 МиБ
+MAX_SIZE       = 0x00200000     # 2 MiB
 FLAG_WINDOW    = 0x0001
 
 
 def fail(msg):
-    print(f"  ОШИБКА: {msg}", file=sys.stderr)
+    print(f"  ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 def run(*args):
-    """Вызов утилиты binutils с внятной диагностикой."""
+    """Call a binutils tool with a readable diagnostic."""
     try:
         return subprocess.run(args, capture_output=True, text=True, check=True).stdout
     except FileNotFoundError:
-        fail(f"не найдена программа {args[0]} (поставьте binutils)")
+        fail(f"program {args[0]} not found (install binutils)")
     except subprocess.CalledProcessError as e:
-        fail(f"{args[0]} завершилась с ошибкой:\n{e.stderr}")
+        fail(f"{args[0]} failed:\n{e.stderr}")
 
 
 def symbol_address(elf, name):
-    """Адрес символа из таблицы ELF."""
+    """Address of a symbol from the ELF table."""
     for line in run("nm", elf).splitlines():
         parts = line.split()
         if len(parts) == 3 and parts[2] == name:
@@ -48,25 +47,25 @@ def symbol_address(elf, name):
 def main():
     if len(sys.argv) < 3:
         print(__doc__)
-        print("Использование: mkkapp.py вход.elf выход.kapp [\"Название\"]")
+        print("Usage: mkkapp.py input.elf output.kapp [\"Title\"]")
         sys.exit(1)
 
     elf, out = sys.argv[1], sys.argv[2]
     name = sys.argv[3] if len(sys.argv) > 3 else out.rsplit("/", 1)[-1].replace(".kapp", "")
 
-    # --- точка входа ---
+    # --- entry point ---
     entry = symbol_address(elf, "kapp_main")
     if entry is None:
-        fail("в приложении нет функции kapp_main - её обязан определить каждый .kapp")
+        fail("the application has no kapp_main - every .kapp must define it")
 
-    # --- границы образа ---
+    # --- image boundaries ---
     file_end  = symbol_address(elf, "__kapp_file_end")
     bss_start = symbol_address(elf, "__bss_start")
     bss_end   = symbol_address(elf, "__bss_end")
     if file_end is None or bss_start is None or bss_end is None:
-        fail("не найдены метки размещения - собирайте с sdk/kapp.ld")
+        fail("layout labels not found - build with sdk/kapp.ld")
 
-    # --- вырезаем готовый образ памяти ---
+    # --- cut out the ready memory image ---
     run("objcopy", "-O", "binary",
         "--set-section-flags", ".bss=alloc,load,contents",
         elf, out + ".tmp")
@@ -75,19 +74,19 @@ def main():
 
     code_size = file_end - LOAD_BASE
     if code_size <= 0:
-        fail("пустой образ: в приложении нет кода")
+        fail("empty image: the application contains no code")
     if len(blob) < code_size:
-        fail(f"образ короче ожидаемого ({len(blob)} < {code_size})")
+        fail(f"image shorter than expected ({len(blob)} < {code_size})")
     blob = blob[:code_size]
 
     bss_size = bss_end - bss_start
     if code_size + bss_size > MAX_SIZE:
-        fail(f"приложение больше 2 МиБ ({(code_size + bss_size) // 1024} КиБ)")
+        fail(f"application larger than 2 MiB ({(code_size + bss_size) // 1024} KiB)")
 
     if not (LOAD_BASE <= entry < LOAD_BASE + code_size):
-        fail(f"точка входа 0x{entry:08X} вне образа - неверный линкер-скрипт?")
+        fail(f"entry point 0x{entry:08X} lies outside the image - wrong linker script?")
 
-    # --- заголовок ---
+    # --- header ---
     nm = name.encode("utf-8")[:31]
     header = struct.pack(
         "<4sHHIIIIII32s",
@@ -102,7 +101,7 @@ def main():
         bss_size,
         nm,
     )
-    assert len(header) == HEADER_SIZE, f"заголовок {len(header)} байт вместо {HEADER_SIZE}"
+    assert len(header) == HEADER_SIZE, f"header is {len(header)} bytes instead of {HEADER_SIZE}"
 
     with open(out, "wb") as f:
         f.write(header + blob)
@@ -112,11 +111,11 @@ def main():
 
     total = len(header) + len(blob)
     print(f"  KAPP {out}")
-    print(f"       название : {name}")
-    print(f"       точка входа: 0x{entry:08X}")
-    print(f"       код+данные : {code_size} байт")
-    print(f"       bss        : {bss_size} байт")
-    print(f"       файл       : {total} байт ({(total + 1023) // 1024} КиБ)")
+    print(f"       title      : {name}")
+    print(f"       entry point: 0x{entry:08X}")
+    print(f"       code+data  : {code_size} bytes")
+    print(f"       bss        : {bss_size} bytes")
+    print(f"       file       : {total} bytes ({(total + 1023) // 1024} KiB)")
 
 
 if __name__ == "__main__":

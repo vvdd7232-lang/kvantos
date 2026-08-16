@@ -1,4 +1,4 @@
-/* Куча ядра: список блоков first-fit со слиянием соседей */
+/* Kernel heap: a first-fit block list that coalesces neighbours */
 #include "kernel.h"
 
 #define MAGIC_USED 0xC0FFEE01
@@ -7,7 +7,7 @@
 
 typedef struct block {
     u32 magic;
-    u32 size;              /* размер полезной области */
+    u32 size;              /* size of the usable area */
     struct block *next;
     struct block *prev;
     int free;
@@ -43,8 +43,8 @@ static void split(block_t *b, u32 size) {
 
 void *kmalloc(size_t size) {
     if (!size) return NULL;
-    /* Выравнивание вверх могло переполниться и превратить огромный
-       запрос в крошечный блок - дальше шла бы порча кучи. */
+    /* Rounding up could overflow and turn a huge request into a tiny
+       block - heap corruption would follow. */
     if (size > 0xFFFFFFF0u) return NULL;
     size = ALIGN8(size);
     if (size > heap_total) return NULL;
@@ -64,8 +64,8 @@ void *kmalloc(size_t size) {
 }
 
 void *kcalloc(size_t n, size_t size) {
-    /* защита от переполнения: n * size могло обнулиться и выдать
-       крошечный блок при запросе гигабайтов */
+    /* overflow guard: n * size could wrap to zero and hand out a tiny
+       block for a multi-gigabyte request */
     if (n && size && n > (0xFFFFFFFFu / size)) return NULL;
     size_t total = n * size;
     void *p = kmalloc(total);
@@ -86,7 +86,7 @@ static void merge(block_t *b) {
 void kfree(void *p) {
     if (!p) return;
     block_t *b = (block_t *)((u8 *)p - sizeof(block_t));
-    if (b->magic != MAGIC_USED) { kprintf("[heap] порча блока %p\n", p); return; }
+    if (b->magic != MAGIC_USED) { kprintf(T("[heap] block corruption at %p\n", "[heap] порча блока %p\n"), p); return; }
     u32 fl = irq_save();
     b->free = 1;
     b->magic = MAGIC_FREE;

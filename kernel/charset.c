@@ -1,13 +1,13 @@
 /* ============================================================
- *  KvantOS - перекодировка UTF-8 -> CP866 (раскладка знакогенератора)
+ *  KvantOS - UTF-8 -> CP866 transcoding (font generator layout)
  * ============================================================ */
 #include "kernel.h"
 
 u8 cp866_from_unicode(u32 cp) {
     if (cp < 0x80) return (u8)cp;
-    if (cp >= 0x410 && cp <= 0x42F) return (u8)(0x80 + (cp - 0x410));   /* А-Я */
-    if (cp >= 0x430 && cp <= 0x43F) return (u8)(0xA0 + (cp - 0x430));   /* а-п */
-    if (cp >= 0x440 && cp <= 0x44F) return (u8)(0xE0 + (cp - 0x440));   /* р-я */
+    if (cp >= 0x410 && cp <= 0x42F) return (u8)(0x80 + (cp - 0x410));   /* А-Я (uppercase Cyrillic) */
+    if (cp >= 0x430 && cp <= 0x43F) return (u8)(0xA0 + (cp - 0x430));   /* а-п (lowercase Cyrillic, first half) */
+    if (cp >= 0x440 && cp <= 0x44F) return (u8)(0xE0 + (cp - 0x440));   /* р-я (lowercase Cyrillic, second half) */
     if (cp == 0x401) return 0xF0;   /* Ё */
     if (cp == 0x451) return 0xF1;   /* ё */
     if (cp == 0x2116) return 0xFC;  /* № */
@@ -35,7 +35,7 @@ u8 cp866_from_unicode(u32 cp) {
     return '?';
 }
 
-/* Прочитать один кодпойнт UTF-8 и сдвинуть указатель */
+/* Read one UTF-8 code point and advance the pointer */
 u32 utf8_next(const char **ps) {
     const char *s = *ps;
     u8 c = (u8)*s++;
@@ -49,14 +49,14 @@ u32 utf8_next(const char **ps) {
     return cp;
 }
 
-/* Длина UTF-8 строки в символах */
+/* Length of a UTF-8 string in characters */
 u32 utf8_len(const char *s) {
     u32 n = 0;
     while (*s) { if ((*s & 0xC0) != 0x80) n++; s++; }
     return n;
 }
 
-/* Перекодировать строку целиком; возвращает число символов */
+/* Transcode a whole string; returns the number of characters */
 u32 utf8_to_cp866(const char *s, u8 *out, u32 max) {
     u32 n = 0;
     while (*s && n < max) out[n++] = cp866_from_unicode(utf8_next(&s));

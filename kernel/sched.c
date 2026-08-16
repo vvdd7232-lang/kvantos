@@ -1,4 +1,4 @@
-/* Кооперативно-вытесняющий круговой планировщик (round-robin) */
+/* A cooperative/pre-emptive round-robin scheduler */
 #include "kernel.h"
 
 #define STACK_SIZE 8192
@@ -11,7 +11,7 @@ static int sched_ready = 0;
 task_t *task_current(void) { return current; }
 task_t *task_list(void)    { return tasks; }
 
-/* Список кольцевой - обход строго до возврата в начало */
+/* The list is circular - iterate strictly until back at the start */
 u32 task_count(void) {
     if (!current) return 0;
     u32 fl = irq_save();
@@ -38,7 +38,7 @@ void sched_init(void) {
 
 task_t *task_create(const char *name, void (*entry)(void)) {
     if (!entry) return NULL;
-    if (!current) return NULL;        /* до sched_init() списка ещё нет */
+    if (!current) return NULL;        /* before sched_init() there is no list yet */
     u32 fl = irq_save();
     task_t *t = (task_t *)kmalloc(sizeof(task_t));
     if (!t) { irq_restore(fl); return NULL; }
@@ -51,27 +51,27 @@ task_t *task_create(const char *name, void (*entry)(void)) {
     if (!stack) { kfree(t); irq_restore(fl); return NULL; }
     t->stack_base = (u32)stack;
 
-    /* Кадр должен точно соответствовать context_switch:
-       pop-последовательность там - popfd, edi, esi, ebx, ebp, ret.
-       Значит от вершины стека вверх: eflags, edi, esi, ebx, ebp, entry, task_exit. */
+    /* The frame must match context_switch exactly: its pop sequence is
+       popfd, edi, esi, ebx, ebp, ret. So from the top of the stack
+       upwards: eflags, edi, esi, ebx, ebp, entry, task_exit. */
     u32 *sp = (u32 *)(stack + STACK_SIZE);
-    *--sp = (u32)task_exit;               /* адрес возврата из entry */
-    *--sp = (u32)entry;                   /* сюда прыгнет ret */
+    *--sp = (u32)task_exit;               /* return address out of entry */
+    *--sp = (u32)entry;                   /* ret will jump here */
     *--sp = 0;                            /* ebp */
     *--sp = 0;                            /* ebx */
     *--sp = 0;                            /* esi */
     *--sp = 0;                            /* edi */
-    *--sp = 0x00000202;                   /* EFLAGS с IF=1 (popfd) */
+    *--sp = 0x00000202;                   /* EFLAGS with IF=1 (popfd) */
     t->esp = (u32)sp;
 
-    /* вставка в кольцевой список */
+    /* insertion into the circular list */
     t->next = current->next;
     current->next = t;
     irq_restore(fl);
     return t;
 }
 
-/* Снимаем с кольца одну мёртвую задачу за вызов (не текущую) */
+/* Remove one dead task from the ring per call (never the current one) */
 static void reap_one(void) {
     task_t *p = current;
     for (int i = 0; i < 64; i++) {
@@ -89,14 +89,14 @@ static void reap_one(void) {
     }
 }
 
-/* Круговой поиск следующей готовой задачи, начиная со следующей за текущей */
+/* Circular search for the next ready task, starting after the current one */
 static task_t *pick_next(void) {
     u64 now = timer_ticks();
     task_t *t = current->next;
     for (int i = 0; i < 256; i++) {
         if (t->state == TASK_SLEEPING && now >= t->wake_tick) t->state = TASK_READY;
         if (t->state == TASK_READY) return t;
-        if (t == current) break;      /* полный оборот */
+        if (t == current) break;      /* a full turn */
         t = t->next;
     }
     return (current->state == TASK_READY) ? current : NULL;

@@ -1,19 +1,19 @@
 /* ============================================================
- *  KvantOS - KvFS, простая файловая система на диске
+ *  KvantOS - KvFS, a simple on-disk filesystem
  *
- *  Устроена нарочно примитивно, чтобы её можно было прочитать
- *  целиком за один присест и понять без документации:
+ *  Deliberately primitive so that it can be read end to end in one
+ *  sitting and understood without documentation:
  *
- *    сектор 0            - суперблок (подпись, счётчики)
- *    секторы 1..8        - каталог: 64 записи по 64 байта
- *    секторы 9..         - область данных, выдаётся кусками
+ *    sector 0            - superblock (signature, counters)
+ *    sectors 1..8        - directory: 64 entries of 64 bytes
+ *    sectors 9..         - data area, handed out in chunks
  *
- *  Файл занимает непрерывную цепочку секторов. Фрагментации нет:
- *  при удалении дыра остаётся, а новый файл ищется по принципу
- *  «первый подходящий промежуток». Для системы, где файлы - это
- *  десяток приложений и заметок, этого более чем достаточно.
+ *  A file occupies a contiguous chain of sectors. There is no
+ *  fragmentation: deleting leaves a hole and a new file is placed by
+ *  the "first suitable gap" rule. For a system whose files are a dozen
+ *  applications and notes that is more than enough.
  *
- *  Все числа - little-endian, как их кладёт сам процессор.
+ *  All numbers are little-endian, exactly as the CPU stores them.
  * ============================================================ */
 #include "kernel.h"
 
@@ -21,10 +21,11 @@
 #define KVFS_VERSION   2
 #define SECTOR_SIZE    512
 
-/* Первый мегабайт диска НЕ наш: там живёт загрузчик.
-   Сектор 0 - MBR, секторы 1..2047 - тело GRUB (core.img).
-   Ровно так же поступают обычные системы, начиная первый раздел
-   с отметки 1 МиБ. Всё, что ниже, отсчитывается от этой базы. */
+/* The first megabyte of the disk is NOT ours: the bootloader lives
+   there. Sector 0 is the MBR, sectors 1..2047 hold the body of GRUB
+   (core.img). Ordinary systems do exactly the same, starting their
+   first partition at the 1 MiB mark. Everything below is counted from
+   this base. */
 #define KVFS_BASE      2048
 
 #define DIR_SECTOR     (KVFS_BASE + 1)
@@ -32,14 +33,14 @@
 #define DATA_START     (DIR_SECTOR + DIR_SECTORS)
 #define KVFS_MAX_FILES 64
 
-/* Запись каталога - ровно 64 байта, восемь штук на сектор */
+/* A directory entry is exactly 64 bytes, eight per sector */
 typedef struct {
-    char name[40];      /* имя, дополненное нулями */
-    u32  start;         /* первый сектор данных    */
-    u32  sectors;       /* сколько секторов занято */
-    u32  size;          /* фактический размер, байт */
-    u32  flags;         /* 1 - запись занята, 2 - исполняемый файл */
-    u32  reserved[2];   /* до ровных 64 байт: 8 записей на сектор */
+    char name[40];      /* name, zero padded        */
+    u32  start;         /* first data sector        */
+    u32  sectors;       /* how many sectors are used */
+    u32  size;          /* actual size in bytes     */
+    u32  flags;         /* 1 - entry in use, 2 - executable file */
+    u32  reserved[2];   /* pad to a round 64 bytes: 8 entries per sector */
 } kvfs_dirent_t;
 
 typedef struct {
@@ -51,17 +52,17 @@ typedef struct {
     u32 reserved[3];
 } kvfs_super_t;
 
-/* Проверка на этапе сборки: запись каталога обязана быть ровно 64 байта,
-   иначе образы, собранные sdk/mkdisk.py, читались бы со сдвигом. */
-_Static_assert(sizeof(kvfs_dirent_t) == 64, "запись каталога KvFS должна быть 64 байта");
+/* A build-time check: a directory entry must be exactly 64 bytes,
+   otherwise images built by sdk/mkdisk.py would be read misaligned. */
+_Static_assert(sizeof(kvfs_dirent_t) == 64, "a KvFS directory entry must be 64 bytes");
 
 static kvfs_super_t   super;
 static kvfs_dirent_t  dir[KVFS_MAX_FILES];
 static int mounted = 0;
-static int dev     = -1;         /* индекс диска в драйвере ATA */
+static int dev     = -1;         /* disk index inside the ATA driver */
 
-/* Буфер на один сектор: на стеке 512 байт держать не хочется,
-   стек задачи всего 8 КиБ. */
+/* A one-sector buffer: keeping 512 bytes on the stack is unwise,
+   a task stack is only 8 KiB. */
 static u8 secbuf[SECTOR_SIZE];
 
 int kvfs_mounted(void) { return mounted; }
@@ -88,7 +89,7 @@ static int write_super(void) {
     return ata_write(dev, KVFS_BASE, 1, secbuf);
 }
 
-/* Подключение существующей ФС. Возвращает 0, если на диске KvFS. */
+/* Mount an existing filesystem. Returns 0 when the disk holds KvFS. */
 int kvfs_mount(void) {
     mounted = 0;
     dev = ata_boot_drive();
@@ -96,7 +97,7 @@ int kvfs_mount(void) {
 
     if (ata_read(dev, KVFS_BASE, 1, secbuf) < 0) return -2;
     memcpy(&super, secbuf, sizeof(super));
-    if (super.magic != KVFS_MAGIC) return -3;      /* чужой или пустой диск */
+    if (super.magic != KVFS_MAGIC) return -3;      /* a foreign or empty disk */
     if (super.version != KVFS_VERSION) return -4;
     if (read_dir() < 0) return -2;
 
@@ -104,14 +105,15 @@ int kvfs_mount(void) {
     return 0;
 }
 
-/* Создание новой ФС поверх диска. Стирает каталог, но не данные:
-   секторы с телами файлов просто перестают быть кому-то нужны. */
+/* Create a new filesystem over the disk. Wipes the directory but not
+   the data: the sectors holding file bodies simply stop being
+   referenced by anyone. */
 int kvfs_format(void) {
     dev = ata_boot_drive();
     if (dev < 0) return -1;
 
     u32 total = ata_sectors(dev);
-    if (total < DATA_START + 64) return -5;       /* диск неприлично мал */
+    if (total < DATA_START + 64) return -5;       /* the disk is indecently small */
 
     memset(&super, 0, sizeof(super));
     super.magic         = KVFS_MAGIC;
@@ -134,9 +136,9 @@ static int find_entry(const char *name) {
     return -1;
 }
 
-/* Поиск непрерывного промежутка нужной длины методом «первый подходящий».
-   Занятые области отсортированными не хранятся, поэтому идём по
-   секторам и для каждого кандидата проверяем пересечения. */
+/* Find a contiguous gap of the required length, first-fit style.
+   Used regions are not kept sorted, so we walk the sectors and check
+   every candidate for overlaps. */
 static u32 find_space(u32 need_sectors) {
     u32 candidate = super.data_start;
     u32 limit = super.total_sectors;
@@ -147,14 +149,14 @@ static u32 find_space(u32 need_sectors) {
         for (int i = 0; i < KVFS_MAX_FILES; i++) {
             if (!(dir[i].flags & 1)) continue;
             u32 a = dir[i].start, b = dir[i].start + dir[i].sectors;
-            /* пересекается ли [candidate, candidate+need) с [a, b)? */
+            /* does [candidate, candidate+need) overlap [a, b)? */
             if (candidate < b && a < candidate + need_sectors) {
                 clash = 1;
                 if (b > next) next = b;
             }
         }
         if (!clash) {
-            if (candidate + need_sectors > limit) return 0;   /* места нет */
+            if (candidate + need_sectors > limit) return 0;   /* no room */
             return candidate;
         }
         candidate = next;
@@ -170,8 +172,8 @@ int kvfs_file_count(void) {
     return n;
 }
 
-/* Перебор файлов: заполняет имя, размер и признак исполняемого.
-   Возвращает 0, если запись с таким порядковым номером есть. */
+/* Iterate over files: fills in the name, size and executable flag.
+   Returns 0 when an entry with that ordinal exists. */
 int kvfs_list(int index, char *name, u32 *size, int *is_exec) {
     if (!mounted) return -1;
     int n = 0;
@@ -199,7 +201,7 @@ u32 kvfs_size(const char *name) {
     return i < 0 ? 0 : dir[i].size;
 }
 
-/* Запись файла целиком. Существующий файл с тем же именем заменяется. */
+/* Write a whole file. An existing file with the same name is replaced. */
 int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
     if (!mounted) return -1;
     if (!name || !name[0]) return -4;
@@ -210,12 +212,12 @@ int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
 
     int slot = find_entry(name);
     if (slot >= 0) {
-        /* Перезапись: если новый файл влезает в старое место - используем его */
+        /* Rewrite: if the new file fits in the old place, reuse it */
         if (need <= dir[slot].sectors) {
             dir[slot].size  = size;
             dir[slot].flags = 1 | (is_exec ? 2 : 0);
         } else {
-            dir[slot].flags = 0;          /* освобождаем и ищем заново */
+            dir[slot].flags = 0;          /* release it and search again */
             slot = -1;
         }
     }
@@ -223,10 +225,10 @@ int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
     if (slot < 0) {
         for (int i = 0; i < KVFS_MAX_FILES; i++)
             if (!(dir[i].flags & 1)) { slot = i; break; }
-        if (slot < 0) return -6;          /* каталог переполнен */
+        if (slot < 0) return -6;          /* the directory is full */
 
         u32 start = find_space(need);
-        if (!start) return -7;            /* нет непрерывного места */
+        if (!start) return -7;            /* no contiguous space */
 
         memset(&dir[slot], 0, sizeof(dir[slot]));
         strncpy(dir[slot].name, name, 40);
@@ -237,7 +239,7 @@ int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
         dir[slot].flags   = 1 | (is_exec ? 2 : 0);
     }
 
-    /* Пишем посекторно: последний сектор дополняем нулями */
+    /* Written sector by sector: the last one is zero padded */
     const u8 *p = (const u8 *)data;
     for (u32 s = 0; s < need; s++) {
         u32 chunk = size - s * SECTOR_SIZE;
@@ -253,7 +255,7 @@ int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
     return 0;
 }
 
-/* Чтение файла в буфер. Возвращает число прочитанных байт или < 0. */
+/* Read a file into a buffer. Returns the number of bytes read, or < 0. */
 int kvfs_read(const char *name, void *buf, u32 max) {
     if (!mounted) return -1;
     int i = find_entry(name);
@@ -284,7 +286,7 @@ int kvfs_delete(const char *name) {
     return 0;
 }
 
-/* Сведения о занятости для команды df и окна установщика */
+/* Usage information for the df command and the installer window */
 void kvfs_stats(u32 *total_mb, u32 *used_kb, u32 *files) {
     if (total_mb) *total_mb = mounted ? (super.total_sectors >> 11) : 0;
     if (files)    *files    = mounted ? (u32)kvfs_file_count() : 0;
@@ -293,20 +295,20 @@ void kvfs_stats(u32 *total_mb, u32 *used_kb, u32 *files) {
         if (mounted)
             for (int i = 0; i < KVFS_MAX_FILES; i++)
                 if (dir[i].flags & 1) sec += dir[i].sectors;
-        *used_kb = sec / 2;              /* 512 байт = полкилобайта */
+        *used_kb = sec / 2;              /* 512 bytes = half a kilobyte */
     }
 }
 
 const char *kvfs_error(int code) {
     switch (code) {
-        case  0: return "успешно";
-        case -1: return "файловая система не подключена";
-        case -2: return "ошибка ввода-вывода диска";
-        case -3: return "файл не найден";
-        case -4: return "пустое имя файла";
-        case -5: return "имя длиннее 39 символов";
-        case -6: return "каталог переполнен (максимум 64 файла)";
-        case -7: return "не хватает непрерывного места на диске";
-        default: return "неизвестная ошибка";
+        case  0: return T("success", "успешно");
+        case -1: return T("filesystem is not mounted", "файловая система не подключена");
+        case -2: return T("disk I/O error", "ошибка ввода-вывода диска");
+        case -3: return T("file not found", "файл не найден");
+        case -4: return T("empty file name", "пустое имя файла");
+        case -5: return T("name longer than 39 characters", "имя длиннее 39 символов");
+        case -6: return T("directory is full (64 files maximum)", "каталог переполнен (максимум 64 файла)");
+        case -7: return T("not enough contiguous space on the disk", "не хватает непрерывного места на диске");
+        default: return T("unknown error", "неизвестная ошибка");
     }
 }

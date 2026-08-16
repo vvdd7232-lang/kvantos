@@ -1,8 +1,8 @@
 /* ============================================================
- *  KvantOS - текстовая консоль.
- *  Работает в двух режимах: классический VGA 80x25 (0xB8000)
- *  и программная отрисовка глифов в линейный фреймбуфер.
- *  Строка 0 зарезервирована под статус-бар.
+ *  KvantOS - the text console.
+ *  Works in two modes: classic VGA 80x25 (0xB8000) and software glyph
+ *  rendering into the linear framebuffer.
+ *  Row 0 is reserved for the status bar.
  * ============================================================ */
 #include "kernel.h"
 
@@ -13,10 +13,10 @@ extern const u8 kv_font8x16[256 * 16];
 
 static u8  color = VGA_COLOR(VGA_LGREY, VGA_BLACK);
 static u32 row = TOP_ROW, col = 0;
-static u32 cols = 80, rows = 25;     /* размер сетки символов */
-static int gfx = 0;                  /* 1 - рисуем в фреймбуфер */
+static u32 cols = 80, rows = 25;     /* character grid size */
+static int gfx = 0;                  /* 1 - drawing into the framebuffer */
 
-/* Палитра VGA в RGB для графического режима */
+/* The VGA palette in RGB for graphics mode */
 static const u8 pal[16][3] = {
     {  0,  0,  0}, {  0,  0,170}, {  0,170,  0}, {  0,170,170},
     {170,  0,  0}, {170,  0,170}, {170, 85,  0}, {170,170,170},
@@ -28,7 +28,7 @@ static inline u16 cell(char c, u8 cl) { return (u16)(u8)c | ((u16)cl << 8); }
 static inline u32 fg_rgb(u8 cl) { const u8 *p = pal[cl & 0x0F]; return fb_rgb(p[0], p[1], p[2]); }
 static inline u32 bg_rgb(u8 cl) { const u8 *p = pal[(cl >> 4) & 0x0F]; return fb_rgb(p[0], p[1], p[2]); }
 
-/* ---- загрузка пользовательского шрифта в плоскость 2 видеопамяти ---- */
+/* ---- loading a custom font into video memory plane 2 ---- */
 static void vga_load_font(const u8 *font) {
     u32 fl = irq_save();
     outb(0x3C4, 0x00); outb(0x3C5, 0x01);
@@ -57,7 +57,7 @@ static void vga_load_font(const u8 *font) {
 void vga_set_color(u8 c) { color = c; }
 u8   vga_get_color(void) { return color; }
 
-/* ---- курсор ---- */
+/* ---- cursor ---- */
 static void cursor_hw(void) {
     u16 pos = (u16)(row * cols + col);
     outb(0x3D4, 0x0F); outb(0x3D5, (u8)(pos & 0xFF));
@@ -79,7 +79,7 @@ static void cursor_enable(void) {
     outb(0x3D4, 0x0B); outb(0x3D5, (inb(0x3D5) & 0xE0) | 15);
 }
 
-/* ---- очистка / прокрутка ---- */
+/* ---- clearing / scrolling ---- */
 void vga_clear(void) {
     u32 fl = irq_save();
     if (gfx) {
@@ -108,7 +108,7 @@ static void scroll(void) {
     row = rows - 1;
 }
 
-/* ---- вывод символа CP866 ---- */
+/* ---- printing a CP866 character ---- */
 static void put_cell(u32 x, u32 y, u8 ch) {
     if (gfx) fb_glyph((i32)(x * 8), (i32)(y * 16), ch, fg_rgb(color), bg_rgb(color));
     else VGA_MEM[y * cols + x] = cell((char)ch, color);
@@ -116,7 +116,7 @@ static void put_cell(u32 x, u32 y, u8 ch) {
 
 static void vga_putb(u8 c) {
     u32 fl = irq_save();
-    if (gfx) cursor_gfx(0);              /* стереть курсор */
+    if (gfx) cursor_gfx(0);              /* erase the cursor */
     switch (c) {
         case '\n': col = 0; row++; break;
         case '\r': col = 0; break;
@@ -139,7 +139,7 @@ static void vga_putb(u8 c) {
     irq_restore(fl);
 }
 
-/* Потоковый декодер UTF-8 */
+/* A streaming UTF-8 decoder */
 void vga_putc(char ch) {
     static u32 pending = 0;
     static int need = 0;
@@ -162,7 +162,7 @@ void vga_putc(char ch) {
 
 void vga_puts(const char *s) { while (*s) vga_putc(*s++); }
 
-/* ---- статус-строка ---- */
+/* ---- status line ---- */
 void vga_status(const char *left, const char *right, u8 cl) {
     u8 lbuf[256], rbuf[256];
     u32 lim = cols < 256 ? cols : 255;
@@ -192,8 +192,8 @@ void vga_status(const char *left, const char *right, u8 cl) {
 void vga_panic_screen(void) {
     color = VGA_COLOR(VGA_WHITE, VGA_RED);
     if (gfx) {
-        fb_set_target(NULL);          /* задний буфер мог быть освобождён */
-        /* после смены разрешения сетка символов могла устареть */
+        fb_set_target(NULL);          /* the back buffer may have been released */
+        /* after a resolution change the character grid may be stale */
         cols = fb_width() / 8;
         rows = fb_height() / 16;
         fb_clear(bg_rgb(color));
@@ -203,7 +203,7 @@ void vga_panic_screen(void) {
     row = TOP_ROW; col = 0;
 }
 
-/* Вернуться в консоль после графической оболочки */
+/* Return to the console after the graphical shell */
 void vga_text_mode_restore(void) {
     if (gfx) {
         fb_set_target(NULL);
@@ -213,7 +213,7 @@ void vga_text_mode_restore(void) {
     vga_cursor_update();
 }
 
-/* Пересчитать сетку символов после смены видеорежима */
+/* Recompute the character grid after a video mode change */
 void fb_console_resync(void) {
     if (!fb_active()) return;
     gfx  = 1;

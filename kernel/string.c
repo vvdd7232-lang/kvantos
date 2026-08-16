@@ -4,7 +4,7 @@ void *memset(void *d, int c, size_t n) {
     u8 *p = (u8 *)d;
     u8 v = (u8)c;
 
-    /* Тот же приём: выровненную середину заполняем словами. */
+    /* Same trick: fill the aligned middle word by word. */
     if (n >= 8) {
         while (((u32)p & 3u) && n) { *p++ = v; n--; }
         u32 w = ((u32)v << 24) | ((u32)v << 16) | ((u32)v << 8) | v;
@@ -20,9 +20,9 @@ void *memset(void *d, int c, size_t n) {
 void *memcpy(void *d, const void *s, size_t n) {
     u8 *dp = (u8 *)d; const u8 *sp = (const u8 *)s;
 
-    /* Побайтовое копирование - это в 4 раза больше обращений к памяти,
-       чем нужно. Когда оба указателя выровнены, идём словами по 4 байта.
-       Функция используется везде, включая работу с задним буфером. */
+    /* Byte-by-byte copying makes four times as many memory accesses as
+       necessary. When both pointers are aligned we move 4-byte words.
+       This function is used everywhere, including the back buffer. */
     if ((((u32)dp | (u32)sp) & 3u) == 0) {
         u32 *dw = (u32 *)dp; const u32 *sw = (const u32 *)sp;
         size_t words = n >> 2;

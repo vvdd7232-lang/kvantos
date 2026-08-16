@@ -1,5 +1,5 @@
 ; ============================================================
-;  KvantOS - заглушки исключений (ISR) и аппаратных прерываний (IRQ)
+;  KvantOS - exception (ISR) and hardware interrupt (IRQ) stubs
 ; ============================================================
 bits 32
 
@@ -64,7 +64,7 @@ ISR_NOERR 28
 ISR_NOERR 29
 ISR_ERR   30
 ISR_NOERR 31
-ISR_NOERR 128           ; int 0x80 - системный вызов
+ISR_NOERR 128           ; int 0x80 - system call
 
 IRQ 0,  32
 IRQ 1,  33

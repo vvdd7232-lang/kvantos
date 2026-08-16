@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 # ============================================================
-#  KvantOS SDK - подготовка диска с файловой системой KvFS
+#  KvantOS SDK - preparing a disk with the KvFS filesystem
 #
-#  Создаёт образ диска и записывает в него приложения, чтобы
-#  система увидела их сразу после загрузки - без ручной возни
-#  в оболочке.
+#  Creates a disk image and writes applications into it, so that the
+#  system sees them right after boot - no manual work in the shell.
 #
-#  Примеры:
-#     python3 mkdisk.py disk.img 64                  - пустой диск 64 МиБ
-#     python3 mkdisk.py disk.img 64 build/clock.kapp - сразу с программой
-#     python3 mkdisk.py --list disk.img              - что внутри
+#  Examples:
+#     python3 mkdisk.py disk.img 64                  - empty 64 MiB disk
+#     python3 mkdisk.py disk.img 64 build/clock.kapp - with a program
+#     python3 mkdisk.py --list disk.img              - show the contents
 #
-#  Раскладка (должна совпадать с kernel/kvfs.c):
-#     сектор 0     - суперблок
-#     секторы 1-8  - каталог, 64 записи по 64 байта
-#     секторы 9+   - данные
+#  Layout (must match kernel/kvfs.c):
+#     sector 0     - superblock
+#     sectors 1-8  - directory, 64 entries of 64 bytes
+#     sectors 9+   - data
 # ============================================================
 import os
 import struct
@@ -23,8 +22,8 @@ import sys
 SECTOR       = 512
 MAGIC        = 0x5346564B          # "KVFS"
 VERSION      = 2
-# Первый мегабайт диска отдан загрузчику (MBR + тело GRUB),
-# поэтому файловая система начинается с сектора 2048.
+# The first megabyte of the disk belongs to the bootloader (MBR + the
+# GRUB body), so the filesystem starts at sector 2048.
 KVFS_BASE    = 2048
 DIR_SECTOR   = KVFS_BASE + 1
 DIR_SECTORS  = 8
@@ -38,39 +37,39 @@ FLAG_EXEC = 2
 
 
 def fail(msg):
-    print(f"  ОШИБКА: {msg}", file=sys.stderr)
+    print(f"  ERROR: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 class KvFS:
-    """Образ диска с файловой системой KvFS."""
+    """A disk image holding the KvFS filesystem."""
 
     def __init__(self, path, size_mb=None):
         self.path = path
         if size_mb is not None:
             self.total = (size_mb * 1024 * 1024) // SECTOR
             if self.total < DATA_START + 64:
-                fail("диск меньше минимального размера")
+                fail("the disk is smaller than the minimum size")
             with open(path, "wb") as f:
                 f.truncate(self.total * SECTOR)
             self.entries = [None] * MAX_FILES
             self._flush()
         else:
             if not os.path.exists(path):
-                fail(f"файл {path} не найден")
+                fail(f"file {path} not found")
             self.total = os.path.getsize(path) // SECTOR
             self._load()
 
-    # ---------- чтение существующего образа ----------
+    # ---------- reading an existing image ----------
     def _load(self):
         with open(self.path, "rb") as f:
             f.seek(KVFS_BASE * SECTOR)
             sb = f.read(SECTOR)
             magic, ver, total, data_start, count = struct.unpack("<IIIII", sb[:20])
             if magic != MAGIC:
-                fail("на образе нет файловой системы KvFS (сначала создайте её)")
+                fail("the image carries no KvFS filesystem (create it first)")
             if ver != VERSION:
-                fail(f"версия ФС {ver}, утилита понимает {VERSION}")
+                fail(f"filesystem version {ver}, this tool understands {VERSION}")
             self.total = total
             f.seek(DIR_SECTOR * SECTOR)
             raw = f.read(DIR_SECTORS * SECTOR)
@@ -84,7 +83,7 @@ class KvFS:
                 {"name": name, "start": start, "sectors": sectors,
                  "size": size, "flags": flags} if flags & FLAG_USED else None)
 
-    # ---------- запись служебных областей ----------
+    # ---------- writing the service areas ----------
     def _flush(self):
         used = sum(1 for e in self.entries if e)
         sb = struct.pack("<IIIII", MAGIC, VERSION, self.total, DATA_START, used)
@@ -106,7 +105,7 @@ class KvFS:
             f.seek(DIR_SECTOR * SECTOR)
             f.write(bytes(raw))
 
-    # ---------- поиск непрерывного места ----------
+    # ---------- looking for a contiguous run ----------
     def _find_space(self, need):
         candidate = DATA_START
         for _ in range(MAX_FILES + 1):
@@ -121,17 +120,17 @@ class KvFS:
                     nxt = max(nxt, b)
             if not clash:
                 if candidate + need > self.total:
-                    fail("на диске нет непрерывного места")
+                    fail("no contiguous free space left on the disk")
                 return candidate
             candidate = nxt
-        fail("не удалось разместить файл")
+        fail("could not place the file")
 
-    # ---------- добавление файла ----------
+    # ---------- adding a file ----------
     def add(self, name, data, is_exec):
         if len(name.encode("utf-8")) >= NAME_LEN:
-            fail(f"имя '{name}' длиннее {NAME_LEN - 1} байт")
+            fail(f"the name '{name}' is longer than {NAME_LEN - 1} bytes")
 
-        # существующий файл с тем же именем убираем
+        # an existing file with the same name is removed
         for i, e in enumerate(self.entries):
             if e and e["name"] == name:
                 self.entries[i] = None
@@ -139,7 +138,7 @@ class KvFS:
         need = max(1, (len(data) + SECTOR - 1) // SECTOR)
         slot = next((i for i, e in enumerate(self.entries) if e is None), None)
         if slot is None:
-            fail("каталог переполнен (максимум 64 файла)")
+            fail("the directory is full (64 files maximum)")
 
         start = self._find_space(need)
         self.entries[slot] = {
@@ -160,15 +159,15 @@ class KvFS:
 def do_list(path):
     fs = KvFS(path)
     files = fs.listing()
-    print(f"\n  Образ: {path}")
-    print(f"  Объём: {fs.total * SECTOR // (1024 * 1024)} МиБ, "
-          f"файлов: {len(files)} из {MAX_FILES}\n")
+    print(f"\n  Image: {path}")
+    print(f"  Size: {fs.total * SECTOR // (1024 * 1024)} MiB, "
+          f"files: {len(files)} of {MAX_FILES}\n")
     if not files:
-        print("  (пусто)\n")
+        print("  (empty)\n")
         return
-    print("    РАЗМЕР  ТИП    СЕКТОРЫ      ИМЯ")
+    print("      SIZE  TYPE   SECTORS      NAME")
     for e in files:
-        kind = "прог." if e["flags"] & FLAG_EXEC else "файл "
+        kind = "prog." if e["flags"] & FLAG_EXEC else "file "
         print(f"   {e['size']:7}  {kind}  {e['start']:5}+{e['sectors']:-4} "
               f"  {e['name']}")
     print()
@@ -182,43 +181,43 @@ def main():
 
     if args[0] == "--list":
         if len(args) < 2:
-            fail("укажите образ: mkdisk.py --list disk.img")
+            fail("specify an image: mkdisk.py --list disk.img")
         do_list(args[1])
         return
 
-    # добавление в существующий образ
+    # adding to an existing image
     if args[0] == "--add":
         if len(args) < 3:
-            fail("использование: mkdisk.py --add disk.img файл...")
+            fail("usage: mkdisk.py --add disk.img file...")
         fs = KvFS(args[1])
         for src in args[2:]:
             add_file(fs, src)
         do_list(args[1])
         return
 
-    # создание нового образа
+    # creating a new image
     path = args[0]
     size_mb = int(args[1]) if len(args) > 1 else 64
     files = args[2:]
 
     fs = KvFS(path, size_mb)
-    print(f"\n  Создан образ {path} ({size_mb} МиБ), файловая система KvFS")
+    print(f"\n  Created image {path} ({size_mb} MiB) with a KvFS filesystem")
     for src in files:
         add_file(fs, src)
     do_list(path)
-    print("  Запуск:  qemu-system-i386 -cdrom release/kvantos.iso "
+    print("  Run:  qemu-system-i386 -cdrom release/kvantos.iso "
           f"-hda {path} -m 256\n")
 
 
 def add_file(fs, src):
     if not os.path.exists(src):
-        fail(f"файл {src} не найден")
+        fail(f"file {src} not found")
     with open(src, "rb") as f:
         data = f.read()
     name = os.path.basename(src)
     is_exec = name.endswith(".kapp") or data[:4] == b"KAPP"
     fs.add(name, data, is_exec)
-    print(f"    + {name}  ({len(data)} байт{', приложение' if is_exec else ''})")
+    print(f"    + {name}  ({len(data)} bytes{', application' if is_exec else ''})")
 
 
 if __name__ == "__main__":

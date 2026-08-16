@@ -1,6 +1,6 @@
 /* ============================================================
- *  KvantOS - шина PCI: перечисление устройств, чтение BAR
- *  Конфигурационный доступ через порты 0xCF8 / 0xCFC.
+ *  KvantOS - PCI bus: device enumeration, BAR reading
+ *  Configuration access through ports 0xCF8 / 0xCFC.
  * ============================================================ */
 #include "kernel.h"
 
@@ -52,51 +52,51 @@ const char *pci_vendor_name(u16 vid) {
         case 0x10EC: return "Realtek";
         case 0x111D: return "IDT";
         case 0x1274: return "Ensoniq";
-        default: return "неизвестный";
+        default: return T("unknown", "неизвестный");
     }
 }
 
 const char *pci_class_name(u8 cls, u8 sub) {
     switch (cls) {
-        case 0x00: return "устройство до классификации";
+        case 0x00: return T("pre-classification device", "устройство до классификации");
         case 0x01:
             switch (sub) {
-                case 0x01: return "IDE-контроллер";
-                case 0x06: return "SATA-контроллер";
-                case 0x08: return "NVMe-контроллер";
-                default: return "контроллер накопителей";
+                case 0x01: return T("IDE controller", "IDE-контроллер");
+                case 0x06: return T("SATA controller", "SATA-контроллер");
+                case 0x08: return T("NVMe controller", "NVMe-контроллер");
+                default: return T("storage controller", "контроллер накопителей");
             }
-        case 0x02: return "сетевой контроллер";
+        case 0x02: return T("network controller", "сетевой контроллер");
         case 0x03:
             switch (sub) {
-                case 0x00: return "VGA-совместимый видеоадаптер";
-                case 0x01: return "XGA-видеоадаптер";
-                case 0x02: return "3D-видеоадаптер";
-                default: return "видеоадаптер";
+                case 0x00: return T("VGA-compatible display adapter", "VGA-совместимый видеоадаптер");
+                case 0x01: return T("XGA display adapter", "XGA-видеоадаптер");
+                case 0x02: return T("3D display adapter", "3D-видеоадаптер");
+                default: return T("display adapter", "видеоадаптер");
             }
-        case 0x04: return "мультимедиа";
-        case 0x05: return "контроллер памяти";
+        case 0x04: return T("multimedia", "мультимедиа");
+        case 0x05: return T("memory controller", "контроллер памяти");
         case 0x06:
             switch (sub) {
-                case 0x00: return "мост процессор-шина";
-                case 0x01: return "мост PCI-ISA";
-                case 0x04: return "мост PCI-PCI";
-                default: return "мост";
+                case 0x00: return T("host bridge", "мост процессор-шина");
+                case 0x01: return T("PCI-ISA bridge", "мост PCI-ISA");
+                case 0x04: return T("PCI-PCI bridge", "мост PCI-PCI");
+                default: return T("bridge", "мост");
             }
-        case 0x07: return "контроллер связи";
-        case 0x08: return "системное устройство";
-        case 0x09: return "устройство ввода";
+        case 0x07: return T("communication controller", "контроллер связи");
+        case 0x08: return T("system device", "системное устройство");
+        case 0x09: return T("input device", "устройство ввода");
         case 0x0C:
             switch (sub) {
-                case 0x03: return "USB-контроллер";
-                default: return "последовательная шина";
+                case 0x03: return T("USB controller", "USB-контроллер");
+                default: return T("serial bus", "последовательная шина");
             }
-        case 0x0D: return "беспроводной контроллер";
-        default: return "прочее устройство";
+        case 0x0D: return T("wireless controller", "беспроводной контроллер");
+        default: return T("other device", "прочее устройство");
     }
 }
 
-/* Понятное имя для известных видеоадаптеров */
+/* Friendly name for well-known display adapters */
 const char *pci_gpu_model(u16 vid, u16 did) {
     if (vid == 0x1234 && did == 0x1111) return "QEMU Standard VGA (Bochs VBE)";
     if (vid == 0x1B36 && did == 0x0100) return "QXL paravirtual GPU";
@@ -107,7 +107,7 @@ const char *pci_gpu_model(u16 vid, u16 did) {
     if (vid == 0x8086) return "Intel Graphics";
     if (vid == 0x10DE) return "NVIDIA GPU";
     if (vid == 0x1002) return "AMD Radeon";
-    return "видеоадаптер";
+    return T("display adapter", "видеоадаптер");
 }
 
 static void probe_function(u8 bus, u8 slot, u8 func) {
@@ -131,7 +131,7 @@ static void probe_function(u8 bus, u8 slot, u8 func) {
     d->header_type = (u8)((hdr >> 16) & 0xFF);
     d->irq = pci_read8(bus, slot, func, 0x3C);
 
-    /* базовые адресные регистры */
+    /* base address registers */
     for (int i = 0; i < 6; i++) {
         u32 bar = pci_read32(bus, slot, func, (u8)(0x10 + i * 4));
         d->bar[i] = bar;
@@ -148,7 +148,7 @@ static void probe_slot(u8 bus, u8 slot) {
     probe_function(bus, slot, 0);
 
     u8 hdr = pci_read8(bus, slot, 0, 0x0E);
-    if (hdr & 0x80)                         /* многофункциональное устройство */
+    if (hdr & 0x80)                         /* multi-function device */
         for (u8 f = 1; f < 8; f++)
             probe_function(bus, slot, f);
 }
@@ -156,7 +156,7 @@ static void probe_slot(u8 bus, u8 slot) {
 void pci_init(void) {
     dev_count = 0;
     gpu_index = -1;
-    /* полный перебор: 256 шин x 32 слота */
+    /* brute force: 256 buses x 32 slots */
     for (u32 bus = 0; bus < 256; bus++)
         for (u8 slot = 0; slot < 32; slot++)
             probe_slot((u8)bus, slot);
@@ -166,7 +166,7 @@ u32 pci_count(void) { return dev_count; }
 pci_dev_t *pci_get(u32 i) { return i < dev_count ? &devices[i] : NULL; }
 pci_dev_t *pci_gpu(void) { return gpu_index >= 0 ? &devices[gpu_index] : NULL; }
 
-/* Найти первый memory-BAR (кандидат на линейный буфер кадра) */
+/* Find the first memory BAR (a candidate for the linear framebuffer) */
 u32 pci_bar_mem(const pci_dev_t *d, int *which) {
     for (int i = 0; i < 6; i++) {
         if (d->bar_is_io[i]) continue;
@@ -177,7 +177,7 @@ u32 pci_bar_mem(const pci_dev_t *d, int *which) {
     return 0;
 }
 
-/* Определить размер BAR: записать все единицы, прочитать маску, вернуть обратно */
+/* Determine the BAR size: write all ones, read the mask, restore it */
 u32 pci_bar_size(pci_dev_t *d, int idx) {
     u8 off = (u8)(0x10 + idx * 4);
     u32 orig = pci_read32(d->bus, d->slot, d->func, off);
@@ -189,7 +189,7 @@ u32 pci_bar_size(pci_dev_t *d, int idx) {
     return (~mask) + 1;
 }
 
-/* Включить у устройства обработку памяти и bus-master */
+/* Enable memory decoding and bus mastering on the device */
 void pci_enable_device(pci_dev_t *d) {
     u32 cmd = pci_read32(d->bus, d->slot, d->func, 0x04);
     cmd |= 0x07;            /* I/O space | memory space | bus master */

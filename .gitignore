@@ -1,24 +1,24 @@
-# --- промежуточные результаты сборки ---
+# --- intermediate build results ---
 build/
 sdk/build/
 *.o
 *.d
 *.elf
 
-# --- готовые образы: собираются командой make, а к релизу
-#     прикладываются отдельным архивом, чтобы не раздувать историю ---
+# --- finished images: they are produced by make and attached to a release
+#     as a separate archive, so as not to bloat the history ---
 release/*.iso
 release/*.img
 release/*.bin
 release/apps/*.kapp
 
-# --- мусор редакторов ---
+# --- editor litter ---
 *~
 .*.swp
 .DS_Store
 
-# Архив релиза
+# The release archive
 kvantos-*.tar.gz
 
-# Workflow лежит в ci/ — переносится в .github/workflows вручную
+# The workflow lives in ci/ and is copied to .github/workflows by hand
 .github/

@@ -1,27 +1,27 @@
 #!/bin/bash
 # ============================================================
-#  KvantOS - вложить приложения в загрузочный образ
+#  KvantOS - embed applications into the boot image
 #
-#  Самый простой способ доставить .kapp в систему: положить его
-#  внутрь ISO. Диск, сеть и флешка не нужны - программа окажется
-#  в системе сразу после загрузки.
+#  The simplest way to deliver a .kapp to the system: put it inside
+#  the ISO. No disk, no network and no flash drive are needed - the
+#  program is there right after boot.
 #
-#  Использование:
-#      ./sdk/addapp.sh моя_игра.kapp [ещё.kapp ...]
+#  Usage:
+#      ./sdk/addapp.sh my_game.kapp [more.kapp ...]
 #
-#  Итог: release/kvantos.iso и release/kvantos-floppy.img,
-#  в которых лежат ваши приложения.
+#  Result: release/kvantos.iso and release/kvantos-floppy.img with
+#  your applications inside.
 # ============================================================
 set -e
 
-cd "$(dirname "$0")/.."          # корень проекта
+cd "$(dirname "$0")/.."          # project root
 
 if [ $# -eq 0 ]; then
-    echo "Использование: ./sdk/addapp.sh файл.kapp [файл2.kapp ...]"
+    echo "Usage: ./sdk/addapp.sh file.kapp [file2.kapp ...]"
     echo
-    echo "Приложения будут вложены в загрузочный образ."
-    echo "Сейчас в образе:"
-    ls -1 release/apps/*.kapp 2>/dev/null | sed 's|release/apps/|  |' || echo "  (пусто)"
+    echo "The applications will be embedded into the boot image."
+    echo "Currently in the image:"
+    ls -1 release/apps/*.kapp 2>/dev/null | sed 's|release/apps/|  |' || echo "  (empty)"
     exit 1
 fi
 
@@ -29,22 +29,22 @@ mkdir -p release/apps
 
 for f in "$@"; do
     if [ ! -f "$f" ]; then
-        echo "  ОШИБКА: файл '$f' не найден"
+        echo "  ERROR: file '$f' not found"
         exit 1
     fi
-    # Проверяем подпись: чтобы не вложить случайно не тот файл
+    # Check the signature so that a wrong file is not embedded by accident
     sig=$(head -c 4 "$f")
     if [ "$sig" != "KAPP" ]; then
-        echo "  ОШИБКА: '$f' не приложение KvantOS (нет подписи KAPP)"
-        echo "  Соберите его через sdk/mkkapp.py"
+        echo "  ERROR: '$f' is not a KvantOS application (no KAPP signature)"
+        echo "  Build it with sdk/mkkapp.py"
         exit 1
     fi
     name=$(basename "$f")
     cp "$f" "release/apps/$name"
-    echo "  + $name ($(stat -c%s "$f") байт)"
+    echo "  + $name ($(stat -c%s "$f") bytes)"
 done
 
-# grub.cfg перечисляет модули поимённо - перегенерируем этот список
+# grub.cfg lists the modules by name - regenerate that list
 python3 - <<'PY'
 import glob, os, re
 
@@ -52,15 +52,15 @@ apps = sorted(os.path.basename(p) for p in glob.glob("release/apps/*.kapp"))
 lines = "".join(f"    module /boot/apps/{a} {a}\n" for a in apps)
 
 cfg = open("grub/grub.cfg").read()
-# убираем прежние строки module и вставляем свежие после каждого multiboot
+# drop the old module lines and insert fresh ones after each multiboot
 cfg = re.sub(r"^ *module /boot/apps/.*\n", "", cfg, flags=re.M)
 cfg = re.sub(r"(    multiboot /boot/kvant\.bin(?: text)?\n)(?!.*safe)",
              lambda m: m.group(1) + lines, cfg)
 open("grub/grub.cfg", "w").write(cfg)
-print(f"  grub.cfg: {len(apps)} приложений в меню")
+print(f"  grub.cfg: {len(apps)} application(s) in the menu")
 PY
 
-echo "  Пересборка образов..."
+echo "  Rebuilding the images..."
 touch kernel/main.c
 make >/dev/null 2>&1
 rm -f build/kvantos.iso
@@ -68,8 +68,8 @@ make iso  >/dev/null 2>&1
 make floppy >/dev/null 2>&1
 
 echo
-echo "  ГОТОВО."
-echo "    release/kvantos.iso          - записать на диск/флешку или подключить в VMware"
-echo "    release/kvantos-floppy.img   - запасной вариант"
+echo "  DONE."
+echo "    release/kvantos.iso          - burn to a disc/USB stick or attach in VMware"
+echo "    release/kvantos-floppy.img   - the fallback option"
 echo
-echo "  В системе: guimenu -> клавиша G -> ваша программа в списке."
+echo "  Inside the system: guimenu -> key G -> your program is in the list."

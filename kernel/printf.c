@@ -1,4 +1,4 @@
-/* Мини-printf ядра: %d %i %u %x %X %p %s %c %% + ширина с нулями (%08x) */
+/* The kernel mini-printf: %d %i %u %x %X %p %s %c %% + zero-padded width (%08x) */
 #include "kernel.h"
 
 void kputc(char c) { vga_putc(c); serial_putc(c); }
@@ -70,8 +70,8 @@ void ksnprintf(char *buf, size_t size, const char *fmt, ...) {
     if (size) buf[s.pos < size ? s.pos : size - 1] = 0;
 }
 
-/* Вариант с уже собранным списком аргументов: нужен таблице
-   системных вызовов, где format() сама разбирает свои «...». */
+/* Variant taking an already-built argument list: needed by the
+   syscall table, where format() parses its own "..." arguments. */
 void kvsnprintf_v(char *buf, size_t size, const char *fmt, va_list ap) {
     sbuf_t s = { buf, size, 0 };
     kvprintf(emit_buf, &s, fmt, ap);

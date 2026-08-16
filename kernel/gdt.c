@@ -1,4 +1,4 @@
-/* Глобальная таблица дескрипторов + TSS */
+/* Global descriptor table + TSS */
 #include "kernel.h"
 
 struct gdt_entry {
@@ -43,11 +43,11 @@ void gdt_init(void) {
     gp.limit = sizeof(gdt) - 1;
     gp.base  = (u32)&gdt;
 
-    gdt_set(0, 0, 0, 0, 0);                    /* нулевой */
-    gdt_set(1, 0, 0xFFFFF, 0x9A, 0xCF);        /* код ядра   0x08 */
-    gdt_set(2, 0, 0xFFFFF, 0x92, 0xCF);        /* данные ядра 0x10 */
-    gdt_set(3, 0, 0xFFFFF, 0xFA, 0xCF);        /* код user   0x18 */
-    gdt_set(4, 0, 0xFFFFF, 0xF2, 0xCF);        /* данные user 0x20 */
+    gdt_set(0, 0, 0, 0, 0);                    /* null */
+    gdt_set(1, 0, 0xFFFFF, 0x9A, 0xCF);        /* kernel code 0x08 */
+    gdt_set(2, 0, 0xFFFFF, 0x92, 0xCF);        /* kernel data 0x10 */
+    gdt_set(3, 0, 0xFFFFF, 0xFA, 0xCF);        /* user code   0x18 */
+    gdt_set(4, 0, 0xFFFFF, 0xF2, 0xCF);        /* user data   0x20 */
 
     memset(&tss, 0, sizeof(tss));
     tss.ss0  = 0x10;

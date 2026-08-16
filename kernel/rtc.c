@@ -1,4 +1,4 @@
-/* Часы реального времени (CMOS) */
+/* Real-time clock (CMOS) */
 #include "kernel.h"
 
 #define CMOS_ADDR 0x70

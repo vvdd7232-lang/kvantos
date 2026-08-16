@@ -1,20 +1,20 @@
 # ============================================================
-#  KvantOS SDK - сборка приложений .kapp
+#  KvantOS SDK - building .kapp applications
 #
-#  make            - собрать все примеры из apps/
-#  make apps/имя.kapp - собрать одно приложение
-#  make clean      - убрать за собой
+#  make            - build every sample in apps/
+#  make apps/name.kapp - build a single application
+#  make clean      - clean up
 #
-#  Готовые .kapp кладутся в build/ и заодно в ../release/apps,
-#  откуда их можно записать в образ диска.
+#  Finished .kapp files land in build/ and also in ../release/apps,
+#  from where they can be written into a disk image.
 # ============================================================
 CC  := gcc
 LD  := ld
 
 GCC_INC := $(shell $(CC) -m32 -print-file-name=include)
 
-# Флаги те же, что у ядра: свободностоящий код без libc.
-# -fno-pic обязателен: приложение собрано под фиксированный адрес.
+# The same flags as the kernel: freestanding code without libc.
+# -fno-pic is mandatory: an application is built for a fixed address.
 CFLAGS := -m32 -march=i586 -std=gnu11 -ffreestanding -fno-builtin \
           -fno-stack-protector -fno-pic -fno-pie -nostdlib -nostdinc \
           -Wall -Wextra -O2 -I../include -isystem $(GCC_INC)
@@ -28,13 +28,13 @@ APPS := $(patsubst apps/%.c,build/%.kapp,$(SRC))
 
 all: $(APPS)
 	@echo ""
-	@echo "  Готово. Приложения в sdk/build/:"
+	@echo "  Done. Applications are in sdk/build/:"
 	@ls -1 build/*.kapp 2>/dev/null | sed 's|^|    |' || true
 
 build:
 	@mkdir -p build
 
-# Каждое приложение - один файл .c, отдельный ELF, затем упаковка
+# Each application is one .c file, a separate ELF, then packaging
 build/%.elf: apps/%.c kapp.ld | build
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) -c $< -o build/$*.o
@@ -46,9 +46,9 @@ build/%.kapp: build/%.elf mkkapp.py
 	@mkdir -p ../release/apps && cp $@ ../release/apps/
 
 list:
-	@echo "Доступные приложения:"
+	@echo "Available applications:"
 	@ls -1 apps/*.c 2>/dev/null | sed 's|apps/|  |; s|\.c$$||'
 
 clean:
 	@rm -rf build
-	@echo "  очищено"
+	@echo "  cleaned"

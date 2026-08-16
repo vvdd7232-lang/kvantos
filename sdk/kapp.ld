@@ -1,14 +1,14 @@
 /* ============================================================
- *  KvantOS SDK - размещение приложения в памяти
+ *  KvantOS SDK - application memory layout
  *
- *  Приложение собирается под фиксированный адрес 0x00E00000
- *  (14 МиБ) - именно туда ядро разворачивает образ. Никаких
- *  таблиц перемещений нет, поэтому адрес обязан совпадать с
- *  KAPP_LOAD_BASE из include/kvapp.h.
+ *  An application is built for the fixed address 0x00E00000
+ *  (14 MiB) - exactly where the kernel unpacks the image. There
+ *  are no relocation tables, so the address must match
+ *  KAPP_LOAD_BASE from include/kvapp.h.
  *
- *  Точка входа - kapp_main. Секции склеены в один непрерывный
- *  кусок: упаковщик просто вырезает его из ELF и дописывает
- *  64-байтный заголовок.
+ *  The entry point is kapp_main. The sections are glued into one
+ *  contiguous chunk: the packer simply cuts it out of the ELF and
+ *  prepends a 64-byte header.
  * ============================================================ */
 ENTRY(kapp_main)
 
@@ -17,7 +17,7 @@ SECTIONS
     . = 0x00E00000;
 
     .text : {
-        *(.text.start)      /* если приложение задаёт стартовую секцию */
+        *(.text.start)      /* when the application defines a start section */
         *(.text)
         *(.text.*)
     }
@@ -32,8 +32,8 @@ SECTIONS
         *(.data.*)
     }
 
-    /* Всё, что выше, попадает в файл. Дальше - неинициализированные
-       данные: ядро само обнулит этот кусок после загрузки. */
+    /* Everything above goes into the file. What follows is
+       uninitialised data: the kernel zeroes that part after loading. */
     __kapp_file_end = .;
 
     .bss ALIGN(16) : {

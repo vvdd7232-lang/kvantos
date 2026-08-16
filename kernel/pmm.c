@@ -1,8 +1,8 @@
-/* Побитовая карта свободных физических страниц (4 KiB) */
+/* Bitmap of free physical pages (4 KiB each) */
 #include "kernel.h"
 
 #define FRAME_SIZE 4096
-#define MAX_FRAMES (1024 * 1024)          /* до 4 GiB */
+#define MAX_FRAMES (1024 * 1024)          /* up to 4 GiB */
 
 static u32  frame_bitmap[MAX_FRAMES / 32];
 static u32  total_frames = 0;
@@ -24,7 +24,7 @@ void pmm_init(u32 mem_upper_kb, u32 mmap_addr, u32 mmap_len) {
     total_frames = mem_bytes / FRAME_SIZE;
     if (total_frames > MAX_FRAMES) total_frames = MAX_FRAMES;
 
-    /* по умолчанию всё занято, освобождаем доступные регионы */
+    /* everything is busy by default, available regions are then freed */
     memset(frame_bitmap, 0xFF, sizeof(frame_bitmap));
     used_frames = total_frames;
 
@@ -48,7 +48,7 @@ void pmm_init(u32 mem_upper_kb, u32 mmap_addr, u32 mmap_len) {
         }
     }
 
-    /* резервируем первый мегабайт и само ядро */
+    /* reserve the first megabyte and the kernel itself */
     u32 kend = ((u32)&kernel_end + FRAME_SIZE - 1) & ~(FRAME_SIZE - 1);
     for (u32 a = 0; a < kend; a += FRAME_SIZE) {
         u32 idx = a / FRAME_SIZE;
@@ -68,7 +68,7 @@ void pmm_free_frame(u32 addr) {
     if (i < total_frames && bm_test(i)) { bm_clear(i); used_frames--; }
 }
 
-/* Пометить диапазон занятым: под кучу и прочие статические области */
+/* Mark a range as used: for the heap and other static areas */
 void pmm_reserve_range(u32 base, u32 size) {
     u32 start = base & ~(FRAME_SIZE - 1);
     u32 end   = (base + size + FRAME_SIZE - 1) & ~(FRAME_SIZE - 1);

@@ -1,4 +1,4 @@
-/* Отладочный вывод в COM1 (0x3F8) */
+/* Debug output to COM1 (0x3F8) */
 #include "kernel.h"
 
 #define COM1 0x3F8

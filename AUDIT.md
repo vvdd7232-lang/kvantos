@@ -1,536 +1,537 @@
-# Аудит кода KvantOS — найденные баги и исправления
+# KvantOS code audit — the bugs found and the fixes
 
-Дата: 16 августа 2026. Метод: сборка всех модулей с ужесточёнными
-предупреждениями, ручной разбор рискованных мест, проверка арифметики
-в python3, регрессия в QEMU.
+*Read this in [Русский](AUDIT.ru.md).*
 
-Компилятор при `-Wshadow -Wcast-align -Wnull-dereference -Wduplicated-cond
--Wlogical-op` не выдал ни одного предупреждения, кроме трёх безобидных
-`-Wmissing-prototypes` (`kmain`, `isr_handler`, `irq_handler` — вызываются
-из ассемблера, прототип не нужен). Все перечисленные ниже дефекты найдены
-разбором логики, а не компилятором.
+Date: 16 August 2026. Method: building every module with hardened warnings,
+manual review of the risky places, arithmetic checked in python3, regression
+runs in QEMU.
 
-| № | Модуль | Дефект | Последствие | Исправление |
-|---|--------|--------|-------------|-------------|
-| 1 | vbe.c | `vbe_vram_bytes()` вызывался каждый кадр, а внутри `pci_bar_size()` пишет `0xFFFFFFFF` в BAR видеокарты | **Критично на реальном железе:** на мгновение снимается декодирование видеопамяти — мерцание/зависание | Замер один раз в `vbe_init()`, далее кэш `vram_cached` |
-| 2 | heap.c | `kcalloc(n, size)` не проверял переполнение `n * size` | `kcalloc(0x10000, 0x10000)` → 0 байт вместо отказа, затем порча кучи | Проверка `n > 0xFFFFFFFF / size` |
-| 3 | ramfs.c / shell.c | `ramfs_create()` молча обрезал имя до 23 символов | `ramfs_find()` не находил полное имя → тихий дубликат файла | Коды −4 (пустое имя) и −5 (слишком длинное) + сообщения в kvsh |
-| 4 | gui.c | `(mx - gx) / 8` — деление отрицательных округляется к нулю | Клик на 1–7 пикселей левее холста рисовал в клетку 0 | Проверка знака `dx >= 0 && dy >= 0` до деления |
-| 5 | gui.c | `fb_set_target(backbuf)` без проверки на NULL при откате режима | При нехватке памяти — запись по нулевому указателю | Комментарий + опора на корректную обработку NULL |
-| 6 | gui.c | Иконки жёстко в один столбец с шагом 90 px | При 640×480 нижние иконки уезжали под панель задач | Раскладка по колонкам исходя из высоты экрана |
-| 7 | vga.c | `vga_panic_screen()` не пересчитывал сетку символов | После смены разрешения текст паники ложился по старым `cols`/`rows` | Пересчёт `cols`/`rows` перед очисткой |
-| 8 | timer.c | `timer_init(0)` → деление на ноль, делитель мог не влезть в 16 бит | Тройная ошибка при старте | Ограничение 19…10000 Гц + зажим делителя |
-| 9 | timer.c | `beep()` делил на ноль при экзотических частотах | Исключение вместо звука | Отсев частот вне 19…20000 Гц |
-| 10 | heap.c | `ALIGN8(size)` переполнялся при size около 2³² | Огромный запрос превращался в крошечный блок → **порча кучи** | Отказ при `size > 0xFFFFFFF0` и при size больше кучи |
-| 11 | shell.c | `alloc N` не сверялся с размером кучи | Бессмысленный обход всего списка блоков | Сверка с `heap_stats()` и внятный отказ |
-| 12 | sched.c | `task_create()` разыменовывал `current` без проверки | Падение при вызове до `sched_init()` | Проверки `entry` и `current` на NULL |
-| 13 | keyboard.c | `shift ^ caps` применялось ко **всем** клавишам | При CapsLock цифра `1` давала `!`, а Shift+1 — `1` | CapsLock действует только на буквы `a`–`z` |
-| 14 | keyboard.c | `kbd_getchar()` крутил `task_yield()` до запуска планировщика | 100% загрузка процессора в цикле ожидания | `hlt` при разрешённых прерываниях |
+With `-Wshadow -Wcast-align -Wnull-dereference -Wduplicated-cond -Wlogical-op`
+the compiler produced no warnings at all except three harmless
+`-Wmissing-prototypes` (`kmain`, `isr_handler`, `irq_handler` — they are called
+from assembly and need no prototype). Every defect listed below was found by
+reasoning about the logic, not by the compiler.
 
-## Проверка исправлений в QEMU
+| # | Module | Defect | Consequence | Fix |
+|---|--------|--------|-------------|-----|
+| 1 | vbe.c | `vbe_vram_bytes()` was called every frame, and inside it `pci_bar_size()` writes `0xFFFFFFFF` into the video card BAR | **Critical on real hardware:** video memory decoding is dropped for an instant — flicker or a hang | Measured once in `vbe_init()`, then cached in `vram_cached` |
+| 2 | heap.c | `kcalloc(n, size)` did not check `n * size` for overflow | `kcalloc(0x10000, 0x10000)` → 0 bytes instead of a refusal, then heap corruption | A `n > 0xFFFFFFFF / size` check |
+| 3 | ramfs.c / shell.c | `ramfs_create()` silently truncated a name to 23 characters | `ramfs_find()` could not find the full name → a silent duplicate file | Codes −4 (empty name) and −5 (too long) plus messages in kvsh |
+| 4 | gui.c | `(mx - gx) / 8` — division of negatives rounds towards zero | A click 1–7 pixels left of the canvas painted cell 0 | A sign check `dx >= 0 && dy >= 0` before dividing |
+| 5 | gui.c | `fb_set_target(backbuf)` with no NULL check when rolling a mode back | On low memory — a write through a null pointer | A comment plus reliance on correct NULL handling |
+| 6 | gui.c | Icons hard-wired into a single column with a 90 px step | At 640×480 the lower icons slid under the taskbar | A column layout derived from the screen height |
+| 7 | vga.c | `vga_panic_screen()` did not recompute the character grid | After a resolution change the panic text used the old `cols`/`rows` | `cols`/`rows` are recomputed before clearing |
+| 8 | timer.c | `timer_init(0)` → a division by zero, and the divisor might not fit into 16 bits | A triple fault at start-up | A 19…10000 Hz limit plus a clamped divisor |
+| 9 | timer.c | `beep()` divided by zero at exotic frequencies | An exception instead of a sound | Frequencies outside 19…20000 Hz are rejected |
+| 10 | heap.c | `ALIGN8(size)` overflowed for sizes near 2³² | A huge request turned into a tiny block → **heap corruption** | Refusal when `size > 0xFFFFFFF0` and when size exceeds the heap |
+| 11 | shell.c | `alloc N` was not checked against the heap size | A pointless walk over the whole block list | A check against `heap_stats()` and a clear refusal |
+| 12 | sched.c | `task_create()` dereferenced `current` without checking | A crash when called before `sched_init()` | NULL checks on `entry` and `current` |
+| 13 | keyboard.c | `shift ^ caps` was applied to **every** key | With CapsLock the digit `1` produced `!`, and Shift+1 produced `1` | CapsLock now affects only the letters `a`–`z` |
+| 14 | keyboard.c | `kbd_getchar()` spun on `task_yield()` before the scheduler started | 100% CPU load in the wait loop | `hlt` while interrupts are enabled |
 
-- **№13** — при включённом CapsLock ввод дал `ECHO 12345`: буквы поднялись
-  в верхний регистр, цифры остались цифрами (до правки было `!@#$%`).
-- **№3** — `write averyveryverylongfilenamehere` → «имя файла слишком
-  длинное (максимум 23 символа)»; короткое имя создаётся штатно.
-- **№11** — `alloc 999999999` → «запрошено больше размера кучи (10240 КиБ)»,
-  без паники; `alloc 4096` работает.
-- **№6** — GUI при 640×480: иконки перенеслись во второй столбец
+## Verifying the fixes in QEMU
+
+- **#13** — with CapsLock on, typing produced `ECHO 12345`: the letters went
+  upper case, the digits stayed digits (before the fix it was `!@#$%`).
+- **#3** — `write averyveryverylongfilenamehere` → "file name too long
+  (23 characters maximum)"; a short name is created normally.
+- **#11** — `alloc 999999999` → "more requested than the heap size (10240 KiB)",
+  with no panic; `alloc 4096` works.
+- **#6** — the GUI at 640×480: the icons moved into a second column
   (`screenshots/25_gui_640x480.png`).
-- Смена режимов 640×480 ↔ 1024×768, запуск и выход из GUI, `mem` — без
-  паник; в журнале COM1 ни одного исключения.
+- Switching 640×480 ↔ 1024×768, entering and leaving the GUI, `mem` — no
+  panics; not a single exception in the COM1 log.
 
-## Сборка после правок
+## The build after the fixes
 
 ```
 text 104571   data 233   bss 236224   dec 341028 (0x53424)
-release/kvantos.iso  960 512 Б  md5 486da90f42645c09cd7d797bd1b14ea7
+release/kvantos.iso  960 512 B  md5 486da90f42645c09cd7d797bd1b14ea7
 ```
 
 ---
 
-# Проблема загрузки на старом ноутбуке («Welcome to GRUB!» и чёрный экран)
+# The boot problem on an old laptop ("Welcome to GRUB!" and a black screen)
 
-## Что происходило
+## What was happening
 
-Симптом воспроизведён в QEMU на машине без PCI (`-machine isapc -cpu pentium`):
-GRUB печатал приветствие, показывал меню, выполнял `multiboot` с кодом
-возврата 0 — и машина **уходила в бесконечную перезагрузку**, не выдав в
-COM1 ни одного байта. То есть ядро падало в первые же такты, ещё до
-инициализации последовательного порта.
+The symptom was reproduced in QEMU on a machine without PCI
+(`-machine isapc -cpu pentium`): GRUB printed its greeting, showed the menu,
+executed `multiboot` with return code 0 — and the machine went into an
+**endless reboot loop**, without emitting a single byte on COM1. In other words
+the kernel died within the very first cycles, before the serial port was even
+initialised.
 
-## Причина (главная)
+## The cause (the main one)
 
-`gcc -m32` по умолчанию собирает под **i686** и вставляет инструкции,
-которых нет на старых процессорах. В ядре обнаружено:
+By default `gcc -m32` builds for **i686** and inserts instructions that old
+processors do not have. Inside the kernel we found:
 
-- `cmov`/`cmovcc` — 60 штук (появились в Pentium Pro, 1995);
-- `bswap`, `cpuid` — нет на i386/i486.
+- `cmov`/`cmovcc` — 60 of them (introduced in the Pentium Pro, 1995);
+- `bswap`, `cpuid` — absent on the i386/i486.
 
-На процессоре старее Pentium Pro первая же `cmov` даёт #UD (недопустимая
-инструкция). Обработчика исключений на тот момент ещё нет → тройная
-ошибка → мгновенная перезагрузка. Ровно то, что вы видели.
+On a CPU older than the Pentium Pro the very first `cmov` raises a #UD (invalid
+instruction). At that point there is no exception handler yet → a triple fault →
+an instant reboot. Exactly what you saw.
 
-## Исправления
+## The fixes
 
-| № | Файл | Что сделано |
-|---|------|-------------|
-| 15 | Makefile | `-march=i586 -mtune=generic` — все 60 `cmov` из ядра исчезли |
-| 16 | cpu.c | `cpuid` вызывается только если процессор её поддерживает (проверка бита 21 ID в EFLAGS); иначе «i386/i486» |
-| 17 | grub.cfg | Меню принудительно в **текстовом** режиме (`terminal_output console`) — на старых видеокартах переход в gfxterm давал чёрный экран |
-| 18 | grub.cfg | Пункты меню переписаны **латиницей**: в текстовом VGA нет кириллицы, русские названия превращались в `?????` |
-| 19 | grub.cfg | Первый пункт `gfxpayload=keep` — режим не навязывается, берётся тот, что дала прошивка |
-| 20 | grub.cfg | Вывод GRUB продублирован в COM1 (38400) — журнал можно снять с неисправной машины |
-| 21 | grub.cfg + main.c | Новый пункт **safe mode**: текстовый режим, PCI/VBE/мышь пропускаются |
+| # | File | What was done |
+|---|------|---------------|
+| 15 | Makefile | `-march=i586 -mtune=generic` — all 60 `cmov` instructions vanished from the kernel |
+| 16 | cpu.c | `cpuid` is only executed if the CPU supports it (checking the ID bit 21 in EFLAGS); otherwise "i386/i486" |
+| 17 | grub.cfg | The menu is forced into **text** mode (`terminal_output console`) — on old video cards switching to gfxterm produced a black screen |
+| 18 | grub.cfg | The menu entries were rewritten in **Latin script**: text VGA has no Cyrillic, so Russian titles turned into `?????` |
+| 19 | grub.cfg | The first entry uses `gfxpayload=keep` — no mode is imposed, whatever the firmware gave is kept |
+| 20 | grub.cfg | GRUB output is mirrored to COM1 (38400) — the log can be taken off a broken machine |
+| 21 | grub.cfg + main.c | A new **safe mode** entry: text mode, PCI/VBE/mouse skipped |
 
-## Проверка
+## Verification
 
-| Конфигурация | До | После |
-|--------------|-----|-------|
-| `isapc`, Pentium, без PCI | вечная перезагрузка, журнал 0 байт | **загружается до `kvant:/$`** |
-| `pc`, Pentium, `-vga std` | — | загружается, русский текст верный |
-| `pc`, Pentium II, `-vga std` | ок | ок, без регрессий |
-| `pc`, Pentium III, `-vga cirrus` | ок | ок, фреймбуфер 24 бит |
-| safe mode | — | «PCI, VBE и мышь пропущены», оболочка работает |
+| Configuration | Before | After |
+|---------------|--------|-------|
+| `isapc`, Pentium, no PCI | endless reboot, a 0-byte log | **boots all the way to `kvant:/$`** |
+| `pc`, Pentium, `-vga std` | — | boots, the Russian text is correct |
+| `pc`, Pentium II, `-vga std` | ok | ok, no regressions |
+| `pc`, Pentium III, `-vga cirrus` | ok | ok, a 24-bit framebuffer |
+| safe mode | — | "PCI, VBE and the mouse were skipped", the shell works |
 
-## Что делать вам на ноутбуке
+## What to do on your laptop
 
-1. Перезапишите диск/флешку новым `release/kvantos.iso`.
-2. Если по умолчанию снова чёрный экран — выберите в меню
-   **«KvantOS - VGA text 80x25 (old machines)»**.
-3. Если и это не помогает — **«safe mode»**.
-4. Если нужен журнал: подключите нуль-модем к COM1 на 38400 8N1 —
-   теперь туда пишет и GRUB, и ядро.
+1. Rewrite the disc/USB stick with the new `release/kvantos.iso`.
+2. If the default is a black screen again — pick
+   **"KvantOS - VGA text 80x25 (old machines)"** from the menu.
+3. If that does not help either — **"safe mode"**.
+4. If you need a log: attach a null modem to COM1 at 38400 8N1 — both GRUB and
+   the kernel now write there.
 
 ---
 
-# Уточнение: Samsung RV410 (NP-RV410L)
+# A refinement: the Samsung RV410 (NP-RV410L)
 
-Модель известна точно, и это **меняет диагноз**.
+The model is known exactly, and that **changes the diagnosis**.
 
-## Что отменяется
+## What is withdrawn
 
-Pentium Dual-Core **T4500** — это ядро Penryn (2010 г.), по сути Core 2.
-Инструкцию `cmov` он поддерживает без каких-либо оговорок. Значит
-**гипотеза про i686-инструкции к вашей машине не относится** — правки
-№15/№16 остаются как полезная страховка для совсем старого железа, но
-причина чёрного экрана на RV410 была не в них.
+The Pentium Dual-Core **T4500** is a Penryn core (2010), essentially a Core 2.
+It supports `cmov` without any reservations. So **the i686 instruction
+hypothesis does not apply to your machine** — fixes #15/#16 remain a useful
+safety net for genuinely ancient hardware, but they were not the cause of the
+black screen on an RV410.
 
-## Что нашлось на самом деле
+## What was actually found
 
-Проверка `videoinfo` в GRUB показала: **режима 1366×768 нет в таблицах
-VBE вообще** — ни в QEMU, ни, как правило, на GMA 4500M. Ширина не
-кратна 8, и BIOS такие моды обычно не публикует. Родное разрешение
-вашего экрана недостижимо через VBE.
+Running `videoinfo` in GRUB showed that **there is no 1366×768 mode in the VBE
+tables at all** — neither in QEMU nor, as a rule, on a GMA 4500M. The width is
+not a multiple of 8 and BIOSes usually do not publish such modes. The native
+resolution of your screen is unreachable through VBE.
 
-Куда важнее оказался механизм выбора режима. Экспериментально
-установлено: **для Multiboot-ядра GRUB берёт видеорежим из заголовка
-ядра, а `gfxpayload` в grub.cfg на него не действует.** Я это проверил
-прямым опытом — с `gfxpayload=1024x768x32` и нулями в заголовке
-получилось 800×600×24, то есть конфиг был проигнорирован.
+Much more important is the mode selection mechanism. Established
+experimentally: **for a Multiboot kernel GRUB takes the video mode from the
+kernel header, and `gfxpayload` in grub.cfg has no effect on it.** This was
+verified directly — with `gfxpayload=1024x768x32` and zeroes in the header the
+result was 800×600×24, i.e. the config was ignored.
 
-Из этого следует практический вывод для RV410: если GMA 4500M не смогла
-выдать запрошенный 1024×768, GRUB не отдавал фреймбуфер, а ядро до
-правок этого не переживало.
+The practical conclusion for the RV410: if the GMA 4500M could not deliver the
+requested 1024×768, GRUB handed over no framebuffer, and before the fixes the
+kernel did not survive that.
 
-## Итоговые правки
+## The resulting fixes
 
-| № | Файл | Что сделано |
-|---|------|-------------|
-| 22 | vbe.c | Добавлен режим 1366×768 в таблицу — доступен командой `vidmode` через BGA, если карта его потянет |
-| 23 | boot.asm | Комментарий с зафиксированным фактом: режим задаётся здесь, `gfxpayload` не работает для multiboot |
-| 24 | grub.cfg | Добавлен пункт «widescreen 1280x768» — реально существующий 16:9 режим взамен отсутствующего 1366×768 |
+| # | File | What was done |
+|---|------|---------------|
+| 22 | vbe.c | The 1366×768 mode was added to the table — reachable via `vidmode` through BGA if the card can manage it |
+| 23 | boot.asm | A comment recording the established fact: the mode is set here, `gfxpayload` does not work for multiboot |
+| 24 | grub.cfg | A "widescreen 1280x768" entry was added — a genuinely existing 16:9 mode in place of the missing 1366×768 |
 
-Была и промежуточная ошибка: я обнулил ширину/высоту в заголовке, и
-разрешение упало до 800×600 на всех конфигурациях. Возвращено 1024×768.
+There was an intermediate mistake too: the width/height in the header were
+zeroed and the resolution fell to 800×600 on every configuration. 1024×768 was
+restored.
 
-## Итоговая проверка
+## The final verification
 
-| Конфигурация | Результат |
+| Configuration | Result |
 |---|---|
-| `-vga std -cpu core2duo -m 1024` | фреймбуфер 1024×768×32, оболочка OK |
-| `-vga cirrus -cpu core2duo` | фреймбуфер 1024×768×24, оболочка OK |
-| `-vga std -cpu pentium` | фреймбуфер 1024×768×32, оболочка OK |
-| `isapc -cpu pentium` (без PCI) | оболочка OK, паник нет |
-| 1536 МБ ОЗУ | 393 184 страницы, паник нет |
+| `-vga std -cpu core2duo -m 1024` | a 1024×768×32 framebuffer, the shell is OK |
+| `-vga cirrus -cpu core2duo` | a 1024×768×24 framebuffer, the shell is OK |
+| `-vga std -cpu pentium` | a 1024×768×32 framebuffer, the shell is OK |
+| `isapc -cpu pentium` (no PCI) | the shell is OK, no panics |
+| 1536 MB of RAM | 393 184 pages, no panics |
 
-## Порядок действий на RV410
+## What to do on an RV410
 
-1. Запишите новый `release/kvantos.iso`. Образ **гибридный** (проверено:
-   код в MBR + El Torito), поэтому годится и болванка, и флешка через
-   `dd`/Rufus в режиме DD.
-2. В BIOS отключите, если есть, «Fast BIOS Mode»; загрузка — Legacy/CSM,
-   образ намеренно **без UEFI** (для 2010 года это норма).
-3. Если чёрный экран повторится, пробуйте по порядку:
-   **«VGA text 80x25»** → **«safe mode»**. Текстовый режим у RV410
-   обязан работать.
-4. У ноутбука есть порт **VGA**: подключите внешний монитор — иногда
-   встроенная матрица молчит, а на внешнем выводе картинка есть.
+1. Write the new `release/kvantos.iso`. The image is **hybrid** (verified: MBR
+   code + El Torito), so both a blank disc and a USB stick written with `dd` or
+   Rufus in DD mode will do.
+2. In the BIOS disable "Fast BIOS Mode" if it is there; boot in Legacy/CSM, the
+   image is deliberately **without UEFI** (normal for 2010).
+3. If the black screen returns, try in order:
+   **"VGA text 80x25"** → **"safe mode"**. Text mode on an RV410 has to work.
+4. The laptop has a **VGA** port: attach an external monitor — sometimes the
+   built-in panel stays silent while the external output shows the picture.
 
 ---
 
-# Найдена настоящая причина чёрного экрана
+# The real cause of the black screen was found
 
-Продолжив разбор уже с учётом модели, я нашёл дефект, который объясняет
-ваш симптом полностью — и он был не в GRUB, а в ядре.
+Continuing the investigation with the model in mind, we found a defect that
+explains your symptom completely — and it was not in GRUB but in the kernel.
 
-## Механизм отказа
+## The failure mechanism
 
-1. Заголовок ядра просит 1024×768×32 → GRUB **переключает карту в графику**.
-2. GMA 4500M отдаёт режим, но в виде, который ядро не принимает
-   (палитровый `type`, нестандартный bpp и т. п.).
-3. `fb_init()` возвращает 0.
-4. `have_fb = 0` → `vga_init()` идёт по **текстовой** ветке и пишет в `0xB8000`.
-5. Карта при этом **в графическом режиме**, где `0xB8000` не отображается.
+1. The kernel header asks for 1024×768×32 → GRUB **switches the card into
+   graphics**.
+2. The GMA 4500M hands back a mode, but in a form the kernel does not accept
+   (a palette `type`, a non-standard bpp and so on).
+3. `fb_init()` returns 0.
+4. `have_fb = 0` → `vga_init()` takes the **text** branch and writes to
+   `0xB8000`.
+5. Meanwhile the card is **in graphics mode**, where `0xB8000` is not mapped.
 
-Итог: **ядро полностью живо и работает, но экран чёрный.** Ровно то, что
-вы наблюдали. Эту ловушку мы уже фиксировали раньше в другом контексте,
-но путь «фреймбуфер отвергнут» её не учитывал.
+The result: **the kernel is fully alive and running, but the screen is black.**
+Exactly what you observed. We had recorded this trap earlier in another context,
+but the "framebuffer rejected" path did not take it into account.
 
-## Исправление №25
+## Fix #25
 
-В `main.c`: если GRUB выдал сведения о фреймбуфере, но `fb_init()` его не
-принял, ядро **само возвращает карту в текстовый режим** через
-`vbe_force_text()` и пишет диагностику в COM1.
+In `main.c`: if GRUB supplied framebuffer information but `fb_init()` did not
+accept it, the kernel **returns the card to text mode itself** through
+`vbe_force_text()` and writes a diagnostic to COM1.
 
-## Доказательство
+## The proof
 
-Я временно заставил `fb_init()` всегда возвращать 0 — то есть точно
-воспроизвёл поведение несовместимой видеокарты:
+`fb_init()` was temporarily forced to always return 0 — precisely reproducing
+the behaviour of an incompatible video card:
 
-- кадр стал **720×400** (карта вернулась в текст);
-- на экране полноценная оболочка с русским текстом
+- the frame became **720×400** (the card returned to text);
+- the screen showed a full shell with Russian text
   (`screenshots/29_fallback_text.png`);
-- до правки здесь был бы чёрный экран.
+- before the fix this would have been a black screen.
 
-Имитация удалена, штатная графика проверена повторно: q35/std, pc/cirrus,
-pc/pentium — везде 1024×768, оболочка запускается.
+The simulation was removed and normal graphics re-verified: q35/std, pc/cirrus,
+pc/pentium — 1024×768 everywhere, the shell starts.
 
-## Исправление №26: команда `hwreport`
+## Fix #26: the `hwreport` command
 
-Добавлена команда `hwreport` (сокращённо `hw`): процессор, объём ОЗУ,
-число устройств PCI, модель видеокарты с PCI-ID, текущий видеорежим,
-интерфейс VBE, наличие мыши. Вывод дублируется в COM1.
-Пример на `screenshots/28_hwreport.png`.
+A `hwreport` command was added (`hw` for short): CPU, RAM size, PCI device
+count, video card model with its PCI ID, the current video mode, the VBE
+interface and whether a mouse is present. The output is mirrored to COM1. An
+example is in `screenshots/28_hwreport.png`.
 
-Если на ноутбуке что-то пойдёт не так, эта команда за один экран покажет,
-что именно ядро увидело на вашем железе.
-
----
-
-# Диагностика без COM-порта (важная поправка)
-
-Мой прошлый совет «снимите журнал с COM1» **для вашего ноутбука не
-годится**: по вашему же перечню разъёмов у RV410 есть USB, VGA, RJ-45,
-аудио и картридер — физического COM-порта нет. Вывод в COM1 остаётся
-полезным в виртуальных машинах, но на RV410 недоступен.
-
-Поэтому добавлены способы диагностики, работающие **без экрана и без
-serial**.
-
-| № | Файл | Что сделано |
-|---|------|-------------|
-| 27 | keyboard.c | **Найден скрытый баг:** обработчик IRQ принимал ответы контроллера (0xFA ACK, 0xFE resend) за скан-коды. Первая же команда к светодиодам полностью ломала ввод с клавиатуры |
-| 28 | keyboard.c | `kbd_set_leds()` — управление индикаторами; обмен командой неделим (`irq_save`), ACK вычитывается явно |
-| 29 | main.c | Сигнализация этапов: NumLock загорается после инициализации клавиатуры; при выходе на оболочку — все три индикатора на 150 мс и звуковой сигнал 880 Гц |
-| 30 | keyboard.c | Индикатор CapsLock синхронизирован с реальным состоянием |
-| 31 | shell.c | Имя команды приводится к нижнему регистру: при включённом CapsLock `MEM` не находилась. Аргументы (имена файлов) регистр сохраняют |
-
-## Как это читать на ноутбуке
-
-- **Загорелся NumLock** — ядро живо, дошло до инициализации клавиатуры.
-- **Мигнули все три индикатора + писк** — ядро полностью загружено,
-  оболочка запущена. Если при этом экран чёрный — проблема только в
-  выводе изображения, система работает.
-- **Ничего не мигнуло** — ядро не стартовало; пробуйте пункт
-  «VGA text 80x25», затем «safe mode».
-
-## Проверка
-
-- Баг №27 воспроизведён и устранён: до правки после включения
-  светодиодов команда `help` не набиралась вовсе, после — выполняется.
-- 11 переключений CapsLock подряд прямо в обработчике IRQ — ввод жив,
-  паник нет.
-- CapsLock по-прежнему корректен: буквы меняют регистр, цифры `12345`
-  не превращаются в `!@#$%`.
-- `MEM` при включённом CapsLock выполняется; файл `Prov` сохраняет
-  заглавную букву, `cat Prov` возвращает `Data`.
-
-Отдельно отмечу ложную тревогу в ходе тестирования: файл создавался как
-`ROV` вместо `Prov`. Причина оказалась в самом тесте — монитор QEMU
-не принимает `sendkey P`, заглавные нужно слать как `shift-p`. Ядро
-работало правильно.
+If something goes wrong on the laptop, this command shows in a single screen
+exactly what the kernel saw on your hardware.
 
 ---
 
-# Повторное зависание на «Welcome to GRUB!» — причина найдена
+# Diagnosis without a COM port (an important correction)
 
-Ни одна из прошлых правок не помогла, потому что все они касались ядра
-и меню, а машина вставала **раньше** — на этапе, когда GRUB дочитывает
-свои файлы с привода.
+My earlier advice to "take the log off COM1" **does not suit your laptop**: by
+your own list of connectors the RV410 has USB, VGA, RJ-45, audio and a card
+reader — there is no physical COM port. COM1 output stays useful in virtual
+machines, but on an RV410 it is unavailable.
 
-## Две реальные причины
+So diagnostics that work **without a screen and without serial** were added.
 
-**1. Команда `serial` в grub.cfg — мой собственный просчёт.**
-Я сам добавил её «для диагностики». На машине без физического UART
-запись в порт 0x3F8 заставляет GRUB ждать таймаут **на каждом символе**.
-Вывод фактически останавливается сразу после «Welcome to GRUB!». У
-RV410 COM-порта нет. Команда удалена.
+| # | File | What was done |
+|---|------|---------------|
+| 27 | keyboard.c | **A hidden bug was found:** the IRQ handler treated controller replies (0xFA ACK, 0xFE resend) as scan codes. The very first LED command completely broke keyboard input |
+| 28 | keyboard.c | `kbd_set_leds()` — indicator control; the command exchange is indivisible (`irq_save`) and the ACK is read explicitly |
+| 29 | main.c | Stage signalling: NumLock lights up after keyboard initialisation; on reaching the shell all three indicators flash for 150 ms with an 880 Hz beep |
+| 30 | keyboard.c | The CapsLock indicator is synchronised with the real state |
+| 31 | shell.c | The command name is lower-cased: with CapsLock on, `MEM` was not found. Arguments (file names) keep their case |
 
-**2. GRUB дочитывал 276 модулей и шрифт 2.4 МБ с DVD.**
-`grub-mkrescue` оставляет модули отдельными файлами на диске. Каждый
-`insmod`, отрисовка меню и загрузка ядра — это новые обращения к
-приводу. На изношенном DVD-приводе 2010 года первая же неудачная
-дорожка подвешивает загрузку намертво, ровно с той картинкой, что вы
-описали.
+## How to read this on the laptop
 
-## Решение: монолитный образ
+- **NumLock lit up** — the kernel is alive and reached keyboard initialisation.
+- **All three indicators blinked plus a beep** — the kernel is fully booted and
+  the shell is running. If the screen is black at that point, the problem is
+  only in the picture output; the system works.
+- **Nothing blinked** — the kernel never started; try the "VGA text 80x25"
+  entry, then "safe mode".
 
-| № | Что сделано |
-|---|-------------|
-| 32 | Убраны команды `serial` из grub.cfg |
-| 33 | Переход с `grub-mkrescue` на `grub-mkstandalone`: все модули и grub.cfg зашиты в core.img |
-| 34 | **Ядро вложено внутрь загрузочного образа (memdisk)** — `/boot/kvant.bin` читается из ОЗУ, а не с привода |
-| 35 | Новая цель `make floppy`: образ дискеты 1.44 МБ, полностью минуя DVD |
+## Verification
 
-Размер ISO упал с **10 475 520 до 940 032 байт** (10.5 МБ → 918 КБ):
-из образа ушло всё, что раньше дочитывалось с диска.
+- Bug #27 was reproduced and eliminated: before the fix, after the LEDs were
+  set the command `help` could not be typed at all; afterwards it runs.
+- 11 CapsLock toggles in a row straight inside the IRQ handler — input stays
+  alive, no panics.
+- CapsLock is still correct: letters change case, the digits `12345` do not
+  turn into `!@#$%`.
+- `MEM` runs with CapsLock on; the file `Prov` keeps its capital letter and
+  `cat Prov` returns `Data`.
 
-## Побочные дефекты, найденные при сборке дискеты
+One false alarm during testing deserves a note: the file was created as `ROV`
+instead of `Prov`. The cause was in the test itself — the QEMU monitor does not
+accept `sendkey P`, capitals must be sent as `shift-p`. The kernel was working
+correctly.
 
-- `dd` загрузочного сектора затирал **BPB** (байты 3–89) → «non DOS
-  media». Затем выяснилось, что core.img со 2-го сектора затирает саму
-  FAT. Итоговое решение: на дискете **нет файловой системы вообще**,
-  ядро лежит внутри core.img.
-- В монолитном образе корень по умолчанию — memdisk. Промежуточный
-  вариант с `search --file` работал, но после вкладывания ядра стал не
-  нужен и удалён.
+---
 
-## Проверка
+# Another hang at "Welcome to GRUB!" — the cause was found
 
-| Носитель | Конфигурация | Результат |
+None of the earlier fixes helped, because they all concerned the kernel and the
+menu while the machine stalled **earlier** — at the stage where GRUB reads its
+own files off the drive.
+
+## Two real causes
+
+**1. The `serial` command in grub.cfg — my own miscalculation.**
+I added it myself "for diagnostics". On a machine without a physical UART,
+writing to port 0x3F8 makes GRUB wait for a timeout **on every character**.
+Output effectively stops right after "Welcome to GRUB!". The RV410 has no COM
+port. The command was removed.
+
+**2. GRUB was reading 276 modules and a 2.4 MB font off the DVD.**
+`grub-mkrescue` leaves the modules as separate files on the disc. Every
+`insmod`, the menu rendering and the kernel load are new accesses to the drive.
+On a worn 2010 DVD drive the first bad track hangs the boot solidly, with
+exactly the picture you described.
+
+## The solution: a monolithic image
+
+| # | What was done |
+|---|---------------|
+| 32 | The `serial` commands were removed from grub.cfg |
+| 33 | A move from `grub-mkrescue` to `grub-mkstandalone`: every module and grub.cfg are sewn into core.img |
+| 34 | **The kernel was embedded inside the boot image (memdisk)** — `/boot/kvant.bin` is read from RAM, not from the drive |
+| 35 | A new `make floppy` target: a 1.44 MB floppy image, bypassing the DVD entirely |
+
+The ISO shrank from **10 475 520 to 940 032 bytes** (10.5 MB → 918 KB):
+everything that used to be read off the disc left the image.
+
+## Side defects found while building the floppy
+
+- `dd` of the boot sector overwrote the **BPB** (bytes 3–89) → "non DOS media".
+  Then it turned out that core.img from sector 2 overwrites the FAT itself. The
+  final solution: the floppy carries **no filesystem at all** and the kernel
+  lives inside core.img.
+- In a monolithic image the default root is the memdisk. An intermediate variant
+  with `search --file` worked, but became unnecessary once the kernel was
+  embedded, and was removed.
+
+## Verification
+
+| Medium | Configuration | Result |
 |---|---|---|
 | ISO | q35/core2duo/std | 1024×768×32, OK |
 | ISO | pc/core2duo/cirrus | 1024×768×24, OK |
 | ISO | pc/pentium/std | 1024×768×32, OK |
-| ISO | isapc без PCI | текстовый, OK |
-| Дискета | pc/core2duo | OK |
-| Дискета | pc/pentium | OK |
+| ISO | isapc without PCI | text mode, OK |
+| Floppy | pc/core2duo | OK |
+| Floppy | pc/pentium | OK |
 
-Паник — ноль во всех шести прогонах.
+Zero panics across all six runs.
 
-## Что делать на RV410
+## What to do on an RV410
 
-1. **Запишите новый ISO** (918 КБ) — на болванку на минимальной скорости
-   либо на флешку (образ гибридный).
-2. Если снова зависнет на «Welcome to GRUB!» — дело в приводе. Тогда
-   **`release/kvantos-floppy.img`**: он читает единственный сектор и
-   дальше работает из памяти. Записать можно на USB через Rufus/dd —
-   BIOS RV410 умеет USB-FDD эмуляцию.
-3. Ориентируйтесь на индикаторы: загорелся NumLock → ядро стартовало.
+1. **Write the new ISO** (918 KB) — onto a blank disc at the lowest speed, or
+   onto a USB stick (the image is hybrid).
+2. If it hangs at "Welcome to GRUB!" again, the drive is at fault. Then use
+   **`release/kvantos-floppy.img`**: it reads a single sector and works from
+   memory afterwards. It can be written to USB with Rufus/dd — the RV410 BIOS
+   can do USB-FDD emulation.
+3. Watch the indicators: NumLock lit → the kernel started.
 
 ---
 
-# Клавиатура не отвечает на реальном ноутбуке
+# The keyboard does not respond on the real laptop
 
-Дискета загрузилась — значит загрузчик и ядро в порядке. По вашему
-скриншоту видно главное: в статус-баре идёт время `00:00:22` и указано
-«задач 3». **Система не зависла** — таймер тикает, планировщик работает.
-Не отвечает именно клавиатура.
+The floppy booted, so the bootloader and the kernel are fine. Your screenshot
+shows the main thing: the status bar counts time `00:00:22` and says "3 tasks".
+**The system has not frozen** — the timer ticks, the scheduler runs. It is the
+keyboard that does not answer.
 
-## Две причины
+## Two causes
 
-**1. Контроллер i8042 никогда не инициализировался.**
-`keyboard_init()` состоял из двух строк: обнулить буфер и повесить
-обработчик IRQ1. Не выполнялось ничего из обязательного:
+**1. The i8042 controller was never initialised.**
+`keyboard_init()` consisted of two lines: clear the buffer and hook IRQ1. None
+of the mandatory work was done:
 
-- порт клавиатуры не включался командой `0xAE` (BIOS мог оставить его
-  выключенным);
-- не выставлялся бит 0 байта конфигурации — **разрешение IRQ1**;
-- не включалась трансляция в набор скан-кодов 1 (бит 6), хотя таблицы
-  `map_lower`/`map_upper` рассчитаны именно на него;
-- не отправлялась команда `0xF4` — «начать передачу скан-кодов»;
-- не вычитывался мусорный байт, оставшийся от BIOS. Пока он лежит в
-  буфере вывода, **новых IRQ1 не будет вообще**.
+- the keyboard port was not enabled with command `0xAE` (the BIOS could have
+  left it disabled);
+- bit 0 of the configuration byte — **the IRQ1 enable** — was not set;
+- translation into scan code set 1 (bit 6) was not enabled, although the
+  `map_lower`/`map_upper` tables are written for exactly that set;
+- command `0xF4` — "start sending scan codes" — was not issued;
+- the junk byte left over by the BIOS was not drained. While it sits in the
+  output buffer **there will be no new IRQ1 at all**.
 
-QEMU отдаёт контроллер уже включённым и с трансляцией, поэтому дефект
-не проявлялся ни в одном из прошлых тестов. Реальный i8042 так не умеет.
+QEMU hands over the controller already enabled and translating, which is why the
+defect never surfaced in any earlier test. A real i8042 does not behave that way.
 
-**2. `mouse_init()` затирал биты клавиатуры.**
-Байт конфигурации у контроллера общий для обоих портов. Мышь читала
-его, меняла свои биты и записывала обратно — не подтверждая биты
-клавиатуры. Если BIOS оставил их сброшенными, ввод пропадал совсем.
+**2. `mouse_init()` clobbered the keyboard bits.**
+The controller's configuration byte is shared by both ports. The mouse read it,
+changed its own bits and wrote it back — without reaffirming the keyboard bits.
+If the BIOS had left them cleared, input disappeared entirely.
 
-## Исправления
+## The fixes
 
-| № | Файл | Что сделано |
-|---|------|-------------|
-| 36 | keyboard.c | Полная инициализация i8042: очистка буфера, `0xAE`, биты 0/4/6 конфигурации, команда `0xF4`, повторная очистка |
-| 37 | mouse.c | Мышь явно подтверждает биты клавиатуры (0x01, ~0x10, 0x40) |
-| 38 | keyboard.c + timer.c | `kbd_poll()` — страховочный опрос по тику таймера на случай, если IRQ1 не доходит вовсе |
+| # | File | What was done |
+|---|------|---------------|
+| 36 | keyboard.c | Full i8042 initialisation: buffer drain, `0xAE`, configuration bits 0/4/6, command `0xF4`, another drain |
+| 37 | mouse.c | The mouse explicitly reaffirms the keyboard bits (0x01, ~0x10, 0x40) |
+| 38 | keyboard.c + timer.c | `kbd_poll()` — a fallback poll on the timer tick in case IRQ1 never arrives |
 
-## Проверка
+## Verification
 
-Страховку я проверил жёстко: **полностью замаскировал IRQ1 в PIC**,
-сымитировав ноутбук, где прерывание не доходит. Результат — команды
-`help` и `mem` всё равно набираются и выполняются. Имитация удалена,
-код возвращён в исходное состояние (проверено: остатков нет).
+The fallback was tested harshly: **IRQ1 was masked out completely in the PIC**,
+simulating a laptop where the interrupt never arrives. The result — `help` and
+`mem` can still be typed and executed. The simulation was removed and the code
+returned to its original state (verified: no leftovers).
 
-| Носитель | Конфигурация | Итог |
+| Medium | Configuration | Result |
 |---|---|---|
-| Дискета | pc/core2duo | OK, паник 0 |
-| Дискета | pc/pentium | OK, паник 0 |
-| ISO | q35/core2duo | OK, паник 0 |
-| ISO | isapc без PCI | OK, паник 0 |
+| Floppy | pc/core2duo | OK, 0 panics |
+| Floppy | pc/pentium | OK, 0 panics |
+| ISO | q35/core2duo | OK, 0 panics |
+| ISO | isapc without PCI | OK, 0 panics |
 
-Ввод проверен отдельно: `help`, `mem`, `hwreport` — все команды приняты.
+Input was checked separately: `help`, `mem`, `hwreport` — every command accepted.
 
-## Если клавиатура всё же молчит
+## If the keyboard still stays silent
 
-В BIOS RV410 поищите пункт вроде **USB Legacy Support / USB Keyboard
-Support** и попробуйте оба положения. При включённой эмуляции BIOS
-иногда перехватывает контроллер на себя.
+In the RV410 BIOS look for an item like **USB Legacy Support / USB Keyboard
+Support** and try both positions. With emulation on, the BIOS sometimes grabs
+the controller for itself.
 
 ---
 
-# Оптимизация графики (10-15 к/с на реальном железе)
+# Graphics optimisation (10-15 fps on real hardware)
 
-## Где именно терялось время
+## Where the time was actually lost
 
-Замер показал четыре узких места, главное из них - первое.
+Measurement revealed four bottlenecks, the first being the main one.
 
-**1. Видеопамять работала в некешируемом режиме (UC).**
-MTRR нигде не настраивались. На реальном железе область PCI/PCIe по
-умолчанию некешируема: **каждая** запись пикселя уходит отдельной
-транзакцией по шине, и процессор ждёт её завершения. Копирование кадра
-1024x768x32 (3 МиБ) в таком режиме занимает десятки миллисекунд. В QEMU
-этого не видно - там вся «видеопамять» является обычным ОЗУ хоста,
-поэтому дефект и не всплыл за все прошлые прогоны.
+**1. Video memory was working in an uncached (UC) mode.**
+MTRRs were never configured. On real hardware the PCI/PCIe region is uncacheable
+by default: **every** pixel write goes out as a separate bus transaction and the
+CPU waits for it to complete. Copying a 1024x768x32 frame (3 MiB) in that mode
+takes tens of milliseconds. In QEMU this is invisible — there all the "video
+memory" is ordinary host RAM, which is why the defect never surfaced in any
+earlier run.
 
-**2. Каждый кадр в видеопамять уходили все 3 МиБ**, даже когда на экране
-менялся только курсор.
+**2. All 3 MiB went into video memory every frame**, even when only the cursor
+had moved.
 
-**3. `fb_glyph` рисовал текст попиксельно** - проверка границ и пересчёт
-адреса на каждый пиксель.
+**3. `fb_glyph` drew text pixel by pixel** — a bounds check and an address
+recomputation for every pixel.
 
-**4. `task_sleep(30)` был глухим.** На медленной машине он добавлял 30 мс
-к и без того долгому кадру, на быстрой - ограничивал 33 к/с.
+**4. `task_sleep(30)` was deaf.** On a slow machine it added 30 ms to an already
+long frame; on a fast one it capped things at 33 fps.
 
-## Что сделано
+## What was done
 
-| № | Файл | Оптимизация |
-|---|------|-------------|
-| 39 | mtrr.c (новый) | Режим **write-combining** для фреймбуфера через MTRR: процессор копит записи и отправляет пачками по 64 байта. Главный выигрыш на живом железе |
-| 40 | fb.c | `fb_present` - разворот цикла по 8 слов (32 байта за итерацию) |
-| 41 | fb.c | `fb_present_rows()` - выгрузка только заданных строк |
-| 42 | gui.c | Полная выгрузка кадра только при событиях ввода; иначе в видеопамять уходят лишь полоса курсора и панель - десятки КиБ вместо 3 МиБ |
-| 43 | gui.c | Раз в 8 кадров кадр выгружается целиком, чтобы живые счётчики «Монитора» и часы не застывали |
-| 44 | fb.c | Быстрый путь `fb_glyph` для 32 бит: без проверок границ, пустые строки глифа пропускаются |
-| 45 | string.c | `memcpy`/`memset` работают словами по 4 байта вместо побайтового цикла |
-| 46 | gui.c | Адаптивная задержка: спим только остаток до 30 мс, иначе сразу `task_yield()` |
-| 47 | gui.c | **Счётчик к/с на панели** - чтобы измерять, а не гадать |
+| # | File | Optimisation |
+|---|------|--------------|
+| 39 | mtrr.c (new) | **Write-combining** mode for the framebuffer through MTRRs: the CPU accumulates writes and sends them in 64-byte bursts. The main win on live hardware |
+| 40 | fb.c | `fb_present` — the loop unrolled by 8 words (32 bytes per iteration) |
+| 41 | fb.c | `fb_present_rows()` — flushing only the given rows |
+| 42 | gui.c | A full frame flush only on input events; otherwise only the cursor strip and the panel reach video memory — tens of KiB instead of 3 MiB |
+| 43 | gui.c | Once every 8 frames the whole frame is flushed, so that the live Monitor counters and the clock do not freeze |
+| 44 | fb.c | A fast path in `fb_glyph` for 32 bits: no bounds checks, empty glyph rows skipped |
+| 45 | string.c | `memcpy`/`memset` work in 4-byte words instead of a byte-by-byte loop |
+| 46 | gui.c | An adaptive delay: sleep only for what remains of 30 ms, otherwise `task_yield()` right away |
+| 47 | gui.c | **An fps counter on the panel** — so we measure rather than guess |
 
-## Проверка
+## Verification
 
-`memcpy`/`memset` сверены с эталонными реализациями на **1600
-комбинациях** смещений и длин - расхождений нет. Это критично: ошибка
-в них повредила бы всю систему.
+`memcpy`/`memset` were compared against reference implementations across **1600
+combinations** of offsets and lengths — no discrepancies. That is critical: a
+bug in them would corrupt the whole system.
 
-| Носитель | Конфигурация | Результат |
+| Medium | Configuration | Result |
 |---|---|---|
-| Дискета | pc/core2duo | OK, паник 0 |
-| Дискета | pc/pentium | OK, паник 0 |
-| ISO | q35/core2duo | OK, паник 0 |
-| ISO | isapc без PCI | OK, паник 0 |
+| Floppy | pc/core2duo | OK, 0 panics |
+| Floppy | pc/pentium | OK, 0 panics |
+| ISO | q35/core2duo | OK, 0 panics |
+| ISO | isapc without PCI | OK, 0 panics |
 
-В QEMU счётчик показывает 33 к/с - это потолок адаптивной задержки, а не
-предел скорости. Монитор системы и часы обновляются корректно.
+In QEMU the counter shows 33 fps — that is the ceiling of the adaptive delay,
+not a speed limit. The system monitor and the clock update correctly.
 
-## Чего ожидать на RV410
+## What to expect on an RV410
 
-Основной эффект даёт MTRR (№39): именно некешируемая видеопамять и
-создаёт 10-15 к/с. Величину прироста заранее назвать честно не могу -
-она зависит от того, включил ли BIOS ноутбука write-combining на область
-GMA самостоятельно. **Точную цифру покажет счётчик к/с в правом углу
-панели.**
+The main effect comes from the MTRRs (#39): uncached video memory is exactly
+what creates those 10-15 fps. I cannot honestly predict the size of the gain in
+advance — it depends on whether the laptop BIOS enabled write-combining over the
+GMA region by itself. **The exact figure will be shown by the fps counter in the
+right-hand corner of the panel.**
 
-Если прирост окажется малым, следующий шаг - снизить разрешение
-(`vidmode 800 600` уменьшает объём кадра вдвое) либо перейти на 16 бит
-на пиксель.
+If the gain turns out to be small, the next step is to lower the resolution
+(`vidmode 800 600` halves the frame size) or move to 16 bits per pixel.
 
 ---
 
-# Снятие потолка в 33 кадра
+# Lifting the 33-frame ceiling
 
-Потолок создавали **две** причины, а не одна.
+The ceiling was created by **two** causes, not one.
 
-1. **Жёсткий бюджет 30 мс на кадр** в главном цикле GUI.
-2. **Гранулярность таймера.** PIT работал на 100 Гц, то есть шаг 10 мс.
-   Даже без бюджета отмерить кадр точнее 33 к/с было невозможно, а
-   `task_sleep(1)` спал бы все 10 мс.
+1. **A hard 30 ms frame budget** in the main GUI loop.
+2. **Timer granularity.** The PIT ran at 100 Hz, i.e. a 10 ms step. Even without
+   the budget, timing a frame more precisely than 33 fps was impossible, and
+   `task_sleep(1)` would have slept the full 10 ms.
 
-## Что сделано
+## What was done
 
-| № | Файл | Изменение |
-|---|------|-----------|
-| 48 | main.c | PIT переведён на **1000 Гц** (шаг 1 мс). Накладные расходы на IRQ ничтожны, зато появилась миллисекундная точность |
-| 49 | gui.c | Ограничение частоты кадров снято: `gui_fps_limit = 0` - рисуем настолько быстро, насколько позволяет железо, лишь уступая процессор планировщику |
-| 50 | gui.c | Клавиша **L** переключает предел: без предела → 60 → 30 к/с (полезно для экономии батареи на ноутбуке) |
-| 51 | gui.c | Жёстко зашитые тики заменены на `timer_hz()`: двойной клик (было 90), сообщение настроек (было 400), окно замера к/с. Иначе смена частоты PIT сломала бы их |
-| 52 | gui.c | Убраны 64-битные деления - они тянули `__udivdi3`, которой нет без libgcc |
+| # | File | Change |
+|---|------|--------|
+| 48 | main.c | The PIT was moved to **1000 Hz** (a 1 ms step). The IRQ overhead is negligible, and we gained millisecond precision |
+| 49 | gui.c | The frame rate limit was removed: `gui_fps_limit = 0` — we draw as fast as the hardware allows, merely yielding the CPU to the scheduler |
+| 50 | gui.c | The **L** key cycles the limit: unlimited → 60 → 30 fps (useful for saving battery on a laptop) |
+| 51 | gui.c | Hard-wired tick counts were replaced by `timer_hz()`: the double click (was 90), the settings message (was 400), the fps measurement window. Otherwise changing the PIT frequency would have broken them |
+| 52 | gui.c | 64-bit divisions were removed — they pulled in `__udivdi3`, which is absent without libgcc |
 
-## Найденный побочный баг: двоение символов
+## A side bug found: doubled characters
 
-После перехода на 1000 Гц ввод начал двоить символы: `gui` превращалось
-в `ggui`. Причина - гонка между таймерным опросом `kbd_poll()` и
-обработчиком IRQ1: таймер успевал забрать скан-код из порта 0x60
-раньше, а `kbd_cb` затем читал **уже пустой порт** и получал то же
-значение повторно. При 100 Гц окно гонки было в 10 раз уже, поэтому
-дефект не проявлялся.
+After the move to 1000 Hz, input started doubling characters: `gui` turned into
+`ggui`. The cause was a race between the timer poll `kbd_poll()` and the IRQ1
+handler: the timer managed to take the scan code out of port 0x60 first, and
+`kbd_cb` then read an **already empty port** and got the same value again. At
+100 Hz the race window was ten times narrower, so the defect never showed.
 
-Исправлено двумя правками:
+Fixed by two changes:
 
-| № | Файл | Изменение |
-|---|------|-----------|
-| 53 | keyboard.c | `kbd_cb` читает 0x60 только когда бит OBF статуса подтверждает наличие байта |
-| 54 | keyboard.c | Цикл опроса в `kbd_poll` выполняется неделимо (`irq_save`) |
+| # | File | Change |
+|---|------|--------|
+| 53 | keyboard.c | `kbd_cb` reads 0x60 only when the OBF status bit confirms a byte is there |
+| 54 | keyboard.c | The polling loop in `kbd_poll` runs indivisibly (`irq_save`) |
 
-## Проверка
+## Verification
 
-| Режим | Показания счётчика |
+| Mode | Counter reading |
 |---|---|
-| Без предела | **125-127 к/с** |
-| Предел 60 | 61 к/с |
-| Предел 30 | 30 к/с |
+| Unlimited | **125-127 fps** |
+| Limit 60 | 61 fps |
+| Limit 30 | 30 fps |
 
-Было 33 к/с - стало 125+. Переключение клавишей L работает по кругу,
-двоение символов устранено (проверено: `gui` набирается корректно).
+It was 33 fps — it is now 125+. Cycling with the L key works round the loop, and
+the character doubling is gone (verified: `gui` types correctly).
 
-| Носитель | Конфигурация | Итог |
+| Medium | Configuration | Result |
 |---|---|---|
-| Дискета | pc/core2duo, pc/pentium | OK, паник 0, таймер 1000 Гц |
-| ISO | q35/core2duo | OK, паник 0 |
-| ISO | isapc без PCI | OK, паник 0 |
+| Floppy | pc/core2duo, pc/pentium | OK, 0 panics, the timer at 1000 Hz |
+| ISO | q35/core2duo | OK, 0 panics |
+| ISO | isapc without PCI | OK, 0 panics |
 
-## Блокнот: доводка после первого теста
+## The editor: polish after the first test
 
-Полноценный текстовый редактор (приложение «Блокнот», клавиша **E**)
-добавлен и проверён на живой системе. Первый прогон вскрыл три дефекта.
+A full text editor (the Editor application, key **E**) was added and tested on
+the live system. The first run exposed three defects.
 
-| № | Файл | Исправление |
+| # | File | Fix |
 |---|---|---|
-| 55 | gui.c | **Ctrl+S сохранял без запроса имени.** Комбинация звала `ed_save()` напрямую, поэтому документ молча уходил под именем по умолчанию `новый.txt`, а набранное пользователем имя игнорировалось. Теперь Ctrl+S включает режим ввода имени и подставляет текущее — как «Сохранить как» |
-| 56 | gui.c | **У иконки «Блокнот» не было картинки** — на рабочем столе висела одна подпись: `draw_icon_glyph()` не знал `APP_EDIT`. Нарисован лист со строчками и карандашом |
-| 57 | gui.c | **Нижний ряд иконок упирался в панель задач.** Формула `per_col` не учитывала верхний отступ 50 px и высоту подписи 58 px. Проверено для 1024x768, 800x600 и 640x480 — подписи помещаются везде |
+| 55 | gui.c | **Ctrl+S saved without asking for a name.** The combination called `ed_save()` directly, so the document silently went out under the default name and the name typed by the user was ignored. Ctrl+S now enters name-entry mode with the current name filled in — a "Save as" |
+| 56 | gui.c | **The Editor icon had no picture** — only a caption hung on the desktop: `draw_icon_glyph()` did not know `APP_EDIT`. A sheet with lines and a pencil was drawn |
+| 57 | gui.c | **The bottom row of icons ran into the taskbar.** The `per_col` formula ignored the 50 px top margin and the 58 px caption height. Verified for 1024x768, 800x600 and 640x480 — the captions fit everywhere |
 
-### Проверка
+### Verification
 
-Сценарий в QEMU: рабочий стол → **E** → набор трёх строк → **Ctrl+S** →
-ввод имени `zametka.txt` → Enter → выход в оболочку.
+The QEMU scenario: desktop → **E** → type three lines → **Ctrl+S** → enter the
+name `zametka.txt` → Enter → back to the shell.
 
 ```
 kvant:/$ ls
-   РАЗМЕР  ИМЯ
+     SIZE  NAME
       207  readme.txt
       152  license.txt
       201  poem.txt
@@ -543,106 +544,106 @@ Vtoraya stroka
 Tretya stroka
 ```
 
-Файл записан под заданным именем, содержимое совпадает посимвольно,
-имя сразу появляется в списке файлов справа. Снимок экрана:
-`screenshots/32_editor.png`.
+The file was written under the requested name, the contents match character by
+character, and the name appears in the file list on the right immediately. A
+screenshot: `screenshots/32_editor.png`.
 
-### Возможности редактора
+### The editor's features
 
-Набор текста, стрелки, Enter, Backspace, Tab (4 пробела), нумерация строк,
-подсветка текущей строки, мигающий курсор, полоса прокрутки, список файлов
-ramfs справа (открытие щелчком), строка состояния «Строка N из M, столбец K».
-Кнопки: Создать, Открыть, Сохранить, Удалить. Ctrl+N — новый документ,
-Ctrl+S — сохранить, Esc — закрыть окно. Предел: 128 строк по 120 символов.
+Typing, arrows, Enter, Backspace, Tab (4 spaces), line numbering, current-line
+highlighting, a blinking cursor, a scrollbar, a list of ramfs files on the right
+(click to open) and a status line "Line N of M, column K". Buttons: New, Open,
+Save, Delete. Ctrl+N for a new document, Ctrl+S to save, Esc to close the
+window. Limit: 128 lines of 120 characters.
 
-## Приложения: диск, файловая система и ABI
+## Applications: disk, filesystem and ABI
 
-Система научилась устанавливать программы. Это потребовало четырёх
-новых подсистем, поэтому раздел большой.
+The system learned to install programs. That required four new subsystems, hence
+the size of this section.
 
-| № | Файл | Что сделано |
+| # | File | What was done |
 |---|---|---|
-| 58 | kernel/ata.c | Драйвер диска **ATA PIO, LBA28**. Опрос вместо прерываний, таймауты на каждом ожидании: без них отсутствующий контроллер вешал бы загрузку. Отсекаются приводы ATAPI и «плавающая шина» (статус 0xFF) |
-| 59 | kernel/kvfs.c | **KvFS**: суперблок, каталог на 64 файла, непрерывные цепочки секторов. Размещение — «первый подходящий промежуток» |
-| 60 | include/kvapp.h | **ABI приложений**: таблица из 30 системных функций, структура окна, коды клавиш. Единственный договор между ядром и программой |
-| 61 | kernel/kapp.c | Загрузчик `.kapp`: проверка подписи и версии ABI, разворачивание образа, вызов точки входа, отсечение рисования по клиентской области |
-| 62 | kernel/gui.c | Окна «Программы» (установка, запуск, удаление) и «Приложение», иконки, горячая клавиша **G** |
-| 63 | kernel/shell.c | Команды `disk`, `format`, `df`, `dls`, `dcat`, `install`, `uninstall`, `apps` |
+| 58 | kernel/ata.c | An **ATA PIO, LBA28** disk driver. Polling instead of interrupts, timeouts on every wait: without them a missing controller would hang the boot. ATAPI drives and the "floating bus" (status 0xFF) are filtered out |
+| 59 | kernel/kvfs.c | **KvFS**: a superblock, a 64-file directory, contiguous sector chains. Placement by "the first suitable gap" |
+| 60 | include/kvapp.h | **The application ABI**: a table of 30 system functions, the window structure, key codes. The only contract between the kernel and a program |
+| 61 | kernel/kapp.c | The `.kapp` loader: signature and ABI version checks, unpacking the image, calling the entry point, clipping drawing to the client area |
+| 62 | kernel/gui.c | The Programs window (install, launch, remove) and the Application window, the icons, the **G** hotkey |
+| 63 | kernel/shell.c | The commands `disk`, `format`, `df`, `dls`, `dcat`, `install`, `uninstall`, `apps` |
 
-### Найденные и исправленные дефекты
+### Defects found and fixed
 
-| № | Проявление | Причина и решение |
+| # | Symptom | Cause and solution |
 |---|---|---|
-| 64 | `apps` печатала `%-24s 1468720 КиБ` | `kprintf` **не умеет левое выравнивание**. Отступ добивается пробелами вручную, длина считается в знаках UTF-8, а не байтах |
-| 65 | Утилита `mkdisk.py` не читала свой же образ | Запись каталога в Си вышла **60 байт вместо 64**. Выровнено, добавлен `_Static_assert(sizeof(kvfs_dirent_t) == 64)` — теперь рассинхрон ловит компилятор |
-| 66 | **Падение приложения роняло всю ОС** | Две ошибки сразу. Первая: `guard_set` была функцией и сохраняла `esp` собственной рамки — к моменту возврата рамка уже затёрта, прыжок уходил в мусор (`eip=0x00000007`). Стало макросом `GUARD_SET`, разворачивается в теле вызывающей функции, чья рамка жива всё время работы приложения |
-| 67 | Запись по нулевому адресу проходила молча | **Страница 0 была отображена present+rw**, поэтому `*(int*)0 = 42` не давал исключения и портил память. Нулевая страница оставлена неотображённой — теперь разыменование `NULL` даёт честный page fault |
-| 68 | Паника вместо снятия программы | `page_fault` и `isr_handler` теперь проверяют `kapp_in_app()` и зовут `kapp_recover()`. Сообщение на экран не печатается: оно испортило бы графический режим |
+| 64 | `apps` printed `%-24s 1468720 KiB` | `kprintf` **cannot do left alignment**. The padding is now added with spaces by hand and the length is counted in UTF-8 characters, not bytes |
+| 65 | The `mkdisk.py` tool could not read its own image | The directory entry in C came out **60 bytes instead of 64**. It was aligned and a `_Static_assert(sizeof(kvfs_dirent_t) == 64)` added — the compiler now catches any drift |
+| 66 | **A crashing application took the whole OS down** | Two errors at once. First: `guard_set` was a function and saved the `esp` of its own frame — by the time of the return that frame was already overwritten and the jump landed in garbage (`eip=0x00000007`). It became the `GUARD_SET` macro, expanded inside the calling function whose frame stays alive for the whole run of the application |
+| 67 | A write to address zero passed silently | **Page 0 was mapped present+rw**, so `*(int*)0 = 42` raised no exception and corrupted memory. The zero page is now left unmapped — dereferencing `NULL` gives an honest page fault |
+| 68 | A panic instead of removing the program | `page_fault` and `isr_handler` now check `kapp_in_app()` and call `kapp_recover()`. No message is printed on screen: it would corrupt the graphics mode |
 
-### Проверка на живой системе
+### Verification on the live system
 
-| Что проверялось | Итог |
+| What was checked | Result |
 |---|---|
-| Обнаружение диска | `QEMU HARDDISK, 131072 секторов, 64 МиБ` |
-| Запуск приложения с диска | Часы идут, стрелки и цифровое время верны |
-| Клавиши и мышь в приложении | **D** переключает тему, **S** — секунды, щелчки считаются |
-| Запись файла приложением | «Заметки» сохраняют текст на диск |
-| **Сохранность после перезагрузки** | Файл, записанный в прошлом сеансе, прочитан после полного выключения машины |
-| **Падение приложения** | Программа снята, система жива: 126 к/с, оболочка отвечает |
-| Машина без диска | Работает, честно сообщает о недоступности установки |
+| Disk detection | `QEMU HARDDISK, 131072 sectors, 64 MiB` |
+| Launching an application from disk | The clock runs, the hands and the digital time are right |
+| Keys and mouse in an application | **D** switches the theme, **S** the seconds, clicks are counted |
+| An application writing a file | Notes saves its text to disk |
+| **Persistence across a reboot** | A file written in the previous session was read back after a full power cycle |
+| **An application crash** | The program was removed, the system stayed alive: 126 fps, the shell responds |
+| A machine without a disk | Works, and honestly reports that installation is unavailable |
 
-### Регрессия четырёх конфигураций
+### A regression across four configurations
 
-| Конфигурация | Диск | Итог |
+| Configuration | Disk | Result |
 |---|---|---|
-| pc / core2duo / ISO | есть | паник 0 |
-| pc / pentium / дискета | нет | паник 0 |
-| q35 / core2duo / ISO | есть | паник 0 |
-| isapc / pentium / ISO | нет | паник 0 |
+| pc / core2duo / ISO | yes | 0 panics |
+| pc / pentium / floppy | no | 0 panics |
+| q35 / core2duo / ISO | yes | 0 panics |
+| isapc / pentium / ISO | no | 0 panics |
 
-Скриншоты: `screenshots/33_app_clock.png`, `34_app_notes_persist.png`,
-`35_store.png`, `36_app_crash_survived.png`. Рабочие кадры отладки —
+Screenshots: `screenshots/33_app_clock.png`, `34_app_notes_persist.png`,
+`35_store.png`, `36_app_crash_survived.png`. The working debug frames are in
 `testshots/app_*`.
 
-## Доставка приложений без диска
+## Delivering applications without a disk
 
-Пользователь сообщил: приложение `.kapp` лежит в Windows, машина в
-VMware, а способа занести файл внутрь нет. Проверка подтвердила
-пробел: `install` берёт файл из ramfs, но положить туда двоичный
-файл было нечем, а диск в его ВМ не подключён.
+The user reported: the `.kapp` application sits in Windows, the machine runs in
+VMware, and there is no way to get the file inside. A check confirmed the gap:
+`install` takes a file from ramfs, but there was nothing that could put a binary
+file there, and no disk was attached to that VM.
 
-| № | Файл | Что сделано |
+| # | File | What was done |
 |---|---|---|
-| 69 | kernel/main.c | Ядро читает **модули Multiboot**: GRUB загружает `.kapp` в память, ядро кладёт их в ramfs. Имя берётся из строки модуля, отсекается путь |
-| 70 | Makefile, grub/grub.cfg | Приложения вкладываются **внутрь загрузочного образа** рядом с ядром; в каждый пункт меню добавлены строки `module` |
-| 71 | kernel/kapp.c | Загрузчик ищет приложение сначала на диске, **затем в ramfs** — программы с ISO запускаются без установки |
-| 72 | kernel/gui.c | Окно «Программы» показывает приложения из образа, когда диск не найден или не размечен (`W_ST_RAM0`) |
-| 73 | sdk/addapp.sh | Скрипт «вложить свой .kapp в ISO»: проверяет подпись KAPP, обновляет grub.cfg, пересобирает образы |
-| 74 | sdk/apps/snake.c | Третий пример — игра с анимацией по времени (`on_tick`, шаг `hz()/6`) |
+| 69 | kernel/main.c | The kernel reads **Multiboot modules**: GRUB loads the `.kapp` files into memory and the kernel puts them into ramfs. The name comes from the module string with the path stripped |
+| 70 | Makefile, grub/grub.cfg | Applications are embedded **inside the boot image** next to the kernel; `module` lines were added to every menu entry |
+| 71 | kernel/kapp.c | The loader looks for an application on the disk first and **then in ramfs** — programs from the ISO run without being installed |
+| 72 | kernel/gui.c | The Programs window shows applications from the image when no disk is found or it is unformatted (`W_ST_RAM0`) |
+| 73 | sdk/addapp.sh | An "embed my .kapp into the ISO" script: it checks the KAPP signature, updates grub.cfg and rebuilds the images |
+| 74 | sdk/apps/snake.c | A third sample — a game with time-based animation (`on_tick`, a step of `hz()/6`) |
 
-### Ошибки на пути
+### Mistakes along the way
 
-| Проявление | Причина |
+| Symptom | Cause |
 |---|---|
-| `APP_GRAFT` пуст, приложения не вкладывались | Makefile брал файлы из `sdk/build`, а каталог с именем `build` **не сохраняется в снапшоте**. Источник переключён на `release/apps` |
-| Первый прогон показал пустой `ls` | Тест шёл со старым ISO: `make iso` не пересобирает образ, если цель считается свежей. Нужен `rm -f build/kvantos.iso` |
-| Окно «Программы» не показывало список без диска | Ветка `!ata_present()` выходила из функции раньше вызова списка |
+| `APP_GRAFT` was empty and no applications were embedded | The Makefile took the files from `sdk/build`, and a directory named `build` **is not kept in the snapshot**. The source was switched to `release/apps` |
+| The first run showed an empty `ls` | The test used the old ISO: `make iso` does not rebuild the image when the target is considered fresh. `rm -f build/kvantos.iso` is required |
+| The Programs window showed no list without a disk | The `!ata_present()` branch returned from the function before the listing call |
 
-### Проверка
+### Verification
 
-| Что | Итог |
+| What | Result |
 |---|---|
-| Загрузка **без диска вообще** | `ls` показывает `clock.kapp` и `notes.kapp` из образа |
-| Запуск из образа | Часы идут, окно и строка состояния на месте |
-| `addapp.sh` со своим файлом | Змейка вложена, видна в списке, играется стрелками |
-| Диагностика модулей | `flags=0x126d mods_count=2` — GRUB передаёт модули корректно |
+| Booting **with no disk at all** | `ls` shows `clock.kapp` and `notes.kapp` from the image |
+| Launching from the image | The clock runs, the window and the status line are in place |
+| `addapp.sh` with a user file | Snake was embedded, appears in the list and plays with the arrows |
+| Module diagnostics | `flags=0x126d mods_count=2` — GRUB passes the modules correctly |
 
-Скриншоты: `screenshots/37_app_snake.png`, `38_apps_from_iso.png`.
-Инструкция для пользователя — `КАК-УСТАНОВИТЬ.md`.
+Screenshots: `screenshots/37_app_snake.png`, `38_apps_from_iso.png`.
+The user-facing instructions are in `INSTALL.ru.md`.
 
-## Контрольные суммы (актуальны)
+## Checksums (current)
 
-| Файл | Размер, Б | md5 |
+| File | Size, B | md5 |
 |---|---|---|
 | release/kvantos.iso | 1 005 568 | `330bbe1dac69a50c4a90c894f6d8cfc7` |
 | release/kvantos-floppy.img | 1 474 560 | `df61defc58c68a7a2d4d0a319b140518` |

@@ -1,4 +1,4 @@
-/* Таблица дескрипторов прерываний, PIC 8259, диспетчеризация ISR/IRQ */
+/* Interrupt descriptor table, PIC 8259, ISR/IRQ dispatch */
 #include "kernel.h"
 
 struct idt_entry {
@@ -52,9 +52,9 @@ void pic_remap(void) {
     outb(0xA1, 0x02); io_wait();
     outb(0x21, 0x01); io_wait();
     outb(0xA1, 0x01); io_wait();
-    /* Размаскируем всё: конкретные линии закрывать смысла нет,
-       необработанные IRQ просто получат EOI. IRQ0 (таймер) и IRQ1
-       (клавиатура) обязаны быть открыты. */
+    /* Unmask everything: masking individual lines buys nothing, an
+       unhandled IRQ simply gets an EOI. IRQ0 (timer) and IRQ1
+       (keyboard) must stay open. */
     outb(0x21, 0x00);
     outb(0xA1, 0x00);
 }
@@ -65,15 +65,15 @@ void irq_install_handler(u8 irq, isr_t h) { isr_handlers[32 + irq] = h; }
 void isr_handler(registers_t *r) {
     isr_t h = isr_handlers[r->int_no & 0xFF];
     if (h) { h(r); return; }
-    /* Исключение внутри приложения: снимаем его, но систему не роняем */
+    /* Exception inside an application: kill it, keep the system alive */
     if (r->int_no < 32 && kapp_in_app()) kapp_recover(exception_names[r->int_no]);
     if (r->int_no < 32) panic(exception_names[r->int_no], r);
-    else kprintf("[!] Необработанное прерывание %u\n", r->int_no);
+    else kprintf(T("[!] Unhandled interrupt %u\n", "[!] Необработанное прерывание %u\n"), r->int_no);
 }
 
 void irq_handler(registers_t *r) {
     u32 irq = r->int_no - 32;
-    /* EOI отправляем до обработчика: обработчик может переключить задачу */
+    /* Send the EOI before the handler: the handler may switch tasks */
     if (irq >= 8) outb(0xA0, 0x20);
     outb(0x20, 0x20);
     isr_t h = isr_handlers[r->int_no];
@@ -92,7 +92,7 @@ void idt_init(void) {
     S(0) S(1) S(2) S(3) S(4) S(5) S(6) S(7) S(8) S(9) S(10) S(11) S(12) S(13) S(14) S(15)
     S(16) S(17) S(18) S(19) S(20) S(21) S(22) S(23) S(24) S(25) S(26) S(27) S(28) S(29) S(30) S(31)
 #undef S
-    idt_set(128, (u32)isr128, 0x08, 0xEE);   /* syscall, доступен из ring3 */
+    idt_set(128, (u32)isr128, 0x08, 0xEE);   /* syscall, reachable from ring 3 */
 
 #define I(n, v) idt_set(v, (u32)irq##n, 0x08, 0x8E);
     I(0,32) I(1,33) I(2,34) I(3,35) I(4,36) I(5,37) I(6,38) I(7,39)

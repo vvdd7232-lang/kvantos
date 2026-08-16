@@ -1,11 +1,11 @@
-/* PS/2 клавиатура, набор скан-кодов 1, кольцевой буфер */
+/* PS/2 keyboard, scan code set 1, ring buffer */
 #include "kernel.h"
 
 #define BUF_SIZE 256
 static volatile char buf[BUF_SIZE];
 static volatile u32 head = 0, tail = 0;
 static int shift = 0, ctrl = 0, caps = 0, extended = 0;
-static void kbd_sync_leds(void);   /* определена ниже */
+static void kbd_sync_leds(void);   /* defined below */
 
 static const char map_lower[128] = {
     0, 27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
@@ -31,18 +31,19 @@ static void push(char c) {
 static void kbd_cb(registers_t *r) {
     (void)r;
 
-    /* Порт 0x60 читаем ТОЛЬКО когда в буфере действительно есть байт.
-       Иначе возникала гонка: таймерный опрос kbd_poll() успевал забрать
-       скан-код раньше, а этот обработчик читал уже пустой порт и получал
-       тот же байт повторно - символы двоились ("gui" -> "ggui").
-       Чтение при пустом буфере возвращает прошлое значение. */
+    /* Port 0x60 is read ONLY when the buffer really holds a byte.
+       Otherwise a race appeared: the timer poll kbd_poll() grabbed the
+       scan code first, and this handler read an already empty port and
+       received the same byte again - characters were doubled
+       ("gui" -> "ggui"). Reading an empty buffer returns the previous
+       value. */
     if (!(inb(0x64) & 0x01)) return;
 
     u8 sc = inb(0x60);
 
-    /* Ответы самого контроллера, а не нажатия клавиш. Раньше 0xFA (ACK)
-       на команду смены светодиодов попадал в общий разбор как скан-код
-       и ломал ввод. */
+    /* Replies from the controller itself rather than key presses. The
+       0xFA (ACK) answer to an LED command used to fall through into the
+       generic parsing as a scan code and broke input. */
     if (sc == 0xFA || sc == 0xFE || sc == 0xEE || sc == 0x00 || sc == 0xFF)
         return;
 
@@ -78,9 +79,9 @@ static void kbd_cb(registers_t *r) {
     }
 
     if (sc >= 128) return;
-    /* CapsLock действует ТОЛЬКО на буквы. Раньше здесь было shift^caps
-       для всех клавиш, из-за чего при включённом CapsLock цифра 1
-       давала "!", а Shift+1 - наоборот "1". */
+    /* CapsLock affects letters ONLY. This used to be shift^caps for
+       every key, so with CapsLock on the digit 1 produced "!" while
+       Shift+1 produced "1" instead. */
     char lo = map_lower[sc];
     int letter = (lo >= 'a' && lo <= 'z');
     int up = letter ? (shift ^ caps) : shift;
@@ -93,52 +94,53 @@ static void kbd_cb(registers_t *r) {
     push(c);
 }
 
-/* Управление светодиодами клавиатуры.
-   Это единственный способ показать этап загрузки на ноутбуке,
-   у которого нет COM-порта, а экран ещё/уже не работает.
-   Биты: 0 - ScrollLock, 1 - NumLock, 2 - CapsLock. */
+/* Keyboard LED control.
+   This is the only way to signal the boot stage on a laptop that has
+   no COM port while the screen does not work yet (or any more).
+   Bits: 0 - ScrollLock, 1 - NumLock, 2 - CapsLock. */
 static void kbd_wait_write(void) {
     for (u32 i = 0; i < 100000; i++)
-        if (!(inb(0x64) & 0x02)) return;      /* буфер ввода свободен */
+        if (!(inb(0x64) & 0x02)) return;      /* the input buffer is free */
 }
 
-/* Забираем ACK (0xFA) сами: иначе он уйдёт в IRQ-обработчик. */
+/* Consume the ACK (0xFA) ourselves, otherwise it reaches the IRQ handler. */
 static void kbd_wait_ack(void) {
     for (u32 i = 0; i < 100000; i++) {
-        if (inb(0x64) & 0x01) {               /* есть байт в буфере вывода */
+        if (inb(0x64) & 0x01) {               /* a byte is waiting in the output buffer */
             u8 r = inb(0x60);
             if (r == 0xFA || r == 0xFE) return;
         }
     }
 }
 
-/* Отражаем состояние CapsLock на индикаторе клавиатуры. */
+/* Mirror the CapsLock state on the keyboard indicator. */
 static void kbd_sync_leds(void) {
     kbd_set_leds((u8)(caps ? 0x04 : 0x00));
 }
 
-/* Страховочный опрос. На некоторых ноутбуках IRQ1 не доходит до PIC
-   (нестандартная маршрутизация, режим эмуляции USB-клавиатуры в BIOS).
-   Тогда байты копятся в буфере вывода, а обработчик молчит. Эту функцию
-   дёргает таймер: если IRQ работает, буфер всегда пуст и она бесплатна. */
+/* A fallback poll. On some laptops IRQ1 never reaches the PIC
+   (non-standard routing, USB keyboard emulation in the BIOS). Bytes
+   then pile up in the output buffer while the handler stays silent.
+   The timer calls this function: when the IRQ does work the buffer is
+   always empty and the call costs nothing. */
 void kbd_poll(void) {
-    /* Опрос идёт из обработчика таймера и может вклиниться между
-       проверкой статуса и чтением 0x60 в обработчике клавиатуры -
-       тогда один и тот же скан-код обработается дважды (символ
-       двоился). При 1000 Гц вероятность такой гонки выросла в 10 раз,
-       поэтому чтение делаем неделимым. */
+    /* The poll runs from the timer handler and may cut in between the
+       status check and the read of 0x60 in the keyboard handler - the
+       same scan code would then be processed twice (a doubled
+       character). At 1000 Hz the odds of that race grew tenfold, so the
+       read is made atomic. */
     u32 fl = irq_save();
     for (int i = 0; i < 8; i++) {
         u8 st = inb(0x64);
-        if (!(st & 0x01)) break;       /* буфера нет */
-        if (st & 0x20) break;          /* байт мыши, не наш */
+        if (!(st & 0x01)) break;       /* nothing buffered */
+        if (st & 0x20) break;          /* a mouse byte, not ours */
         kbd_cb(0);
     }
     irq_restore(fl);
 }
 
 void kbd_set_leds(u8 mask) {
-    u32 fl = irq_save();          /* обмен командой должен быть неделим */
+    u32 fl = irq_save();          /* the command exchange must be atomic */
     kbd_wait_write();
     outb(0x60, 0xED);
     kbd_wait_ack();
@@ -148,52 +150,52 @@ void kbd_set_leds(u8 mask) {
     irq_restore(fl);
 }
 
-/* Полная инициализация контроллера i8042.
-   Раньше здесь стояла только установка обработчика IRQ1. В QEMU это
-   работало, потому что эмулятор отдаёт контроллер уже включённым и с
-   трансляцией скан-кодов. Реальный i8042 (ноутбуки, Samsung RV410)
-   после передачи управления от BIOS может остаться с запрещённым
-   портом, выключенной трансляцией или неразобранным байтом в буфере -
-   тогда IRQ1 не приходит вовсе и ввода нет. */
+/* Full initialisation of the i8042 controller.
+   This used to install the IRQ1 handler and nothing else. That worked
+   under QEMU because the emulator hands over a controller that is
+   already enabled and translating scan codes. A real i8042 (laptops,
+   Samsung RV410) may be left by the BIOS with the port disabled,
+   translation off or an unread byte in the buffer - and then IRQ1 never
+   arrives and there is no input at all. */
 void keyboard_init(void) {
     head = tail = 0;
     irq_install_handler(1, kbd_cb);
 
     u32 fl = irq_save();
 
-    /* 1. Выгребаем мусор, оставшийся от BIOS. Пока в буфере вывода
-          есть байт, IRQ1 больше не придёт. */
+    /* 1. Drain the leftovers from the BIOS. While a byte sits in the
+          output buffer no further IRQ1 will arrive. */
     for (int i = 0; i < 32 && (inb(0x64) & 0x01); i++)
         (void)inb(0x60);
 
-    /* 2. Включаем первый порт PS/2 (BIOS мог его отключить). */
+    /* 2. Enable the first PS/2 port (the BIOS may have disabled it). */
     kbd_wait_write();
     outb(0x64, 0xAE);
 
-    /* 3. Читаем байт конфигурации контроллера. */
+    /* 3. Read the controller configuration byte. */
     kbd_wait_write();
     outb(0x64, 0x20);
     u8 cfg = 0;
     for (int i = 0; i < 100000; i++)
         if (inb(0x64) & 0x01) { cfg = inb(0x60); break; }
 
-    cfg |=  0x01;      /* бит 0: разрешить прерывание IRQ1 */
-    cfg &= (u8)~0x10;  /* бит 4: снять запрет тактирования клавиатуры */
-    cfg |=  0x40;      /* бит 6: трансляция в набор скан-кодов 1 -
-                          именно его ожидают наши таблицы map_lower/upper */
+    cfg |=  0x01;      /* bit 0: enable the IRQ1 interrupt */
+    cfg &= (u8)~0x10;  /* bit 4: lift the keyboard clock inhibit */
+    cfg |=  0x40;      /* bit 6: translation to scan code set 1 -
+                          exactly what map_lower/upper expect */
 
     kbd_wait_write();
     outb(0x64, 0x60);
     kbd_wait_write();
     outb(0x60, cfg);
 
-    /* 4. Разрешаем клавиатуре передавать скан-коды (0xF4).
-          Без этой команды устройство молчит. */
+    /* 4. Allow the keyboard to report scan codes (0xF4).
+          Without this command the device stays silent. */
     kbd_wait_write();
     outb(0x60, 0xF4);
     kbd_wait_ack();
 
-    /* 5. Ещё раз чистим буфер: ответы на команды нам не нужны. */
+    /* 5. Drain the buffer once more: command replies are of no use. */
     for (int i = 0; i < 32 && (inb(0x64) & 0x01); i++)
         (void)inb(0x60);
 
@@ -210,10 +212,10 @@ int kbd_getchar_nb(void) {
 char kbd_getchar(void) {
     int c;
     while ((c = kbd_getchar_nb()) < 0) {
-        /* До запуска планировщика task_yield() возвращается сразу,
-           и цикл жёг процессор на 100%. Ждём прерывание по-настоящему.
-           hlt безопасен только при разрешённых прерываниях - иначе
-           обошлись бы вечным сном. */
+        /* Before the scheduler starts task_yield() returns immediately and
+           the loop burned 100% of the CPU. Wait for an interrupt for
+           real. hlt is only safe with interrupts enabled - otherwise it
+           would be an eternal sleep. */
         u32 fl;
         __asm__ volatile("pushfl; popl %0" : "=r"(fl));
         if (fl & 0x200) __asm__ volatile("hlt");
