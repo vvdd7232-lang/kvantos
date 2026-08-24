@@ -489,6 +489,30 @@ static void human_size(char *dst, u32 dstsz, u32 bytes) {
                                              (bytes % (1024*1024)) * 10 / (1024*1024));
 }
 
+/* Resolve the mounted volume a pane path belongs to ("/mnt/<vol>/..."),
+   so the header can show its label and type. NULL when not found. */
+static vfs_volume_t *pane_volume(const char *path) {
+    if (!path) return NULL;
+    const char *p = path;
+    while (*p == '/') p++;
+    if (!strncmp(p, "mnt", 3) && (p[3] == '/' || p[3] == 0)) p += 3;
+    while (*p == '/') p++;
+    char vn[16]; u32 n = 0;
+    while (*p && *p != '/' && n < sizeof(vn) - 1) vn[n++] = *p++;
+    vn[n] = 0;
+    return n ? vfs_find(vn) : NULL;
+}
+
+/* Case-insensitive ".kapp" check, for the runnable-program icon. */
+static int fm_is_kapp(const char *name) {
+    u32 l = (u32)strlen(name);
+    if (l < 5) return 0;
+    const char *p = name + l - 5;
+    if (p[0] != '.') return 0;
+    return (p[1] == 'k' || p[1] == 'K') && (p[2] == 'a' || p[2] == 'A')
+        && (p[3] == 'p' || p[3] == 'P') && (p[4] == 'p' || p[4] == 'P');
+}
+
 /* one pane */
 static void fm_draw_pane(window_t *v, int win, int idx, i32 px, i32 py, i32 pw, i32 ph) {
     int active = (fm_active_pane() == idx);
@@ -506,7 +530,19 @@ static void fm_draw_pane(window_t *v, int win, int idx, i32 px, i32 py, i32 pw, 
 
     fb_fill(px + 1, py + 1, pw - 2, 20, active ? C_ACCENT : fb_rgb(232, 235, 242));
     char head[80];
-    fit_name(head, sizeof(head), path, (u32)((pw - 90) / 8));
+    {
+        /* At the root of a volume show its label and type ("FLASH (FAT32)")
+           so each pane is recognisable; deeper in, show the path. */
+        vfs_volume_t *vol = pane_volume(path);
+        if (vol && vfs_is_root(path)) {
+            char raw[80];
+            const char *lbl = (vol->label[0] ? vol->label : vol->name);
+            ksnprintf(raw, sizeof(raw), "%s (%s)", lbl, vfs_kind_name(vol->kind));
+            fit_name(head, sizeof(head), raw, (u32)((pw - 90) / 8));
+        } else {
+            fit_name(head, sizeof(head), path, (u32)((pw - 90) / 8));
+        }
+    }
     fb_text(px + 6, py + 3, head, active ? C_WHITE : C_TEXT, 0xFFFFFFFF);
 
     char sp[32];
@@ -545,10 +581,22 @@ static void fm_draw_pane(window_t *v, int win, int idx, i32 px, i32 py, i32 pw, 
 
         u32 fg = is_sel && active ? C_WHITE : C_TEXT;
 
-        /* a small icon: folder or sheet */
+        /* a small icon: folder, runnable program, or plain file */
         if (e->is_dir) {
             fb_fill(px + 7, y + 4, 6, 2, is_sel && active ? C_WHITE : C_YELLOW);
             fb_fill(px + 7, y + 6, 13, 9, is_sel && active ? C_WHITE : C_YELLOW);
+        } else if (fm_is_kapp(e->name)) {
+            /* a runnable program: a little window with a green play badge,
+               so programs are visible at a glance on any volume */
+            u32 bd = is_sel && active ? C_ACCENT : fb_rgb(96, 175, 120);
+            u32 bg = is_sel && active ? C_ACCENT : C_WHITE;
+            fb_fill(px + 7, y + 3, 12, 12, bg);
+            fb_rect(px + 7, y + 3, 12, 12, bd);
+            fb_fill(px + 7, y + 3, 12, 3, bd);            /* title bar */
+            u32 tri = is_sel && active ? C_WHITE : C_GREEN;
+            fb_fill(px + 10, y + 7, 1, 5, tri);           /* play triangle */
+            fb_fill(px + 11, y + 8, 1, 3, tri);
+            fb_fill(px + 12, y + 9, 1, 1, tri);
         } else {
             u32 ic = is_sel && active ? C_WHITE : fb_rgb(150, 158, 175);
             fb_fill(px + 8, y + 3, 10, 12, is_sel && active ? C_ACCENT : C_WHITE);
@@ -1777,6 +1825,26 @@ static void open_app(int app) {
     win_open(app_name(app), app, x, y, w, h, C_TITLE);
 }
 
+/* Launch a .kapp given by its full VFS path - e.g. a program sitting on
+   a FAT flash drive - and open its window, exactly like Programs does
+   for one on KvFS. Driven by the file manager through fm_take_run(). */
+static void gui_launch_kapp_path(const char *path) {
+    for (int q = 0; q < MAX_WIN; q++)
+        if (wins[q].used && wins[q].app == APP_USER) win_close(q);
+    if (kapp_load_path(path) == 0) {
+        open_app(APP_USER);
+        int uw = top_window();
+        if (uw >= 0) {
+            strncpy(wins[uw].title, kapp_name(), sizeof(wins[uw].title) - 1);
+            kapp_opened(wins[uw].x + 1, wins[uw].y + TITLE_H + 1,
+                        wins[uw].w - 2, wins[uw].h - TITLE_H - 22);
+        }
+        fm_say(T("Started", "Запущено"), 0xFF2E8B57);
+    } else {
+        fm_say(kapp_last_error(), 0xFFCC3344);
+    }
+}
+
 /* Apply the selected resolution straight from the desktop.
    The back buffer is tied to the old row pitch, so it must be released
    BEFORE the mode change and allocated again for the new size. */
@@ -1946,8 +2014,11 @@ static int files_click(int id, i32 mx, i32 my) {
         fm_pane_set_sel(pane, row);
 
         u64 now = timer_ticks();
-        if (row == last_row && pane == last_pane && now - last_tick < 400)
+        if (row == last_row && pane == last_pane && now - last_tick < 400) {
             fm_activate();
+            char runp[VFS_MAX_PATH];
+            if (fm_take_run(runp, sizeof(runp))) gui_launch_kapp_path(runp);
+        }
         last_tick = now; last_row = row; last_pane = pane;
         return 1;
     }
@@ -2260,6 +2331,8 @@ static void handle_key(int c) {
         if (c == 27 && !fm_view_is_open() && !fm_confirm_pending() && !fm_input_active()) {
             /* fall through: Esc closes the window */
         } else if (fm_key(c, rows)) {
+            char runp[VFS_MAX_PATH];
+            if (fm_take_run(runp, sizeof(runp))) gui_launch_kapp_path(runp);
             return;
         }
     }
@@ -2408,6 +2481,142 @@ static void handle_key(int c) {
 
 /* ---------- main loop ---------- */
 
+/* ============================================================
+ *  Band-based partial recomposition
+ *
+ *  An idle frame does not need to repaint the whole back buffer: only
+ *  the cursor's old and new footprint, the taskbar (its clock and the
+ *  counters move on their own) and any window whose contents are live
+ *  (the system monitor, a running .kapp) actually change. The static
+ *  desktop gradient, the icons and the static windows are already
+ *  correct in the back buffer from the previous frame, so they are
+ *  neither recomposed nor copied to video memory. That turns an idle
+ *  frame from a 3 MiB blit into a few dozen kilobytes.
+ * ============================================================ */
+#define MAX_BANDS 16
+static i32 band_y0[MAX_BANDS], band_y1[MAX_BANDS];
+static int  band_n;
+static int  band_overflow;
+
+/* The taskbar only really changes once a second (the clock, the FPS
+   counter, the RAM figure). Repainting it every frame just to re-read
+   the CMOS clock a thousand times a second is pure waste, so its band
+   is added only when the wall-clock second actually advances. */
+static u32 band_panel_sec = 0xffffffff;
+
+static void band_reset(void) { band_n = 0; band_overflow = 0; }
+
+static void band_add(i32 y0, i32 y1) {
+    if (band_overflow) return;
+    if (y0 < 0) y0 = 0;
+    if (y1 > (i32)scr_h) y1 = (i32)scr_h;
+    if (y1 <= y0) return;
+    for (int i = 0; i < band_n; i++) {        /* merge with an overlapping band */
+        if (y0 <= band_y1[i] && y1 >= band_y0[i]) {
+            if (y0 < band_y0[i]) band_y0[i] = y0;
+            if (y1 > band_y1[i]) band_y1[i] = y1;
+            return;
+        }
+    }
+    if (band_n < MAX_BANDS) {
+        band_y0[band_n] = y0;
+        band_y1[band_n] = y1;
+        band_n++;
+    } else {
+        band_overflow = 1;                     /* too fragmented - caller falls back */
+    }
+}
+
+/* A window whose contents move without input and so need a refresh
+   every idle frame. The rest (About, Help, Files, Paint, the editor,
+   settings) are static between interactions and stay in the back
+   buffer; a click or keystroke forces a full repaint anyway. */
+static int win_is_live(int app) {
+    return app == APP_SYSMON || app == APP_USER;
+}
+
+/* Paint and send only the bands that can have changed while idle. */
+static void gui_repaint_bands(i32 mx, i32 my, i32 pmx, i32 pmy) {
+    band_reset();
+
+    /* cursor: erase its old footprint and draw the new one. Only when it
+       actually moved - a stationary cursor is already correct in the back
+       buffer, and if it sits over a live window that window's own band
+       redraws it on top. */
+    if (mx != pmx || my != pmy) {
+        i32 lo = (pmy < my ? pmy : my) - 1;
+        i32 hi = (pmy > my ? pmy : my) + 18;
+        band_add(lo, hi);
+    }
+
+    /* taskbar: clock, FPS, RAM, the resolution-revert banner. These move
+       at most once a second, so the band is emitted only when the
+       wall-clock second advances - otherwise reading the CMOS clock and
+       recomposing the panel a thousand times a second is wasted work. */
+    {
+        u32 sec = timer_seconds();
+        if (sec != band_panel_sec) {
+            band_panel_sec = sec;
+            band_add((i32)scr_h - PANEL_H, (i32)scr_h);
+        }
+    }
+
+    /* live windows */
+    for (int i = 0; i < win_count; i++) {
+        int id = z_order[i];
+        if (!wins[id].used || wins[id].minimized) continue;
+        if (win_is_live(wins[id].app))
+            band_add(wins[id].y, wins[id].y + wins[id].h);
+    }
+
+    if (band_overflow) {
+        /* too many separate regions - just repaint the whole frame */
+        fb_clip_clear();
+        hit_reset();
+        draw_desktop();
+        int top = top_window();
+        for (int i = 0; i < win_count; i++) draw_window(z_order[i], z_order[i] == top);
+        draw_panel();
+        draw_cursor(mx, my);
+        if (backbuf) fb_present(backbuf);
+        return;
+    }
+
+    int top = top_window();
+    for (int b = 0; b < band_n; b++) {
+        fb_clip_set((u32)band_y0[b], (u32)band_y1[b]);
+        hit_reset();
+        draw_desktop();
+        for (int i = 0; i < win_count; i++) draw_window(z_order[i], z_order[i] == top);
+        draw_panel();
+        draw_cursor(mx, my);
+        if (backbuf) fb_present_rows(backbuf, (u32)band_y0[b], (u32)band_y1[b]);
+    }
+    fb_clip_clear();
+}
+
+/* Rebuild a complete hit-area table without painting a single pixel.
+   Called on demand before a mouse press, so the click is routed
+   correctly even when the previous idle frame repainted only a few
+   bands and left the hit table partial. */
+static void gui_register_hits_full(void) {
+    fb_set_draw_only(1);
+    hit_reset();
+    draw_desktop();
+    int top = top_window();
+    for (int i = 0; i < win_count; i++) {
+        int id = z_order[i];
+        /* A running .kapp registers no hit areas (its input arrives
+           through kapp_click by coordinates) and its tick handler has
+           side effects, so it is skipped here - drawing it would both
+           do nothing useful and advance its state a second time. */
+        if (wins[id].app == APP_USER) continue;
+        draw_window(id, id == top);
+    }
+    draw_panel();
+    fb_set_draw_only(0);
+}
+
 int gui_run(void) {
     if (!fb_active()) return -1;
 
@@ -2438,11 +2647,10 @@ int gui_run(void) {
        the band of rows that actually changed is sent to video memory:
        windows, the panel, the cursor. */
     int full_redraw = 1;                 /* the first frame is blitted in full */
-    int frame_tick = 0;
     u32 fps_frames = 0;
     u64 fps_mark = timer_ticks();
+    u64 last_full_tick = fps_mark;       /* drives the periodic safety refresh */
     i32 prev_mx = mouse_x(), prev_my = mouse_y();
-    (void)prev_mx;
 
     open_app(APP_ABOUT);
 
@@ -2478,6 +2686,7 @@ int gui_run(void) {
                 revert_armed = 0;
                 set_status(T("Resolution confirmed", "Разрешение подтверждено"), C_GREEN);
             }
+            gui_register_hits_full();      /* complete hit table for routing */
             handle_click(mx, my, 1); full_redraw = 1;
         }
         else if (!btn && prev_btn) { handle_click(mx, my, 0); full_redraw = 1; }
@@ -2492,40 +2701,44 @@ int gui_run(void) {
 
         /* frame */
         u64 frame_start = timer_ticks();
-        hit_reset();
-        draw_desktop();
-        int top = top_window();
-        for (int i = 0; i < win_count; i++) draw_window(z_order[i], z_order[i] == top);
-        draw_panel();
-        draw_cursor(mx, my);
 
-        if (backbuf) {
-            if (full_redraw) {
-                fb_present(backbuf);          /* the contents changed entirely */
-            } else {
-                /* Nothing changed structurally: only the cursor band
-                   (its old and new place) and the panel with the clock
-                   are sent to video memory. That is tens of kilobytes
-                   instead of three megabytes. */
-                i32 cy0 = (my < prev_my ? my : prev_my) - 2;
-                i32 cy1 = (my > prev_my ? my : prev_my) + 22;
-                if (cy0 < 0) cy0 = 0;
-                if (cy1 > (i32)fb_height()) cy1 = (i32)fb_height();
-                if (cy1 > cy0) fb_present_rows(backbuf, (u32)cy0, (u32)cy1);
-
-                i32 py = (i32)fb_height() - PANEL_H;
-                if (py < 0) py = 0;
-                fb_present_rows(backbuf, (u32)py, fb_height());
-            }
+        if (backbuf && !full_redraw) {
+            /* Idle: nothing structural changed. Recompose and send only
+               the bands that actually changed - the cursor, the taskbar
+               and any live window. The static desktop and static windows
+               are already correct in the back buffer and are left alone,
+               so an idle frame moves tens of kilobytes, not three megs. */
+            gui_repaint_bands(mx, my, prev_mx, prev_my);
+        } else {
+            /* Structural change (input, a window opened or moved, a mode
+               switch) or a periodic refresh: recompose everything and
+               blit the whole back buffer. */
+            fb_clip_clear();
+            hit_reset();
+            draw_desktop();
+            int top = top_window();
+            for (int i = 0; i < win_count; i++) draw_window(z_order[i], z_order[i] == top);
+            draw_panel();
+            draw_cursor(mx, my);
+            if (backbuf) fb_present(backbuf);
+            band_panel_sec = timer_seconds();   /* the panel is now current */
         }
         prev_mx = mx; prev_my = my;
         full_redraw = 0;
 
-        /* The Monitor window shows live counters and the panel clock
-           ticks on its own. Every 8 frames (roughly a quarter of a
-           second) the whole screen is blitted so that such changes do
-           not freeze. */
-        if (++frame_tick >= 8) { frame_tick = 0; full_redraw = 1; }
+        /* Fixed-rate safety refresh. Anything that ticks on its own but
+           is not inside a repainted band - a status message expiring in a
+           static window, an editor cursor - is refreshed a few times a
+           second regardless of the frame rate. Tying it to wall-clock
+           time (not to a frame count) means a high FPS never turns into
+           dozens of wasteful 3 MiB blits every second. */
+        {
+            u32 hz = timer_hz();
+            if (timer_ticks() - last_full_tick >= hz / 4) {
+                last_full_tick = timer_ticks();
+                full_redraw = 1;
+            }
+        }
 
         /* Measuring the frame rate with the system timer (100 Hz). */
         fps_frames++;

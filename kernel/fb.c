@@ -12,8 +12,16 @@ static u32  fb_w = 0, fb_h = 0, fb_pitch = 0;
 static u8   fb_bpp = 0;
 static int  fb_ok = 0;
 
-/* positions of the colour fields */
-static u8 r_pos = 16, r_size = 8, g_pos = 8, g_size = 8, b_pos = 0, b_size = 8;
+/* positions of the colour fields - exposed (non-static) so the inline
+   fb_rgb() in kernel.h can pack a colour without a function call */
+u8 fb_r_pos = 16, fb_r_size = 8, fb_g_pos = 8, fb_g_size = 8, fb_b_pos = 0, fb_b_size = 8;
+
+/* Row clip band for partial-frame recomposition. The GUI repaints only
+   the rows that actually changed and sends only those to video memory.
+   When clip_on is 0 every primitive behaves exactly as it did before
+   this band mechanism existed, so there is no cost when it is off. */
+static i32 clip_y0 = 0, clip_y1 = 0;
+static int  clip_on = 0;
 
 int  fb_active(void)  { return fb_ok; }
 u32  fb_width(void)   { return fb_w; }
@@ -26,6 +34,31 @@ u32  fb_bytes(void)   { return fb_pitch * fb_h; }
 void fb_set_target(void *p) { fb_draw = p ? (u8 *)p : fb_hw; }
 void *fb_get_hw(void)       { return fb_hw; }
 void *fb_get_target(void)   { return fb_draw; }
+
+/* Restrict drawing to rows [y0, y1). */
+void fb_clip_set(u32 y0, u32 y1) {
+    if (y0 > fb_h) y0 = fb_h;
+    if (y1 > fb_h) y1 = fb_h;
+    if (y1 < y0) y1 = y0;
+    clip_y0 = (i32)y0;
+    clip_y1 = (i32)y1;
+    clip_on = 1;
+}
+
+void fb_clip_clear(void) {
+    clip_on = 0;
+    clip_y0 = 0;
+    clip_y1 = (i32)fb_h;
+}
+
+/* "Draw-only hits" mode: the GUI walks the widget tree to register hit
+   areas without painting a single pixel (every primitive returns at
+   once). Used to rebuild a complete hit table on demand - e.g. just
+   before a mouse click, when the previous idle frame repainted only a
+   few bands and left the hit table partial. Default is off, so with no
+   caller touching it the primitives behave exactly as before. */
+static int draw_only = 0;
+void fb_set_draw_only(int on) { draw_only = on; }
 
 /* The framebuffer usually sits outside the mapped 16 MiB (around
    0xFD000000). Called right after paging is enabled. */
@@ -56,11 +89,12 @@ int fb_init(const multiboot_info_t *mbi) {
     fb_pitch = mbi->framebuffer_pitch;
     fb_bpp   = bpp;
 
-    r_pos = mbi->fb_red_position;   r_size = mbi->fb_red_mask_size;
-    g_pos = mbi->fb_green_position; g_size = mbi->fb_green_mask_size;
-    b_pos = mbi->fb_blue_position;  b_size = mbi->fb_blue_mask_size;
-    if (!r_size || !g_size || !b_size) {  /* safety net */
-        r_pos = 16; g_pos = 8; b_pos = 0; r_size = g_size = b_size = 8;
+    fb_r_pos = mbi->fb_red_position;   fb_r_size = mbi->fb_red_mask_size;
+    fb_g_pos = mbi->fb_green_position; fb_g_size = mbi->fb_green_mask_size;
+    fb_b_pos = mbi->fb_blue_position;  fb_b_size = mbi->fb_blue_mask_size;
+    if (!fb_r_size || !fb_g_size || !fb_b_size) {  /* safety net */
+        fb_r_pos = 16; fb_g_pos = 8; fb_b_pos = 0;
+        fb_r_size = fb_g_size = fb_b_size = 8;
     }
     fb_ok = 1;
     return 1;
@@ -91,19 +125,14 @@ int fb_remap(u32 phys, u32 w, u32 h, u32 pitch, u8 bpp) {
     fb_pitch = pitch;
     fb_bpp   = bpp;
 
-    if (bpp == 16) { r_pos = 11; r_size = 5; g_pos = 5; g_size = 6; b_pos = 0; b_size = 5; }
-    else           { r_pos = 16; g_pos = 8; b_pos = 0; r_size = g_size = b_size = 8; }
+    if (bpp == 16) { fb_r_pos = 11; fb_r_size = 5; fb_g_pos = 5; fb_g_size = 6; fb_b_pos = 0; fb_b_size = 5; }
+    else           { fb_r_pos = 16; fb_g_pos = 8; fb_b_pos = 0; fb_r_size = fb_g_size = fb_b_size = 8; }
 
+    clip_on = 0;
+    clip_y0 = 0;
+    clip_y1 = (i32)fb_h;
     fb_ok = 1;
     return 0;
-}
-
-/* Pack a colour for the current mode format */
-u32 fb_rgb(u8 r, u8 g, u8 b) {
-    u32 rv = (u32)r >> (8 - r_size);
-    u32 gv = (u32)g >> (8 - g_size);
-    u32 bv = (u32)b >> (8 - b_size);
-    return (rv << r_pos) | (gv << g_pos) | (bv << b_pos);
 }
 
 static inline void put_raw(u32 x, u32 y, u32 c) {
@@ -116,20 +145,28 @@ static inline void put_raw(u32 x, u32 y, u32 c) {
 }
 
 void fb_pixel(u32 x, u32 y, u32 c) {
+    if (draw_only) return;
     if (!fb_ok || x >= fb_w || y >= fb_h) return;
+    if (clip_on && ((i32)y < clip_y0 || (i32)y >= clip_y1)) return;
     put_raw(x, y, c);
 }
 
 void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
+    if (draw_only) return;
     if (!fb_ok) return;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > (i32)fb_w) w = (i32)fb_w - x;
     if (y + h > (i32)fb_h) h = (i32)fb_h - y;
+    if (clip_on) {
+        if (y < clip_y0) { h -= (clip_y0 - y); y = clip_y0; }
+        if (y + h > clip_y1) h = clip_y1 - y;
+    }
     if (w <= 0 || h <= 0) return;
 
+    u32 bpp_bytes = fb_bpp >> 3;
     for (i32 j = 0; j < h; j++) {
-        u8 *row = fb_draw + (u32)(y + j) * fb_pitch + (u32)x * (fb_bpp >> 3);
+        u8 *row = fb_draw + (u32)(y + j) * fb_pitch + (u32)x * bpp_bytes;
         if (fb_bpp == 32) {
             u32 *p = (u32 *)row;
             for (i32 i = 0; i < w; i++) p[i] = c;
@@ -180,14 +217,16 @@ void fb_round_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
 
 /* A single CP866 character. bg = 0xFFFFFFFF means a transparent background */
 void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
+    if (draw_only) return;
     if (!fb_ok) return;
     const u8 *g = &kv_font8x16[(u32)ch * 16];
 
-    /* Fast path: the glyph fits entirely on screen and the mode is
-       32-bit. Neither per-pixel clipping nor address recomputation is
-       needed here - we walk the row with a pointer. There is a lot of
-       text on screen, so this loop noticeably affects overall speed. */
-    if (fb_bpp == 32 && x >= 0 && y >= 0 &&
+    /* Fast path: the glyph fits entirely on screen, no row clip is
+       active and the mode is 32-bit. Neither per-pixel clipping nor
+       address recomputation is needed here - we walk the row with a
+       pointer. There is a lot of text on screen, so this loop
+       noticeably affects overall speed. */
+    if (fb_bpp == 32 && !clip_on && x >= 0 && y >= 0 &&
         x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h) {
         u8 *row = fb_draw + (u32)y * fb_pitch + (u32)x * 4;
         if (bg == 0xFFFFFFFFu) {
@@ -221,11 +260,12 @@ void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
         return;
     }
 
-    /* General path: edge clipping, 16/24 bpp. */
+    /* General path: edge clipping, row band clipping, 16/24 bpp. */
     for (i32 row = 0; row < 16; row++) {
         u8 bits = g[row];
         i32 py = y + row;
         if (py < 0 || py >= (i32)fb_h) continue;
+        if (clip_on && (py < clip_y0 || py >= clip_y1)) continue;
         for (i32 col = 0; col < 8; col++) {
             i32 px = x + col;
             if (px < 0 || px >= (i32)fb_w) continue;
@@ -255,9 +295,8 @@ void fb_clear(u32 c) { fb_fill(0, 0, (i32)fb_w, (i32)fb_h, c); }
 
 /* Fast blit of the back buffer to the screen */
 /* Blit only a part of the frame (the band of rows y0..y1).
-   The GUI redraws the whole back buffer, yet only a small part of the
-   screen actually changes. Pushing all 3 MiB across the bus every frame
-   is pointless - only the affected rows are sent. */
+   The GUI redraws only the bands that changed, so only those rows are
+   sent across the bus. Pushing all 3 MiB every frame is pointless. */
 void fb_present_rows(const void *back, u32 y0, u32 y1) {
     if (!fb_ok || !back) return;
     if (y1 > fb_h) y1 = fb_h;
@@ -291,14 +330,10 @@ void fb_present(const void *back) {
        that is 3 MiB per frame - the hottest loop in the whole system. */
     u32 i = 0;
     for (; i + 8 <= words; i += 8) {
-        d[i]     = s[i];
-        d[i + 1] = s[i + 1];
-        d[i + 2] = s[i + 2];
-        d[i + 3] = s[i + 3];
-        d[i + 4] = s[i + 4];
-        d[i + 5] = s[i + 5];
-        d[i + 6] = s[i + 6];
-        d[i + 7] = s[i + 7];
+        d[i]     = s[i];     d[i + 1] = s[i + 1];
+        d[i + 2] = s[i + 2]; d[i + 3] = s[i + 3];
+        d[i + 4] = s[i + 4]; d[i + 5] = s[i + 5];
+        d[i + 6] = s[i + 6]; d[i + 7] = s[i + 7];
     }
     for (; i < words; i++) d[i] = s[i];
 }
@@ -314,7 +349,10 @@ void fb_scroll_up(u32 top, u32 bottom, u32 dy, u32 bg) {
     u32 *d32 = (u32 *)dst, *s32 = (u32 *)src;
     for (u32 i = 0; i < words; i++) d32[i] = s32[i];
     u8 *save = fb_draw;
+    int saved_clip = clip_on;
     fb_draw = fb_hw;
+    clip_on = 0;                 /* console scrolling always works full-area */
     fb_fill(0, (i32)(bottom - dy), (i32)fb_w, (i32)dy, bg);
     fb_draw = save;
+    clip_on = saved_clip;
 }

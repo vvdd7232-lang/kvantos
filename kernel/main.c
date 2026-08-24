@@ -231,6 +231,17 @@ skip_hw:
             vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
         }
 
+        /* Discover USB mass-storage drives and build the unified block
+           list (ATA disks followed by USB drives). Runs before the
+           partition scan so a real USB flash drive is auto-mounted
+           exactly like a hard disk. Interrupts are still off here, so
+           the USB host controller is driven by polling only. */
+        blk_init();
+        if (usb_disk_count()) {
+            kprintf(T("       USB mass storage: %u drive(s)\n", "       USB-накопители: %u\n"), usb_disk_count());
+            step(T("USB: mass-storage drive(s) found (UHCI)", "USB: найдены накопители (UHCI)"));
+        }
+
         /* Every other filesystem on every disk: partition tables are
            read and FAT/NTFS volumes are mounted under /mnt. */
         vfs_init();
