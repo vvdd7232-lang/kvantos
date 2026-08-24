@@ -54,6 +54,13 @@ static char fm_confirm_arg[VFS_MAX_PATH];
 static int  fm_input_mode = 0;
 static char fm_input[VFS_MAX_NAME];
 
+/* A .kapp the user pressed Enter / double-clicked on. The manager cannot
+   reach into the window system itself, so it stashes the path here and
+   the shell picks it up with fm_take_run() to launch the program. This
+   is what lets a program be run straight off a flash drive. */
+static int  fm_run_pending = 0;
+static char fm_run_path[VFS_MAX_PATH];
+
 void fm_say(const char *msg, u32 colour) {
     strncpy(fm_status, msg, sizeof(fm_status));
     fm_status_col = colour;
@@ -68,6 +75,16 @@ int         fm_input_active(void) { return fm_input_mode; }
 /* ---------- sorting: directories first, then names ---------- */
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+
+/* ".kapp" extension, case-insensitive: a file matching it is a runnable
+   program rather than something to preview as text/hex. */
+static int has_kapp_ext(const char *name) {
+    u32 l = (u32)strlen(name);
+    return l >= 5
+        && lower(name[l - 5]) == '.' && lower(name[l - 4]) == 'k'
+        && lower(name[l - 3]) == 'a' && lower(name[l - 2]) == 'p'
+        && lower(name[l - 1]) == 'p';
+}
 
 static int name_before(const vfs_dirent_t *a, const vfs_dirent_t *b) {
     if (a->is_dir != b->is_dir) return a->is_dir > b->is_dir;
@@ -151,8 +168,8 @@ void fm_init(void) {
 
     pane_goto(&panes[0], a);
     pane_goto(&panes[1], b);
-    fm_say(T("Tab - switch pane, Enter - open, F5 - copy, F8 - delete",
-             "Tab — панель, Enter — открыть, F5 — копировать, F8 — удалить"), 0);
+    fm_say(T("Enter opens a file; on a .kapp it runs it. F5 copy, F8 delete, Tab - pane",
+             "Enter открывает файл; на .kapp — запускает. F5 копир., F8 удалить, Tab — панель"), 0);
 }
 
 /* ---------- actions ---------- */
@@ -176,6 +193,16 @@ static void fm_enter(void) {
     vfs_join(full, sizeof(full), p->path, e->name);
 
     if (e->is_dir) { pane_goto(p, full); return; }
+
+    /* A runnable program is launched instead of previewed: hand its full
+       VFS path to the shell, which runs it from whichever volume the
+       pane is on (KvFS, a FAT flash drive, ...). */
+    if (has_kapp_ext(e->name)) {
+        strncpy(fm_run_path, full, sizeof(fm_run_path) - 1);
+        fm_run_path[sizeof(fm_run_path) - 1] = 0;
+        fm_run_pending = 1;
+        return;
+    }
 
     /* a file: show the beginning of it */
     int n = vfs_read(full, 0, fm_view_buf, sizeof(fm_view_buf) - 1);
@@ -486,6 +513,16 @@ vfs_dirent_t *fm_pane_item(int i, int index) {
 
 /* Open whatever is selected: shared by Enter and the double click. */
 void fm_activate(void) { fm_enter(); }
+
+/* The shell calls this after every file-manager action: if a .kapp was
+   just opened, it returns 1 and fills `dst` with the program's full VFS
+   path (clearing the request). The caller then launches it. */
+int  fm_take_run(char *dst, u32 sz) {
+    if (!fm_run_pending) return 0;
+    fm_run_pending = 0;
+    if (dst && sz) { strncpy(dst, fm_run_path, sz - 1); dst[sz - 1] = 0; }
+    return 1;
+}
 void fm_go_up(void)    { fm_updir(); }
 void fm_do_copy(void)  { fm_copy(); }
 void fm_ask_delete(void) { fm_delete_ask(); }

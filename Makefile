@@ -31,7 +31,7 @@ ASM_SRC  := $(wildcard boot/*.asm)
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
-.PHONY: all apps iso floppy run run-curses clean font debug release
+.PHONY: all apps iso floppy flash run run-flash run-curses clean font debug release
 
 all: $(KERNEL)
 
@@ -66,7 +66,7 @@ $(KERNEL): $(OBJ) linker.ld
 build/hdboot.img: $(KERNEL) grub/grub.cfg | build/obj
 	@echo "  HD   bootloader for disk installation"
 	@grub-mkstandalone --format=i386-pc --output=build/hd_core.img \
-	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
 	    "boot/grub/grub.cfg=grub/grub.cfg" "boot/kvant.bin=$(KERNEL)" \
@@ -90,7 +90,7 @@ $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@grub-mkstandalone \
 	    --format=i386-pc \
 	    --output=build/core.img \
-	    --install-modules="biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file vbe vga minicmd reboot halt" \
 	    --modules="biosdisk iso9660 part_msdos multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" \
 	    --compress=xz \
@@ -128,7 +128,7 @@ build/kvantos.img: $(KERNEL)
 	@printf 'menuentry "KvantOS - VGA text 80x25" { multiboot /boot/kvant.bin text ; $(FD_MODULES) boot }\n' >> build/fd.cfg
 	@printf 'menuentry "KvantOS - safe mode" { multiboot /boot/kvant.bin text safe ; boot }\n' >> build/fd.cfg
 	@grub-mkstandalone --format=i386-pc --output=build/fd_core.img \
-	    --install-modules="biosdisk multiboot normal echo configfile test true sleep all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
 	    "boot/grub/grub.cfg=build/fd.cfg" "boot/kvant.bin=$(KERNEL)" \
@@ -141,6 +141,12 @@ build/kvantos.img: $(KERNEL)
 run: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -m 128 -serial stdio
 
+run-flash: $(ISO) flash
+	@# The ISO boots from CD; the ready FAT flash image is attached as a
+	@# second disk and shows up in the file manager as a pane to run
+	@# .kapp programs straight off it.
+	qemu-system-i386 -cdrom $(ISO) -drive file=release/kvantos-flash.img,format=raw,if=ide -m 128 -serial stdio
+
 run-curses: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -m 128 -display curses
 
@@ -150,12 +156,35 @@ debug: $(ISO)
 # The full distribution set: ISO, floppy, kernel, applications and an
 # empty disk for files. This is the archive attached to a GitHub
 # release - the repository itself carries no binaries.
-release: iso floppy
+# --- a ready "flash drive" image ---
+# A FAT volume with the sample .kapp programs already on it, built so the
+# flash feature can be tried without formatting anything by hand. Just
+# `make run-flash` (or attach release/kvantos-flash.img as a second disk).
+flash: apps
+	@echo "  FLASH release/kvantos-flash.img (FAT, sample programs)"
+	@if ! command -v mcopy >/dev/null 2>&1; then \
+	    echo "  SKIP flash image: install mtools (mcopy) to build it"; exit 0; \
+	fi
+	@rm -f release/kvantos-flash.img
+	@truncate -s 4M release/kvantos-flash.img
+	@if command -v mkfs.fat >/dev/null 2>&1; then \
+	    mkfs.fat -n FLASH release/kvantos-flash.img >/dev/null; \
+	elif command -v mformat >/dev/null 2>&1; then \
+	    mformat -i release/kvantos-flash.img :: ; \
+	    mlabel -i release/kvantos-flash.img ::FLASH >/dev/null 2>&1 || true; \
+	fi
+	@for a in release/apps/*.kapp; do [ -f "$$a" ] && mcopy -i release/kvantos-flash.img "$$a" :: || true; done
+	@echo "  DONE: release/kvantos-flash.img ($$(du -h release/kvantos-flash.img | cut -f1))"
+
+release: iso floppy flash
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
 	@rm -f kvantos-0.1.0-photon.tar.gz
-	@tar czf kvantos-0.1.0-photon.tar.gz -C release \
-	    kvantos.iso kvantos-floppy.img kvant.bin kvantos-disk.img apps
+	@# archive everything built; the flash image is optional (it is only
+	@# there when mtools is installed on the build machine)
+	@files="kvantos.iso kvantos-floppy.img kvant.bin kvantos-disk.img apps"; \
+	    [ -f release/kvantos-flash.img ] && files="$$files kvantos-flash.img"; \
+	    tar czf kvantos-0.1.0-photon.tar.gz -C release $$files
 	@echo "  DONE: kvantos-0.1.0-photon.tar.gz ($$(du -h kvantos-0.1.0-photon.tar.gz | cut -f1))"
 
 font:

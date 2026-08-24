@@ -230,6 +230,23 @@ u32         ata_size_mb(int i);
 int         ata_read(int idx, u32 lba, u8 count, void *buf);
 int         ata_write(int idx, u32 lba, u8 count, const void *buf);
 
+/* Unified block devices: ATA disks first, then USB mass-storage drives.
+   The partition scanner talks to this layer so a real USB flash drive is
+   auto-mounted exactly like a hard disk. USB disks are read-only here. */
+void        blk_init(void);
+int         blk_count(void);
+u32         blk_sectors(int i);
+int         blk_read(int i, u32 lba, u8 count, void *buf);
+int         blk_write(int i, u32 lba, u8 count, const void *buf);
+const char *blk_model(int i);
+
+/* USB mass storage (UHCI). Discovery runs during blk_init(). */
+void        usb_init(void);
+int         usb_disk_count(void);
+u32         usb_sectors(int i);
+int         usb_read(int i, u32 lba, u8 count, void *buf);
+const char *usb_model(int i);
+
 /* ---------- on-disk filesystem (KvFS) ---------- */
 int         kvfs_mount(void);
 int         kvfs_format(void);
@@ -254,6 +271,7 @@ const char *setup_last_result(void);
 
 /* ---------- .kapp applications ---------- */
 int         kapp_load(const char *filename);
+int         kapp_load_path(const char *vfspath);   /* run a .kapp from any VFS volume (FAT flash, etc.) */
 void        kapp_unload(void);
 int         kapp_loaded(void);
 const char *kapp_name(void);
@@ -320,10 +338,39 @@ u32  fb_pitch_get(void);
 u8   fb_bpp_get(void);
 u32  fb_base(void);
 u32  fb_bytes(void);
-u32  fb_rgb(u8 r, u8 g, u8 b);
+
+/* Colour field positions of the active mode. Exposed (not static) so
+   that the inline fb_rgb() below can pack a colour without a real
+   function call - it is invoked thousands of times per frame. */
+extern u8 fb_r_pos, fb_r_size, fb_g_pos, fb_g_size, fb_b_pos, fb_b_size;
+
+/* Pack an RGB triple into the current pixel format. Kept inline in the
+   header: every draw call goes through it, and a cross-translation-unit
+   call would dominate the cost of small primitives. */
+static inline u32 fb_rgb(u8 r, u8 g, u8 b) {
+    u32 rv = (u32)r >> (8 - fb_r_size);
+    u32 gv = (u32)g >> (8 - fb_g_size);
+    u32 bv = (u32)b >> (8 - fb_b_size);
+    return (rv << fb_r_pos) | (gv << fb_g_pos) | (bv << fb_b_pos);
+}
+
 void fb_set_target(void *p);
 void *fb_get_hw(void);
 void *fb_get_target(void);
+
+/* Restrict all subsequent drawing to the rows [y0, y1). Used by the GUI
+   to recompose only the bands of the back buffer that actually changed
+   instead of the whole frame every time. fb_clip_clear() restores
+   full-screen drawing - the default. With no clip active the primitives
+   behave exactly as before. */
+void fb_clip_set(u32 y0, u32 y1);
+void fb_clip_clear(void);
+
+/* "Hits only" mode: every drawing primitive returns at once without
+   touching pixels, so a full widget-tree walk can rebuild the hit-area
+   table cheaply. Off by default. */
+void fb_set_draw_only(int on);
+
 void fb_pixel(u32 x, u32 y, u32 c);
 void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c);
 void fb_rect(i32 x, i32 y, i32 w, i32 h, u32 c);

@@ -1086,6 +1086,8 @@ int fat_mount(const char *name, int disk, u32 lba_start, u32 lba_count) {
     if (!v->label[0]) strncpy(v->label, T("no label", "без метки"), sizeof(v->label));
 
     v->used = 1;
+    /* ATA disks are writable; USB mass-storage disks (indices at and
+       above the ATA count) are exposed read-only. */
     return vfs_mount(name, kind, &fat_ops, v, disk, lba_start,
-                     v->total_sectors, v->label, 1);
+                     v->total_sectors, v->label, disk < ata_count());
 }

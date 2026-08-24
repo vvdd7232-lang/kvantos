@@ -19,6 +19,7 @@ int  fm_key(int c, int visible_rows);
 /* actions, shared by the keyboard and the toolbar buttons */
 void fm_activate(void);
 void fm_go_up(void);
+int  fm_take_run(char *dst, u32 sz);   /* 1 if a .kapp was opened and is ready to launch */
 void fm_do_copy(void);
 void fm_ask_delete(void);
 void fm_ask_mkdir(void);
