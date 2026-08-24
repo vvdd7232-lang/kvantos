@@ -108,7 +108,7 @@ static int scan_disk(int disk, int *seq) {
     if (!mounted) {
         char nm[16];
         ksnprintf(nm, sizeof(nm), "hd%c", 'a' + disk);
-        if (try_mount(nm, disk, 0, ata_sectors(disk))) mounted++;
+        if (try_mount(nm, disk, 0, blk_sectors(disk))) mounted++;
     }
 
     return mounted;
@@ -121,8 +121,8 @@ int vfs_autoscan(void) {
     ramfs_vfs_register();
     kvfs_vfs_register();
 
-    for (int d = 0; d < ata_count(); d++) {
-        if (!ata_sectors(d)) continue;
+    for (int d = 0; d < blk_count(); d++) {
+        if (!blk_sectors(d)) continue;
         int seq = 0;
         total += scan_disk(d, &seq);
     }

@@ -346,66 +346,34 @@ void kapp_unload(void) {
     app_status[0] = 0;
 }
 
-/* Loads an application from a KvFS file. 0 on success, otherwise see kapp_last_error() */
-int kapp_load(const char *filename) {
+/* Validate the in-memory image, copy it to its fixed load address and
+   start it. Shared by kapp_load (KvFS/ramfs, looked up by name) and
+   kapp_load_path (any mounted volume, e.g. a FAT flash drive, by full
+   VFS path). The caller owns `data` and frees it. 0 on success,
+   otherwise see kapp_last_error(). */
+static int kapp_start(const u8 *data, u32 size, const char *displayname) {
     last_error[0] = 0;
-    app_faulted = 0;
 
-    if (loaded) kapp_unload();
-
-    /* Look for the application on the disk first, then in ramfs.
-       The latter allows running programs embedded in the boot image:
-       on a machine with no formatted disk that is the only way to run
-       anything at all. */
-    u32 fsize = kvfs_mounted() ? kvfs_size(filename) : 0;
-    rfile_t *rf = fsize ? NULL : ramfs_find(filename);
-
-    if (!fsize && !rf) {
-        ksnprintf(last_error, sizeof(last_error), T("file '%s' not found", "файл '%s' не найден"), filename);
-        return -1;
-    }
-    if (!fsize) fsize = rf->size;
-
-    if (fsize < sizeof(kapp_header_t)) {
+    if (size < sizeof(kapp_header_t)) {
         strncpy(last_error, T("file too small to be an application", "файл слишком мал для приложения"), sizeof(last_error));
         return -1;
     }
 
-    u8 *tmp = (u8 *)kmalloc(fsize);
-    if (!tmp) {
-        strncpy(last_error, T("not enough memory to load it", "не хватает памяти для загрузки"), sizeof(last_error));
-        return -1;
-    }
-
-    int got;
-    if (rf) {
-        memcpy(tmp, rf->data, fsize);
-        got = (int)fsize;
-    } else {
-        got = kvfs_read(filename, tmp, fsize);
-    }
-    if (got < (int)sizeof(kapp_header_t)) {
-        kfree(tmp);
-        strncpy(last_error, T("file read error", "ошибка чтения файла"), sizeof(last_error));
-        return -1;
-    }
-
     kapp_header_t hdr;
-    memcpy(&hdr, tmp, sizeof(hdr));
-    if (check_header(&hdr, (u32)got) < 0) { kfree(tmp); return -1; }
+    memcpy(&hdr, data, sizeof(hdr));
+    if (check_header(&hdr, size) < 0) return -1;
 
     /* Unpack the image at the fixed address */
     u8 *dst = (u8 *)KAPP_LOAD_BASE;
-    memcpy(dst, tmp + hdr.header_size, hdr.code_size);
+    memcpy(dst, data + hdr.header_size, hdr.code_size);
     if (hdr.bss_size) memset(dst + hdr.code_size, 0, hdr.bss_size);
-    kfree(tmp);
 
     /* Flush the instruction cache: we have just written code as data */
     __asm__ volatile("" ::: "memory");
 
-    strncpy(app_file, filename, sizeof(app_file));
+    strncpy(app_file, displayname, sizeof(app_file));
     app_file[sizeof(app_file) - 1] = 0;
-    strncpy(app_title, hdr.name[0] ? hdr.name : filename, sizeof(app_title));
+    strncpy(app_title, hdr.name[0] ? hdr.name : displayname, sizeof(app_title));
     app_title[sizeof(app_title) - 1] = 0;
     app_status[0] = 0;
 
@@ -436,6 +404,81 @@ int kapp_load(const char *filename) {
         app_title[sizeof(app_title) - 1] = 0;
     }
     return 0;
+}
+
+/* Loads an application from a KvFS file (falling back to ramfs, so that
+   programs embedded in the boot image run on a machine with no disk).
+   0 on success, otherwise see kapp_last_error(). */
+int kapp_load(const char *filename) {
+    last_error[0] = 0;
+    app_faulted = 0;
+
+    if (loaded) kapp_unload();
+
+    u32 fsize = kvfs_mounted() ? kvfs_size(filename) : 0;
+    rfile_t *rf = fsize ? NULL : ramfs_find(filename);
+
+    if (!fsize && !rf) {
+        ksnprintf(last_error, sizeof(last_error), T("file '%s' not found", "файл '%s' не найден"), filename);
+        return -1;
+    }
+    if (!fsize) fsize = rf->size;
+
+    u8 *tmp = (u8 *)kmalloc(fsize ? fsize : 1);
+    if (!tmp) {
+        strncpy(last_error, T("not enough memory to load it", "не хватает памяти для загрузки"), sizeof(last_error));
+        return -1;
+    }
+
+    int got;
+    if (rf) {
+        memcpy(tmp, rf->data, fsize);
+        got = (int)fsize;
+    } else {
+        got = kvfs_read(filename, tmp, fsize);
+    }
+
+    int r = -1;
+    if (got > 0) r = kapp_start(tmp, (u32)got, filename);
+    else strncpy(last_error, T("file read error", "ошибка чтения файла"), sizeof(last_error));
+    kfree(tmp);
+    return r;
+}
+
+/* Loads an application from any mounted volume by its full VFS path,
+   for instance "/mnt/hdb1/tools/snake.kapp" on a FAT flash drive. This
+   is what makes "run a program straight off a flash drive" work: the
+   binary is read through the VFS instead of KvFS, so it need not be
+   copied to the system disk first. 0 on success. */
+int kapp_load_path(const char *vfspath) {
+    last_error[0] = 0;
+    app_faulted = 0;
+
+    if (loaded) kapp_unload();
+
+    u32 fsize = vfs_size(vfspath);
+    if (!fsize) {
+        ksnprintf(last_error, sizeof(last_error), T("file '%s' not found", "файл '%s' не найден"), vfspath);
+        return -1;
+    }
+
+    u8 *tmp = (u8 *)kmalloc(fsize);
+    if (!tmp) {
+        strncpy(last_error, T("not enough memory to load it", "не хватает памяти для загрузки"), sizeof(last_error));
+        return -1;
+    }
+
+    int got = vfs_read(vfspath, 0, tmp, fsize);
+
+    /* A short, human-friendly name for the title bar: the file's leaf. */
+    const char *leaf = vfspath;
+    for (const char *q = vfspath; *q; q++) if (*q == '/') leaf = q + 1;
+
+    int r = -1;
+    if (got > 0) r = kapp_start(tmp, (u32)got, leaf);
+    else strncpy(last_error, T("file read error", "ошибка чтения файла"), sizeof(last_error));
+    kfree(tmp);
+    return r;
 }
 
 /* ============================================================

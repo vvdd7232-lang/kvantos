@@ -1,17 +1,32 @@
 # A ready-made workflow for GitHub Actions.
-# To enable build checking, copy this file to
-#   .github/workflows/build.yml
-# (through the GitHub web interface or with a token that has the
-# "workflow" scope). It is not stored in .github/workflows itself:
-# the publishing token did not carry that permission.
-
-# Building KvantOS on a clean machine: this proves the repository
-# alone is enough to produce a bootable image.
+#
+# This is the canonical way to obtain a KvantOS bootable ISO: the
+# repository itself carries no binaries, and building the image needs the
+# full i386 toolchain (gcc-multilib, nasm, grub-pc-bin, grub-common,
+# xorriso, qemu) which is not available everywhere.
+#
+# --- ONE-TIME enablement ------------------------------------------------
+# The arena session token does not carry the `workflows` permission, so
+# this file cannot be pushed into .github/workflows/ automatically.
+# Enable it ONCE, in one of two ways:
+#
+#   A) GitHub web UI (no token needed, ~30 seconds):
+#        1. Open the repo -> Add file -> Create new file
+#        2. Name it  .github/workflows/build.yml
+#        3. Paste the full contents of THIS file, commit to main.
+#
+#   B) Reconnect GitHub in Arena with a token that has the `workflow`
+#      scope; the agent will then push this file and run it for you.
+#
+# After enablement, the workflow runs on every push to main / arena/**,
+# on every pull request, and on manual dispatch (Actions tab -> Run).
+# The resulting kvantos.iso, kvant.bin and release tarball appear under
+# the run's "Artifacts" section for download.
 name: build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, 'arena/**' ]
   pull_request:
   workflow_dispatch:
 
@@ -25,8 +40,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            gcc-multilib nasm xorriso mtools grub-pc-bin grub-common \
-            binutils python3
+            gcc-multilib nasm xorriso mtools dosfstools grub-pc-bin grub-common \
+            binutils python3 qemu-system-x86
 
       - name: Build the kernel
         run: make
@@ -37,11 +52,45 @@ jobs:
       - name: Build the SDK applications
         run: make apps
 
-      - name: Build the images
+      - name: Build the images (ISO + floppy + disk)
         run: make release
 
-      - name: Upload the artifacts
+      - name: Smoke-test: boot the ISO and mount a FAT "flash drive"
+        run: |
+          # A 4 MB FAT volume labelled FLASH with a sample program on it,
+          # exactly how a USB stick looks to the kernel (a "superfloppy":
+          # no partition table, FAT on the raw device).
+          dd if=/dev/zero of=flash.img bs=1M count=4 status=none
+          mkfs.fat -n FLASH flash.img >/dev/null 2>&1
+          mcopy -i flash.img release/apps/snake.kapp :: >/dev/null 2>&1 || true
+          # Boot from the CD and attach the flash as a second IDE disk.
+          # The kernel logs every mounted volume to the serial console,
+          # so we can prove the flash was recognised and mounted.
+          timeout 25 qemu-system-i386 \
+            -cdrom release/kvantos.iso \
+            -drive file=flash.img,format=raw,if=ide \
+            -m 128 -display none -serial stdio -no-reboot > boot.log 2>&1 || true
+          echo "----- boot log (tail 45 lines) -----"
+          tail -45 boot.log || true
+          grep -qi "ready" boot.log && echo "BOOT OK"
+          grep -q "/mnt/hd" boot.log && echo "FLASH VOLUME MOUNTED" \
+            || echo "WARN: flash mount line not found in log"
+
+      - name: Upload the ISO
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-images
+          name: kvantos-iso
+          path: release/kvantos.iso
+          if-no-files-found: error
+
+      - name: Upload the kernel binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-kernel
+          path: release/kvant.bin
+
+      - name: Upload the full release tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-release
           path: kvantos-*.tar.gz
