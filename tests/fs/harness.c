@@ -28,6 +28,11 @@ int ata_count(void) { return 1; }
 int ata_boot_drive(void) { return 0; }
 u32 ata_sectors(int i) { (void)i; return disk_sectors; }
 
+int blk_read(int dev, u32 lba, u8 count, void *buf) { return ata_read(dev, lba, count, buf); }
+int blk_write(int dev, u32 lba, u8 count, const void *buf) { return ata_write(dev, lba, count, buf); }
+int blk_count(void) { return ata_count(); }
+u32 blk_sectors(int dev) { return ata_sectors(dev); }
+
 void rtc_read(rtc_time_t *t) {
     t->sec = 30; t->min = 45; t->hour = 12;
     t->day = 16; t->month = 8; t->year = 2026;

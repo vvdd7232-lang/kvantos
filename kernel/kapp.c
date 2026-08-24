@@ -23,6 +23,7 @@
  * ============================================================ */
 #include "kernel.h"
 #include "kvapp.h"
+#include "vfs.h"
 
 /* ---------- state of the loaded application ---------- */
 static int        loaded = 0;
