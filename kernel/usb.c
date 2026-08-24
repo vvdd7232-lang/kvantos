@@ -165,9 +165,16 @@ static int td_wait(uhci_td_t *t) {
     u16 f0 = inw(uhci_io + UHCI_FRNUM) & 0x7ff;
     while (t->ctrl & TD_ACTIVE) {
         u16 now = inw(uhci_io + UHCI_FRNUM) & 0x7ff;
-        if ((u16)(now - f0) >= 200) return -1;   /* 200 ms timeout */
+        if ((u16)(now - f0) >= 200) {
+            kprintf("USB: td timeout ctrl=%08x\n", t->ctrl);
+            return -1;   /* 200 ms timeout */
+        }
     }
-    return (t->ctrl & TD_ERR_ANY) ? -1 : 0;
+    if (t->ctrl & TD_ERR_ANY) {
+        kprintf("USB: td error ctrl=%08x\n", t->ctrl);
+        return -1;
+    }
+    return 0;
 }
 
 /* Queue a chain of TDs under the async QH and wait for the last one. */
@@ -175,6 +182,9 @@ static int run_chain(uhci_td_t *first, uhci_td_t *last) {
     last->ctrl |= TD_IOC;
     uhci_qh->vlink = ((u32)(u32 *)first);   /* TD type, valid */
     int rc = td_wait(last);
+    if (rc < 0)
+        kprintf("USB: setup-td ctrl=%08x tok=%08x buf=%08x\n",
+                first->ctrl, first->token, first->buf);
     uhci_qh->vlink = LINK_TERM;
     return rc;
 }
@@ -364,10 +374,18 @@ static int find_bulk_eps(const u8 *cfg, u32 len, usb_disk_t *d) {
 
 static void enumerate_port(int port, int low) {
     u8 desc[18] __attribute__((aligned(16)));
-    /* The first device descriptor read happens at address 0. Read 8
-       bytes first to learn bMaxPacketSize0, but full-speed endpoints
-       are 64 anyway. */
-    int n = usb_control(0, low, 0x80, 0x06, 0x0100, 0, 18, desc, 1);
+
+    kprintf("USB: port %d %s-speed, probing device...\n",
+            port, low ? "low" : "full");
+
+    int n = -1, attempt;
+    for (attempt = 0; attempt < 6; attempt++) {
+        n = usb_control(0, low, 0x80, 0x06, 0x0100, 0, 18, desc, 1);
+        if (n >= 8) break;
+        wait_frames(25);
+    }
+    if (attempt > 0 && n >= 8)
+        kprintf("USB: descriptor on attempt %d\n", attempt + 1);
     if (n < 8) { kprintf("USB: no descriptor on port %d\n", port); return; }
 
     /* Assign an address. */
@@ -497,6 +515,8 @@ void usb_init(void) {
 
         psc = inw(uhci_io + UHCI_PORTSC1 + port * 2);
         int low = (psc & 0x0100) ? 1 : 0;
+        kprintf("USB: port %d PSC=%04x (%s-speed, %s)\n", port, psc,
+                low ? "low" : "full", (psc & PORT_ENABLE) ? "enabled" : "DISABLED");
         if (!(psc & PORT_ENABLE)) { kprintf("USB: port %d enable failed\n", port); continue; }
 
         enumerate_port(port, low);
