@@ -107,14 +107,15 @@ void vfs_join(char *dst, u32 dstsz, const char *dir, const char *name);
 void vfs_parent(char *dst, u32 dstsz, const char *path);
 int  vfs_is_root(const char *path);
 
-/* ata_read/ata_write return 0 on success and -1 on failure, which reads
-   backwards in the filesystem code. These wrappers return 1 on success
-   so the drivers can say "if (!disk_read(...)) fail". */
+/* blk_read/blk_write dispatch ATA vs USB and return 0 on success and
+   -1 on failure, which reads backwards in the filesystem code. These
+   wrappers return 1 on success so the drivers can say
+   "if (!disk_read(...)) fail". */
 static inline int disk_read(int disk, u32 lba, u8 count, void *buf) {
-    return ata_read(disk, lba, count, buf) == 0;
+    return blk_read(disk, lba, count, buf) == 0;
 }
 static inline int disk_write(int disk, u32 lba, u8 count, const void *buf) {
-    return ata_write(disk, lba, count, buf) == 0;
+    return blk_write(disk, lba, count, buf) == 0;
 }
 
 /* ---- individual drivers ---- */
