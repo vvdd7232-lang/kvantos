@@ -27,7 +27,9 @@ APP_GRAFT  := $(foreach a,$(APPS),"boot/apps/$(notdir $(a))=$(a)")
 FD_MODULES := $(foreach a,$(APPS),module /boot/apps/$(notdir $(a)) $(notdir $(a)) ;)
 
 C_SRC    := $(wildcard kernel/*.c)
-ASM_SRC  := $(wildcard boot/*.asm)
+# direct.asm is the GRUB-free boot stub: it is assembled separately by
+# tools/mkdirect.py and must never end up inside the kernel image.
+ASM_SRC  := $(filter-out boot/direct.asm,$(wildcard boot/*.asm))
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
@@ -137,6 +139,19 @@ build/kvantos.img: $(KERNEL)
 	@truncate -s 1474560 build/kvantos.img
 	@mkdir -p release && cp build/kvantos.img release/kvantos-floppy.img
 	@echo "  DONE: release/kvantos-floppy.img ($$(du -h build/kvantos.img | cut -f1))"
+
+# --- GRUB-free bootable ISO (fallback when GRUB tools are unavailable) ---
+# A tiny stub (boot/direct.asm) becomes the El Torito boot image: it
+# sets VBE 1024x768x32 itself, copies the kernel to 1 MiB, lays out the
+# .kapp modules at 2 MiB and hands over a full multiboot_info. Built
+# with nasm + pycdlib only (tools/mkdirect.py vendors the latter).
+iso-direct: apps
+	@$(MAKE) --no-print-directory build/kvantos-direct.iso
+
+build/kvantos-direct.iso: $(KERNEL) tools/mkdirect.py boot/direct.asm
+	@python3 tools/mkdirect.py $(KERNEL) release/apps $@
+	@mkdir -p release && cp $@ release/kvantos-direct.iso
+	@echo "  DONE: release/kvantos-direct.iso"
 
 run: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -m 128 -serial stdio

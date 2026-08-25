@@ -28,3 +28,4 @@ kvantos-*.tar.gz
 tests/fs/build/
 tests/fs/include/
 tests/fs/mnt_bigdata.ref
+__pycache__/
