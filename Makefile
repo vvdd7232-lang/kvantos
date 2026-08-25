@@ -302,6 +302,30 @@ release-inner: iso floppy
 	    kvantos.iso kvantos-floppy.img kvant.bin kvant64.bin kvantefi.efi \
 	    esp.img kvantos-disk.img apps apps64
 	@echo "  DONE: kvantos-3.0.0-horizon.tar.gz ($$(du -h kvantos-3.0.0-horizon.tar.gz | cut -f1))"
+	@# --- publish the release assets straight from CI (uploads.github.com ---
+	@# --- is only reachable from the runner, not from the sandbox)      ---
+	@if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1; then \
+	    if gh release view v3.0.0 >/dev/null 2>&1; then \
+	        echo "  REL  attaching assets to release v3.0.0"; \
+	        if gh release upload v3.0.0 --clobber \
+	            kvantos-3.0.0-horizon.tar.gz \
+	            release/kvantos.iso \
+	            release/kvantos-floppy.img \
+	            release/kvant.bin \
+	            release/kvant64.bin \
+	            release/kvantefi.efi \
+	            release/esp.img \
+	            release/kvantos-disk.img 2>build/relup.err; then \
+	            echo "  REL  assets uploaded"; \
+	        else \
+	            echo "::notice::release asset upload failed: $$(tr '\n\r' '  ' < build/relup.err | cut -c1-300)"; \
+	        fi; \
+	    else \
+	        echo "::notice::release v3.0.0 not found - assets not uploaded"; \
+	    fi; \
+	else \
+	    echo "  REL  not on CI or gh missing - skipping release upload"; \
+	fi
 
 font:
 	@python3 tools/mkfont.py
