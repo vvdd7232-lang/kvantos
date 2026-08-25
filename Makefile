@@ -66,7 +66,7 @@ $(KERNEL): $(OBJ) linker.ld
 build/hdboot.img: $(KERNEL) grub/grub.cfg | build/obj
 	@echo "  HD   bootloader for disk installation"
 	@grub-mkstandalone --format=i386-pc --output=build/hd_core.img \
-	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
 	    "boot/grub/grub.cfg=grub/grub.cfg" "boot/kvant.bin=$(KERNEL)" \
@@ -90,7 +90,7 @@ $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@grub-mkstandalone \
 	    --format=i386-pc \
 	    --output=build/core.img \
-	    --install-modules="biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file vbe vga minicmd reboot halt" \
 	    --modules="biosdisk iso9660 part_msdos multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" \
 	    --compress=xz \
@@ -128,7 +128,7 @@ build/kvantos.img: $(KERNEL)
 	@printf 'menuentry "KvantOS - VGA text 80x25" { multiboot /boot/kvant.bin text ; $(FD_MODULES) boot }\n' >> build/fd.cfg
 	@printf 'menuentry "KvantOS - safe mode" { multiboot /boot/kvant.bin text safe ; boot }\n' >> build/fd.cfg
 	@grub-mkstandalone --format=i386-pc --output=build/fd_core.img \
-	    --install-modules="biosdisk multiboot normal echo configfile test true sleep all_video vbe vga video_bochs video_cirrus minicmd reboot halt" \
+	    --install-modules="biosdisk multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
 	    "boot/grub/grub.cfg=build/fd.cfg" "boot/kvant.bin=$(KERNEL)" \
