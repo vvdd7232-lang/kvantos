@@ -18,13 +18,14 @@ CFLAGS   := -m32 -march=i586 -mtune=generic -std=gnu11 -ffreestanding -fno-built
 ASFLAGS  := -f elf32
 LDFLAGS  := -m elf_i386 -T linker.ld -nostdlib -z noexecstack
 
-# .kapp applications are embedded INSIDE the boot image: that way they
-# reach the system on any machine, even with no disk and no network -
-# burning the ISO is enough. The kernel picks them up as Multiboot
-# modules. They are taken from release/apps.
+# .kapp applications travel INSIDE the images: on the ISO they live as
+# ordinary files under /boot/apps (grub.cfg loads them as Multiboot
+# modules); in the hard-disk installer payload (hdboot.img) they are
+# embedded into core.img outright. Either way burning the ISO is enough
+# to get the apps on any machine, with no disk and no network.
+# They are taken from release/apps.
 APPS       := $(wildcard release/apps/*.kapp)
 APP_GRAFT  := $(foreach a,$(APPS),"boot/apps/$(notdir $(a))=$(a)")
-FD_MODULES := $(foreach a,$(APPS),module /boot/apps/$(notdir $(a)) $(notdir $(a)) ;)
 
 C_SRC    := $(wildcard kernel/*.c)
 # direct.asm is the GRUB-free boot stub: it is assembled separately by
@@ -81,24 +82,24 @@ iso: apps
 $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@echo "  ISO  $@"
 	@rm -rf build/isodir
-	@mkdir -p build/isodir/boot/grub
+	@mkdir -p build/isodir/boot/grub build/isodir/boot/apps
 	@cp $(KERNEL) build/isodir/boot/kvant.bin
 	@cp grub/grub.cfg build/isodir/boot/grub/grub.cfg
 	@cp build/hdboot.img build/isodir/boot/hdboot.img
-	@# A MONOLITHIC eltorito image is built: every required module and
-	@# grub.cfg itself are sewn into core.img. Otherwise GRUB would read
-	@# 276 separate .mod files and a 2.4 MB font from the drive - on the
-	@# worn DVDs of old laptops that hangs right after "Welcome to GRUB!".
-	@grub-mkstandalone \
+	@for a in $(APPS); do cp $$a build/isodir/boot/apps/; done
+	@# core.img stays MONOLITHIC in GRUB modules: every module the menu
+	@# needs is sewn into it (--install-modules), so GRUB never reads
+	@# the 276 separate .mod files / 2.4 MB font off the disc - on worn
+	@# DVDs of old laptops that hangs right after "Welcome to GRUB!".
+	@# The kernel and the .kapp files, however, live on the ISO as
+	@# ordinary files: embedding them too overflows the 0x78000-byte
+	@# core image limit of i386-pc ("core image is too big").
+	@grub-mkimage \
 	    --format=i386-pc \
 	    --output=build/core.img \
-	    --install-modules="biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file vbe vga minicmd reboot halt" \
-	    --modules="biosdisk iso9660 part_msdos multiboot normal configfile" \
-	    --locales="" --fonts="" --themes="" \
+	    --prefix=/boot/grub \
 	    --compress=xz \
-	    "boot/grub/grub.cfg=grub/grub.cfg" \
-	    "boot/kvant.bin=$(KERNEL)" \
-	    $(APP_GRAFT)
+	    biosdisk iso9660 part_msdos multiboot normal echo test true sleep configfile search search_fs_file vbe vga minicmd reboot halt
 	@cat /usr/lib/grub/i386-pc/cdboot.img build/core.img > build/eltorito.img
 	@mkdir -p build/isodir/boot/grub/i386-pc
 	@cp build/eltorito.img build/isodir/boot/grub/i386-pc/eltorito.img
@@ -122,19 +123,21 @@ floppy: apps
 build/kvantos.img: $(KERNEL)
 	@echo "  FLOPPY  build/kvantos.img (fallback for machines without a DVD)"
 	@# There is deliberately NO filesystem on the floppy: core.img laid
-	@# down from sector 2 would overwrite the FAT. Instead the kernel and
-	@# grub.cfg are embedded INSIDE core.img (memdisk) - no drive and no
-	@# filesystem are needed.
+	@# down from sector 2 would overwrite the FAT. Instead the kernel
+	@# and the menu are embedded INSIDE core.img (memdisk) - no drive
+	@# and no filesystem are needed. The .kapp applications do NOT fit
+	@# into the 0x78000-byte core image limit together with the kernel
+	@# and GRUB, so the floppy boots the bare system (the apps come
+	@# from the ISO or are installed onto a disk later).
 	@printf 'set timeout=5\nset default=0\n' > build/fd.cfg
-	@printf 'menuentry "KvantOS - graphics 1024x768" { multiboot /boot/kvant.bin ; $(FD_MODULES) boot }\n' >> build/fd.cfg
-	@printf 'menuentry "KvantOS - VGA text 80x25" { multiboot /boot/kvant.bin text ; $(FD_MODULES) boot }\n' >> build/fd.cfg
+	@printf 'menuentry "KvantOS - graphics 1024x768" { multiboot /boot/kvant.bin ; boot }\n' >> build/fd.cfg
+	@printf 'menuentry "KvantOS - VGA text 80x25" { multiboot /boot/kvant.bin text ; boot }\n' >> build/fd.cfg
 	@printf 'menuentry "KvantOS - safe mode" { multiboot /boot/kvant.bin text safe ; boot }\n' >> build/fd.cfg
 	@grub-mkstandalone --format=i386-pc --output=build/fd_core.img \
 	    --install-modules="biosdisk multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
-	    "boot/grub/grub.cfg=build/fd.cfg" "boot/kvant.bin=$(KERNEL)" \
-	    $(APP_GRAFT)
+	    "boot/grub/grub.cfg=build/fd.cfg" "boot/kvant.bin=$(KERNEL)"
 	@cat /usr/lib/grub/i386-pc/boot.img build/fd_core.img > build/kvantos.img
 	@truncate -s 1474560 build/kvantos.img
 	@mkdir -p release && cp build/kvantos.img release/kvantos-floppy.img
