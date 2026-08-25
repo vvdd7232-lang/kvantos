@@ -163,6 +163,8 @@ void kbd_poll(void) {
     irq_restore(fl);
 }
 
+static u8 led_mask = 0;            /* last value written to the hardware */
+
 void kbd_set_leds(u8 mask) {
     u32 fl = irq_save();          /* the command exchange must be atomic */
     kbd_wait_write();
@@ -171,7 +173,15 @@ void kbd_set_leds(u8 mask) {
     kbd_wait_write();
     outb(0x60, (u8)(mask & 0x07));
     kbd_wait_ack();
+    led_mask = (u8)(mask & 0x07);
     irq_restore(fl);
+}
+
+/* The mask currently lit on the keyboard (bits: 1 Scroll, 2 Num,
+   4 Caps). Used by the `leds` shell command to restore the state
+   after a light show. */
+u8 kbd_get_leds(void) {
+    return led_mask;
 }
 
 /* Full initialisation of the i8042 controller.

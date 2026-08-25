@@ -208,13 +208,18 @@ An interactive command line with history (↑↓ arrows), Ctrl+L and Ctrl+C.
 
 ```
 help      about     clear     echo      mem       cpu
-uptime    date      ps        spawn     ls        cat
-write     rm        colors    beep      alloc     lang
-history   crash     reboot    poweroff  guimenu   gfx
-lspci     gpu       vidmode   refresh   setup     disk
-format    df        dls       dcat      install   uninstall
-apps      hwreport  mount     rescan    vls       vcd
-vcat      vcp       vrm       vmkdir
+uptime    date      ps        spawn     kill      ls
+cat       write     rm        touch     cp        mv
+wc        grep      hexdump   sum       colors    color
+beep      alloc     lang      history   crash     reboot
+poweroff  guimenu   gfx       lspci     gpu       vidmode
+refresh   setup     disk      format    df        dls
+dcat      install   uninstall apps      hwreport  mount
+rescan    vls       vcd       vcat      vcp       vrm
+vmkdir    uname     sysinfo   hostname  whoami    cal
+calc      hex       bin       dec       rand      seq
+rev       matrix    fortune   melody    countdown ascii
+leds      sleep
 ```
 
 `mount` lists the mounted volumes with their type, label and free space,
@@ -224,6 +229,15 @@ volumes again after a disk has been swapped.
 
 `guimenu` starts the graphical environment, `gfx` reports the video mode,
 `lang` switches the interface language.
+
+The utilities batch: `kill` terminates a task from `ps`; `uname`/`sysinfo`
+summarise the system; `cal` prints a month calendar with today highlighted;
+`calc` evaluates integer expressions with parentheses; `hex`/`bin`/`dec`
+convert number bases; `rand` and `seq` produce numbers; `wc`/`grep`/`hexdump`/
+`sum`/`touch`/`cp`/`mv` work with ramfs files; `matrix` shows digital rain;
+`fortune` prints a quote; `melody` and `countdown` use the PC speaker;
+`leds dance` puts the keyboard indicators through a light show; `color`
+changes the shell text colour.
 
 A live status line at the top is updated by a separate background task and shows
 RAM usage, the number of tasks and the system uptime.
@@ -357,9 +371,12 @@ hard disk at all**. A disk is only needed so that programs can save their files.
 Inside the system: the **Programs** icon (key **G**) lists, launches and removes
 them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
-Three richly commented samples are bundled: **Clock** (an analogue dial, integer
-trigonometry), **Notes** (an editor keeping its text on disk) and **Snake**
-(a small game).
+Eight applications are bundled — three richly commented samples plus five
+more: **Clock** (an analogue dial, integer trigonometry), **Notes** (an editor
+keeping its text on disk), **Snake** (a small game), **Calculator** (buttons
+and keyboard input), **Paint** (mouse drawing with a palette), **Pong** (you
+against the machine), **Life** (Conway's Game of Life) and **Stars**
+(a starfield screensaver).
 
 If an application crashes, the system removes it and keeps running — this is
 verified by a dedicated test.

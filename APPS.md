@@ -632,7 +632,9 @@ Common causes of a crash:
 
 ## Examples
 
-Three ready applications with detailed comments are bundled.
+Three ready applications with detailed comments are bundled, plus five more
+that show the ABI in action: a calculator, a paint program, pong, Conway's
+Life and a starfield.
 
 ### `sdk/apps/clock.c` — Clock
 
@@ -665,6 +667,47 @@ A text editor keeping its note on disk. It demonstrates:
 * **saving and reading a file** — the note survives a reboot.
 
 Keys: **Ctrl+S** to save, **Ctrl+L** to re-read from disk.
+
+### `sdk/apps/calc.c` — Calculator
+
+Integer arithmetic with a button grid and a full keyboard path. It
+demonstrates hit-testing a button layout drawn entirely from `fill`/`rect`/
+`text`, and keeping a small state machine (accumulator, pending operation,
+error flag) in static variables.
+
+Keys: **0-9**, **+ − \* / %**, **Enter** equals, **Backspace**, **Esc** clear.
+
+### `sdk/apps/paint.c` — Paint
+
+Drawing with the mouse: a palette of eight colours on top, a canvas below.
+It demonstrates choosing a tool with clicks and drawing straight into the
+window from `on_click`, plus a "Clear" field as a custom button.
+
+Keys: **1-8** colour, **E** eraser, **C** clear, **B** brush size.
+
+### `sdk/apps/pong.c` — Pong
+
+You against the machine, first to seven. It demonstrates frame-rate
+independent movement from `on_tick` (a step every `hz()/60` ticks), simple
+collision response and a dead-zone AI that can actually be beaten.
+
+Keys: **Up/Down** or **W/S**, **Space** serves and restarts.
+
+### `sdk/apps/life.c` — Life
+
+Conway's Game of Life on a torus field. It demonstrates double-buffered
+grid updates, running a simulation from `on_tick` while `on_click` edits
+the cells, and counters in the status text.
+
+Keys: **Space** one step, **G** run/pause, **R** random field, **C** clear.
+
+### `sdk/apps/stars.c` — Stars
+
+A starfield screensaver: 160 stars fly past with a perspective projection.
+It demonstrates computing positions per frame from plain integer maths and
+brightness from depth.
+
+Keys: **+/-** speed, **Space** pause, **Esc** close.
 
 ---
 

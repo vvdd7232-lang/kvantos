@@ -211,13 +211,18 @@ NTFS — он распознаётся и пропускается) и копи�
 
 ```
 help      about     clear     echo      mem       cpu
-uptime    date      ps        spawn     ls        cat
-write     rm        colors    beep      alloc     sleep
-history   crash     reboot    poweroff  guimenu   gfx
-lspci     gpu       vidmode   refresh   setup     disk
-format    df        dls       dcat      install   uninstall
-apps      hwreport  lang      mount     rescan    vls
-vcd       vcat      vcp       vrm       vmkdir
+uptime    date      ps        spawn     kill      ls
+cat       write     rm        touch     cp        mv
+wc        grep      hexdump   sum       colors    color
+beep      alloc     lang      history   crash     reboot
+poweroff  guimenu   gfx       lspci     gpu       vidmode
+refresh   setup     disk      format    df        dls
+dcat      install   uninstall apps      hwreport  mount
+rescan    vls       vcd       vcat      vcp       vrm
+vmkdir    uname     sysinfo   hostname  whoami    cal
+calc      hex       bin       dec       rand      seq
+rev       matrix    fortune   melody    countdown ascii
+leds      sleep
 ```
 
 `mount` показывает подключённые тома с типом, меткой и свободным местом,
@@ -226,6 +231,15 @@ vcd       vcat      vcp       vrm       vmkdir
 после смены диска.
 
 `guimenu` — запуск графической среды, `gfx` — сведения о видеорежиме.
+
+Набор утилит: `kill` завершает задачу из списка `ps`; `uname`/`sysinfo`
+показывают сводку о системе; `cal` печатает календарь месяца и выделяет
+сегодняшний день; `calc` считает целочисленные выражения со скобками;
+`hex`/`bin`/`dec` переводят числа между системами счисления; `rand` и `seq`
+выдают числа; `wc`/`grep`/`hexdump`/`sum`/`touch`/`cp`/`mv` работают
+с файлами в ramfs; `matrix` показывает цифровой дождь; `fortune` печатает
+цитату; `melody` и `countdown` используют PC-спикер; `leds dance` устраивает
+световое шоу на индикаторах клавиатуры; `color` меняет цвет текста оболочки.
 
 Живая строка состояния сверху обновляется отдельной фоновой задачей
 и показывает использование ОЗУ, число задач и время работы системы.
@@ -351,9 +365,13 @@ cd .. && ./sdk/addapp.sh sdk/build/snake.kapp
 В системе: значок **«Программы»** (клавиша **G**) — список, запуск,
 удаление. Из оболочки: `disk`, `format`, `install`, `apps`, `dls`.
 
-В комплекте два примера с подробными комментариями: **«Часы»**
-(аналоговый циферблат, тригонометрия на целых числах) и **«Заметки»**
-(редактор, хранящий текст на диске).
+В комплекте восемь приложений: три примера с подробными комментариями
+и ещё пять. **«Часы»** (аналоговый циферблат, тригонометрия на целых
+числах), **«Заметки»** (редактор, хранящий текст на диске), **«Змейка»**
+(небольшая игра), **«Калькулятор»** (кнопки и ввод с клавиатуры),
+**«Рисование»** (рисование мышью с палитрой), **«Понг»** (вы против
+машины), **«Жизнь»** (клеточный автомат Конвея) и **«Звёзды»**
+(звёздная заставка).
 
 Если приложение упадёт, система его снимет и продолжит работать —
 это проверено отдельным тестом.

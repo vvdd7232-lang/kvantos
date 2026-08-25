@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 LOAD_BASE      = 0x00E00000     # must match KAPP_LOAD_BASE
-API_VERSION    = 1
+API_VERSION    = 2              # must match KV_API_VERSION in include/kvapp.h
 FORMAT_VERSION = 1
 HEADER_SIZE    = 64
 MAX_SIZE       = 0x00200000     # 2 MiB

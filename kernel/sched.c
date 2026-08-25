@@ -130,6 +130,30 @@ void task_sleep(u32 ms) {
     schedule();
 }
 
+/* Terminate another task by id. The task is marked dead and is
+   collected by the reaper on one of the following schedule() calls,
+   exactly like one that finished on its own. The current task cannot
+   be killed this way (it would never return from the call): the
+   caller gets -2 and can decide whether to exit voluntarily. */
+int task_kill(u32 id) {
+    if (!sched_ready || !current) return -1;
+    u32 fl = irq_save();
+    task_t *t = current;
+    int guard = 256;
+    int found = -1;
+    do {
+        if (t->id == id && t->state != TASK_DEAD) {
+            if (t == current) { found = -2; break; }
+            t->state = TASK_DEAD;
+            found = 0;
+            break;
+        }
+        t = t->next;
+    } while (t != current && --guard > 0);
+    irq_restore(fl);
+    return found;
+}
+
 void task_exit(void) {
     u32 fl = irq_save();
     current->state = TASK_DEAD;

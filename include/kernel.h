@@ -132,6 +132,7 @@ void  keyboard_init(void);
 int   kbd_getchar_nb(void);      /* -1 when no character is available */
 char  kbd_getchar(void);         /* blocking read */
 void  kbd_set_leds(u8 mask);     /* bits: 1 Scroll, 2 Num, 4 Caps */
+u8    kbd_get_leds(void);        /* the mask currently lit */
 void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 
 #define KEY_UP     0x81
@@ -209,6 +210,7 @@ void    task_exit(void);
 task_t *task_current(void);
 task_t *task_list(void);
 u32     task_count(void);
+int     task_kill(u32 id);       /* 0 ok, -1 no such task, -2 current */
 
 /* ---------- ramfs ---------- */
 #define RAMFS_MAX_FILES 32
@@ -415,8 +417,43 @@ void cmd_refresh(int argc, char **argv);
 /* ---------- graphical shell ---------- */
 int  gui_run(void);
 
+/* ---------- random numbers ---------- */
+void   kv_rand_seed(u32 seed);
+u32    kv_rand(void);            /* xorshift32, seeded from the timer */
+u32    kv_rand_max(u32 n);       /* a number in [0, n) */
+
+/* ---------- shell utilities (utilcmds.c) ---------- */
+void   cmd_uname(void);
+void   cmd_hostname(void);
+void   cmd_whoami(void);
+void   cmd_sysinfo(void);
+void   cmd_calc(int argc, char **argv);
+void   cmd_cal(int argc, char **argv);
+void   cmd_hex(const char *arg);
+void   cmd_bin(const char *arg);
+void   cmd_dec(const char *arg);
+void   cmd_rand(int argc, char **argv);
+void   cmd_seq(int argc, char **argv);
+void   cmd_rev(int argc, char **argv);
+void   cmd_wc(const char *name);
+void   cmd_grep(int argc, char **argv);
+void   cmd_hexdump(const char *name);
+void   cmd_sum(const char *name);
+void   cmd_touch(const char *name);
+void   cmd_cp(int argc, char **argv);
+void   cmd_mv(int argc, char **argv);
+void   cmd_kill(int argc, char **argv);
+void   cmd_matrix(void);
+void   cmd_fortune(void);
+void   cmd_melody(void);
+void   cmd_leds(int argc, char **argv);
+void   cmd_ascii(void);
+void   cmd_countdown(int argc, char **argv);
+void   cmd_color(int argc, char **argv);
+
 /* ---------- miscellaneous ---------- */
 void   shell_run(void);
+void   shell_set_fg(u8 color);
 void   panic(const char *msg, registers_t *r);
 void   cpu_vendor(char *buf13);
 void   cpu_brand(char *buf49);
