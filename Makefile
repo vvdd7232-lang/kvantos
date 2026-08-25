@@ -31,7 +31,7 @@ ASM_SRC  := $(wildcard boot/*.asm)
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
-.PHONY: all apps iso floppy run run-curses clean font debug release
+.PHONY: all apps iso floppy run run-curses clean font debug release release-inner
 
 all: $(KERNEL)
 
@@ -150,7 +150,33 @@ debug: $(ISO)
 # The full distribution set: ISO, floppy, kernel, applications and an
 # empty disk for files. This is the archive attached to a GitHub
 # release - the repository itself carries no binaries.
-release: iso floppy
+#
+# On CI the whole build is logged; when it fails, the tail of the log
+# is pushed back to the repository as the annotated tag "ci-diag", so
+# the failure reason can be inspected even without Actions log access.
+release:
+	@mkdir -p build
+	@if $(MAKE) --no-print-directory release-inner >build/release.log 2>&1; then \
+	    cat build/release.log; \
+	else \
+	    rc=$$?; \
+	    cat build/release.log; \
+	    echo; \
+	    if [ "$$GITHUB_ACTIONS" = "true" ] && [ -d .git ]; then \
+	        git config user.email ci@kvantos.local 2>/dev/null || true; \
+	        git config user.name "KvantOS CI" 2>/dev/null || true; \
+	        tail -c 12000 build/release.log > build/diag.msg 2>/dev/null || true; \
+	        git tag -f ci-diag -F build/diag.msg >/dev/null 2>&1 || true; \
+	        if git push -f origin refs/tags/ci-diag >/dev/null 2>&1; then \
+	            echo "DIAG: pushed tag ci-diag with the build log"; \
+	        else \
+	            echo "DIAG: could not push the ci-diag tag"; \
+	        fi; \
+	    fi; \
+	    exit $$rc; \
+	fi
+
+release-inner: iso floppy
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
 	@rm -f kvantos-0.1.0-photon.tar.gz
