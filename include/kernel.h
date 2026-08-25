@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "2.0.0 \"Quantum\""
+#define KV_VERSION  "3.0.0 \"Horizon\""
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -35,20 +35,44 @@ static inline void cli(void)               { __asm__ volatile("cli"); }
 static inline void sti(void)               { __asm__ volatile("sti"); }
 static inline void hlt(void)               { __asm__ volatile("hlt"); }
 
+/* A machine word wide enough to hold a pointer: u32 on the legacy
+   32-bit build, u64 on the 64-bit (KvantOS 3.0) build. Physical
+   addresses stay u32 everywhere - the system lives under 4 GiB. */
+typedef unsigned long kv_addr_t;
+typedef unsigned long kv_flags_t;   /* whatever irq_save()/irq_restore() carry */
+
+#ifdef __x86_64__
+static inline u64 irq_save(void) {
+    u64 fl; __asm__ volatile("pushfq; popq %0; cli":"=r"(fl)::"memory"); return fl;
+}
+static inline void irq_restore(u64 fl) {
+    __asm__ volatile("pushq %0; popfq"::"r"(fl):"memory","cc");
+}
+#else
 static inline u32 irq_save(void) {
     u32 fl; __asm__ volatile("pushfl; popl %0; cli":"=r"(fl)::"memory"); return fl;
 }
 static inline void irq_restore(u32 fl) {
     __asm__ volatile("pushl %0; popfl"::"r"(fl):"memory","cc");
 }
+#endif
 
 /* ---------- register frame on interrupt ---------- */
+#ifdef __x86_64__
+typedef struct {
+    u64 r15, r14, r13, r12, r11, r10, r9, r8;
+    u64 rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    u64 int_no, err_code;
+    u64 rip, cs, rflags, rsp, ss;
+} registers_t;
+#else
 typedef struct {
     u32 ds;
     u32 edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
     u32 int_no, err_code;
     u32 eip, cs, eflags, useresp, ss;
 } registers_t;
+#endif
 
 typedef void (*isr_t)(registers_t *);
 
@@ -119,7 +143,7 @@ void idt_init(void);
 void isr_install_handler(u8 n, isr_t h);
 void irq_install_handler(u8 irq, isr_t h);
 void pic_remap(void);
-void set_kernel_stack(u32 esp0);
+void set_kernel_stack(kv_addr_t esp0);
 
 /* ---------- timer, keyboard, RTC ---------- */
 void  timer_init(u32 hz);
@@ -200,12 +224,12 @@ char  *kstrdup(const char *s);
 #define TASK_DEAD     2
 
 typedef struct task {
-    u32          esp;
+    kv_addr_t    esp;
     u32          id;
     char         name[16];
     int          state;
     u64          wake_tick;
-    u32          stack_base;
+    kv_addr_t    stack_base;
     u32          switches;
     struct task *next;
 } task_t;
@@ -479,11 +503,18 @@ void   beep(u32 freq, u32 ms);
 void   logo_print(void);
 
 extern u32 kernel_start, kernel_end;
+#ifdef __x86_64__
+extern void gdt_flush(kv_addr_t);
+extern void tss_flush(u16 sel);
+extern void idt_flush(kv_addr_t);
+extern char kernel_stack_top[];
+#else
 extern void gdt_flush(u32);
 extern void tss_flush(void);
 extern void idt_flush(u32);
-extern void paging_enable(u32 pd_phys);
-extern u32  read_cr2(void);
-extern void context_switch(u32 *old_esp, u32 new_esp);
+#endif
+extern void paging_enable(kv_addr_t pd_phys);
+extern kv_addr_t read_cr2(void);
+extern void context_switch(kv_addr_t *old_esp, kv_addr_t new_esp);
 
 #endif

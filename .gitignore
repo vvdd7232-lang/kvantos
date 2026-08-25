@@ -1,6 +1,7 @@
 # --- intermediate build results ---
 build/
 sdk/build/
+sdk/build64/
 *.o
 *.d
 *.elf
@@ -10,7 +11,9 @@ sdk/build/
 release/*.iso
 release/*.img
 release/*.bin
+release/*.efi
 release/apps/*.kapp
+release/apps64/*.kapp
 
 # --- editor litter ---
 *~

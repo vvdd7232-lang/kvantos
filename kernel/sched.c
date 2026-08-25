@@ -14,7 +14,7 @@ task_t *task_list(void)    { return tasks; }
 /* The list is circular - iterate strictly until back at the start */
 u32 task_count(void) {
     if (!current) return 0;
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     u32 n = 0;
     task_t *t = current;
     do {
@@ -39,7 +39,7 @@ void sched_init(void) {
 task_t *task_create(const char *name, void (*entry)(void)) {
     if (!entry) return NULL;
     if (!current) return NULL;        /* before sched_init() there is no list yet */
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     task_t *t = (task_t *)kmalloc(sizeof(task_t));
     if (!t) { irq_restore(fl); return NULL; }
     memset(t, 0, sizeof(task_t));
@@ -53,16 +53,27 @@ task_t *task_create(const char *name, void (*entry)(void)) {
 
     /* The frame must match context_switch exactly: its pop sequence is
        popfd, edi, esi, ebx, ebp, ret. So from the top of the stack
-       upwards: eflags, edi, esi, ebx, ebp, entry, task_exit. */
-    u32 *sp = (u32 *)(stack + STACK_SIZE);
-    *--sp = (u32)task_exit;               /* return address out of entry */
-    *--sp = (u32)entry;                   /* ret will jump here */
-    *--sp = 0;                            /* ebp */
-    *--sp = 0;                            /* ebx */
-    *--sp = 0;                            /* esi */
-    *--sp = 0;                            /* edi */
-    *--sp = 0x00000202;                   /* EFLAGS with IF=1 (popfd) */
-    t->esp = (u32)sp;
+       upwards: eflags, edi, esi, ebx, ebp, entry, task_exit.
+       64-bit pops r15,r14,r13,r12,rbx,rbp, then popfq, then ret. */
+    kv_addr_t *sp = (kv_addr_t *)(stack + STACK_SIZE);
+    *--sp = (kv_addr_t)task_exit;             /* return address out of entry */
+    *--sp = (kv_addr_t)entry;                 /* ret will jump here */
+#ifdef __x86_64__
+    *--sp = 0x00000202;                       /* RFLAGS with IF=1 (popfq) */
+    *--sp = 0;                                /* rbp */
+    *--sp = 0;                                /* rbx */
+    *--sp = 0;                                /* r12 */
+    *--sp = 0;                                /* r13 */
+    *--sp = 0;                                /* r14 */
+    *--sp = 0;                                /* r15 */
+#else
+    *--sp = 0;                                /* ebp */
+    *--sp = 0;                                /* ebx */
+    *--sp = 0;                                /* esi */
+    *--sp = 0;                                /* edi */
+    *--sp = 0x00000202;                       /* EFLAGS with IF=1 (popfd) */
+#endif
+    t->esp = (kv_addr_t)sp;
 
     /* insertion into the circular list */
     t->next = current->next;
@@ -104,7 +115,7 @@ static task_t *pick_next(void) {
 
 void schedule(void) {
     if (!sched_ready || !current) return;
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
 
     reap_one();
 
@@ -122,7 +133,7 @@ void task_yield(void) { schedule(); }
 
 void task_sleep(u32 ms) {
     if (!sched_ready) { sleep_ms(ms); return; }
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     current->state = TASK_SLEEPING;
     u32 hz = timer_hz();
     current->wake_tick = timer_ticks() + (u64)(ms / 1000u * hz + (ms % 1000u) * hz / 1000u);
@@ -137,7 +148,7 @@ void task_sleep(u32 ms) {
    caller gets -2 and can decide whether to exit voluntarily. */
 int task_kill(u32 id) {
     if (!sched_ready || !current) return -1;
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     task_t *t = current;
     int guard = 256;
     int found = -1;
@@ -155,7 +166,7 @@ int task_kill(u32 id) {
 }
 
 void task_exit(void) {
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     current->state = TASK_DEAD;
     irq_restore(fl);
     for (;;) { schedule(); __asm__ volatile("hlt"); }

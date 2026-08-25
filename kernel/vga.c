@@ -30,7 +30,7 @@ static inline u32 bg_rgb(u8 cl) { const u8 *p = pal[(cl >> 4) & 0x0F]; return fb
 
 /* ---- loading a custom font into video memory plane 2 ---- */
 static void vga_load_font(const u8 *font) {
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     outb(0x3C4, 0x00); outb(0x3C5, 0x01);
     outb(0x3C4, 0x02); outb(0x3C5, 0x04);
     outb(0x3C4, 0x04); outb(0x3C5, 0x07);
@@ -81,7 +81,7 @@ static void cursor_enable(void) {
 
 /* ---- clearing / scrolling ---- */
 void vga_clear(void) {
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     if (gfx) {
         fb_fill(0, (i32)(TOP_ROW * 16), (i32)fb_width(),
                 (i32)(fb_height() - TOP_ROW * 16), bg_rgb(color));
@@ -115,7 +115,7 @@ static void put_cell(u32 x, u32 y, u8 ch) {
 }
 
 static void vga_putb(u8 c) {
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     if (gfx) cursor_gfx(0);              /* erase the cursor */
     switch (c) {
         case '\n': col = 0; row++; break;
@@ -169,7 +169,7 @@ void vga_status(const char *left, const char *right, u8 cl) {
     u32 ln = left ? utf8_to_cp866(left, lbuf, lim) : 0;
     u32 rn = right ? utf8_to_cp866(right, rbuf, lim) : 0;
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     if (gfx) {
         u32 bg = bg_rgb(cl), fg = fg_rgb(cl);
         fb_fill(0, 0, (i32)fb_width(), 16, bg);

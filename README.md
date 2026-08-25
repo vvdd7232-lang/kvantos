@@ -1,18 +1,23 @@
-# KvantOS 2.0.0 "Quantum"
+# KvantOS 3.0.0 "Horizon"
 
-> **New in 2.0** — the real-time clock can finally be set from the shell
-> (`time set HH:MM:SS`, `date set DD.MM.YYYY`); interface settings became
-> **persistent** (the chosen language is written to `settings.cfg` on the
-> KvFS disk and restored at boot); the shell gained the text utilities
-> `sort`, `uniq`, `tac`, `basename`, `dirname` and `repeat`; and the
-> application set grew to ten with **Mines** and **2048**. The full story
-> is in [CHANGELOG.md](CHANGELOG.md).
+> **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
+> kernel there is now a second build, `kvant64.bin`, compiled for
+> x86-64 long mode (PML4 paging, 64-bit interrupt frames and GDT/TSS).
+> And with it comes a **UEFI loader** written in plain C —
+> `boot/kvantefi.c`, assembled into `BOOTX64.EFI` with no GRUB, no
+> legacy MBR and no CSM: the only road onto modern hardware. The ISO is
+> hybrid — it boots on old BIOS machines through GRUB and on UEFI
+> firmware through the EFI stub. The full story is in
+> [CHANGELOG.md](CHANGELOG.md).
 
 *Read this in [Русский](README.ru.md).*
 
-A completely hand-written **32-bit operating system** for the i386 architecture.
-Own monolithic kernel, booted by **GRUB 2** through the Multiboot 1 specification.
-No C standard library — only the compiler's freestanding headers.
+A completely hand-written **x86 operating system** with two kernels:
+the classic **32-bit** build (`kvant.bin`, booted by **GRUB 2** through
+the Multiboot 1 specification) and, since 3.0, a **64-bit** build
+(`kvant64.bin`, booted by its own **UEFI stub** on EFI x86-64 firmware).
+Own monolithic kernel. No C standard library — only the compiler's
+freestanding headers.
 
 ```
    ██╗  ██╗██╗   ██╗ █████╗ ███╗   ██╗████████╗
@@ -26,7 +31,8 @@ No C standard library — only the compiler's freestanding headers.
 ## Quick start
 
 ```bash
-make          # build the kernel, build/kvant.bin
+make          # build everything: kvant.bin (32-bit), kvant64.bin
+              # (64-bit) and kvantefi.efi (the UEFI loader)
 make iso      # build the bootable image, build/kvantos.iso
 make run      # run in QEMU (the kernel log is mirrored to COM1/stdout)
 ```
@@ -34,6 +40,24 @@ make run      # run in QEMU (the kernel log is mirrored to COM1/stdout)
 The image boots on real hardware too: write `kvantos.iso` to a USB stick
 (`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) or attach it as a CD in
 VirtualBox/VMware.
+
+### UEFI boot (new in 3.0)
+
+The ISO carries a second El Torito entry: a FAT16 ESP image
+(`tools/mkesp.py`, pure Python — no `mtools` needed) with
+`/EFI/BOOT/BOOTX64.EFI` and `/boot/kvant64.bin`. On firmware that boots
+UEFI-only (no CSM) the stub reads the kernel from the boot volume,
+loads the `.kapp` applications from `/boot/apps`, picks a 1024x768 (or
+the best fitting) GOP graphics mode, converts the EFI memory map into a
+Multiboot-1 style `multiboot_info`, exits the boot services and jumps
+into the 64-bit kernel — which from that point on behaves exactly like
+the 32-bit build: same shell, same applications, same drivers.
+
+Applications are built for both kernels: `release/apps` carries the
+32-bit `.kapp` files (for `kvant.bin` and the GRUB/floppy paths) and
+`release/apps64` the 64-bit ones (for `kvant64.bin`); a header flag
+(`KAPP_FLAG_ARCH64`) makes each kernel refuse files of the wrong
+bitness instead of crashing on them.
 
 ### Building without GRUB
 

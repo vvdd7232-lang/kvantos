@@ -48,7 +48,7 @@ void *kmalloc(size_t size) {
     if (size > 0xFFFFFFF0u) return NULL;
     size = ALIGN8(size);
     if (size > heap_total) return NULL;
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     for (block_t *b = head; b; b = b->next) {
         if (b->free && b->size >= size) {
             split(b, size);
@@ -87,7 +87,7 @@ void kfree(void *p) {
     if (!p) return;
     block_t *b = (block_t *)((u8 *)p - sizeof(block_t));
     if (b->magic != MAGIC_USED) { kprintf(T("[heap] block corruption at %p\n", "[heap] порча блока %p\n"), p); return; }
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     b->free = 1;
     b->magic = MAGIC_FREE;
     heap_used -= b->size;

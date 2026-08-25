@@ -18,6 +18,7 @@ FORMAT_VERSION = 1
 HEADER_SIZE    = 64
 MAX_SIZE       = 0x00200000     # 2 MiB
 FLAG_WINDOW    = 0x0001
+FLAG_ARCH64    = 0x0100
 
 
 def fail(msg):
@@ -50,8 +51,10 @@ def main():
         print("Usage: mkkapp.py input.elf output.kapp [\"Title\"]")
         sys.exit(1)
 
-    elf, out = sys.argv[1], sys.argv[2]
-    name = sys.argv[3] if len(sys.argv) > 3 else out.rsplit("/", 1)[-1].replace(".kapp", "")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    arch64 = "--arch64" in sys.argv[1:]
+    elf, out = args[0], args[1]
+    name = args[2] if len(args) > 2 else out.rsplit("/", 1)[-1].replace(".kapp", "")
 
     # --- entry point ---
     entry = symbol_address(elf, "kapp_main")
@@ -94,7 +97,7 @@ def main():
         FORMAT_VERSION,
         HEADER_SIZE,
         API_VERSION,
-        FLAG_WINDOW,
+        FLAG_WINDOW | (FLAG_ARCH64 if arch64 else 0),
         LOAD_BASE,
         entry,
         code_size,

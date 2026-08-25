@@ -163,6 +163,34 @@ def main():
     iso.add_file(img_path, "/BOOT/DIRECT.IMG;1")
     iso.add_eltorito("/BOOT/DIRECT.IMG;1", boot_load_size=STUB_PAD // 512,
                      platform_id=0, boot_info_table=False, media_name="noemul")
+
+    # ---- UEFI path (KvantOS 3.0): ESP image as the second El Torito entry ----
+    efi_path = kernel64_path = None
+    if "--efi" in sys.argv:
+        efi_path = sys.argv[sys.argv.index("--efi") + 1]
+    if "--kernel64" in sys.argv:
+        kernel64_path = sys.argv[sys.argv.index("--kernel64") + 1]
+    if (efi_path and kernel64_path and os.path.exists(efi_path)
+            and os.path.exists(kernel64_path)):
+        sys.path.insert(0, HERE)
+        import mkesp
+        # the ESP carries the 64-BIT applications: a .kapp built for the
+        # 64-bit kernel refuses to run on the 32-bit one and vice versa
+        apps64_dir = apps_dir
+        if "--apps64" in sys.argv:
+            apps64_dir = sys.argv[sys.argv.index("--apps64") + 1]
+        esp_path = os.path.join(BUILD, "esp.img")
+        mkesp.build_esp_image(esp_path, efi_path, kernel64_path, apps64_dir)
+        iso.add_file(esp_path, "/ESP.IMG;1")
+        iso.add_directory("/EFI")
+        iso.add_directory("/EFI/BOOT")
+        iso.add_file(efi_path, "/EFI/BOOT/BOOTX64.EFI;1")
+        iso.add_file(kernel64_path, "/BOOT/KVANT64.BIN;1")
+        iso.add_eltorito("/ESP.IMG;1", platform_id=0xEF, efi=True)
+        print("mkdirect: UEFI entry added (esp.img + BOOTX64.EFI)")
+    else:
+        print("mkdirect: no UEFI files given (--efi/--kernel64), BIOS-only ISO")
+
     iso.write(iso_path)
     iso.close()
     print(f"mkdirect: {iso_path} written ({os.path.getsize(iso_path)} B)")

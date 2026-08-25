@@ -153,7 +153,7 @@ void kbd_poll(void) {
        same scan code would then be processed twice (a doubled
        character). At 1000 Hz the odds of that race grew tenfold, so the
        read is made atomic. */
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     for (int i = 0; i < 8; i++) {
         u8 st = inb(0x64);
         if (!(st & 0x01)) break;       /* nothing buffered */
@@ -166,7 +166,7 @@ void kbd_poll(void) {
 static u8 led_mask = 0;            /* last value written to the hardware */
 
 void kbd_set_leds(u8 mask) {
-    u32 fl = irq_save();          /* the command exchange must be atomic */
+    kv_flags_t fl = irq_save();          /* the command exchange must be atomic */
     kbd_wait_write();
     outb(0x60, 0xED);
     kbd_wait_ack();
@@ -195,7 +195,7 @@ void keyboard_init(void) {
     head = tail = 0;
     irq_install_handler(1, kbd_cb);
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
 
     /* 1. Drain the leftovers from the BIOS. While a byte sits in the
           output buffer no further IRQ1 will arrive. */
@@ -250,8 +250,14 @@ char kbd_getchar(void) {
            the loop burned 100% of the CPU. Wait for an interrupt for
            real. hlt is only safe with interrupts enabled - otherwise it
            would be an eternal sleep. */
-        u32 fl;
-        __asm__ volatile("pushfl; popl %0" : "=r"(fl));
+        kv_addr_t fl;
+        __asm__ volatile(
+#ifdef __x86_64__
+            "pushfq; popq %0"
+#else
+            "pushfl; popl %0"
+#endif
+            : "=r"(fl));
         if (fl & 0x200) __asm__ volatile("hlt");
         else            __asm__ volatile("pause");
         task_yield();

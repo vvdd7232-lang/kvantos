@@ -8,15 +8,36 @@ ISO      := build/kvantos.iso
 CC       := gcc
 AS       := nasm
 LD       := ld
+OBJCOPY  := objcopy
 
 # GCC freestanding headers (stdint.h, stddef.h, stdarg.h) needed with -nostdinc
 GCC_INC  := $(shell $(CC) -m32 -print-file-name=include)
+GCC_INC64:= $(shell $(CC) -m64 -print-file-name=include)
 
 CFLAGS   := -m32 -march=i586 -mtune=generic -std=gnu11 -ffreestanding -fno-builtin -fno-stack-protector \
             -fno-pic -fno-pie -nostdlib -nostdinc -Wall -Wextra -O2 \
             -Iinclude -isystem $(GCC_INC) -Wno-unused-parameter
 ASFLAGS  := -f elf32
 LDFLAGS  := -m elf_i386 -T linker.ld -nostdlib -z noexecstack
+
+# ---- KvantOS 3.0: the 64-bit kernel + UEFI stub ----
+# kvant64.bin is a plain ELF64 executable loaded by the UEFI stub
+# (boot/kvantefi.c). The red zone is off because interrupts may fire
+# at any moment; SSE is off because the kernel never initializes it.
+CFLAGS64 := -m64 -std=gnu11 -ffreestanding -fno-builtin -fno-stack-protector \
+            -mno-red-zone -mno-sse -mno-mmx -mno-sse2 \
+            -fno-pic -fno-pie -nostdlib -nostdinc -Wall -Wextra -O2 \
+            -Iinclude -isystem $(GCC_INC64) -Wno-unused-parameter
+ASFLAGS64:= -f elf64
+LDFLAGS64:= -m elf_x86_64 -T linker64.ld -nostdlib -z noexecstack
+KERNEL64 := build/kvant64.bin
+
+# UEFI applications use the Microsoft x86-64 calling convention and are
+# position independent; the PE/COFF conversion is done by objcopy.
+CFLAGS_EFI := -m64 -std=gnu11 -ffreestanding -fno-builtin -fno-stack-protector \
+            -fpic -fshort-wchar -mno-red-zone -nostdlib -nostdinc -Wall -Wextra -O2 \
+            -Iinclude -isystem $(GCC_INC64)
+EFI      := build/kvantefi.efi
 
 # .kapp applications travel INSIDE the images: on the ISO they live as
 # ordinary files under /boot/apps (grub.cfg loads them as Multiboot
@@ -30,13 +51,20 @@ APP_GRAFT  := $(foreach a,$(APPS),"boot/apps/$(notdir $(a))=$(a)")
 C_SRC    := $(wildcard kernel/*.c)
 # direct.asm is the GRUB-free boot stub: it is assembled separately by
 # tools/mkdirect.py and must never end up inside the kernel image.
-ASM_SRC  := $(filter-out boot/direct.asm,$(wildcard boot/*.asm))
+# boot64.asm / isr64.asm belong to the 64-bit kernel (kvant64.bin).
+ASM_SRC  := $(filter-out boot/direct.asm boot/boot64.asm boot/isr64.asm,$(wildcard boot/*.asm))
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
-.PHONY: all apps iso floppy run run-curses clean font debug release release-inner
+ASM64_SRC:= boot/boot64.asm boot/isr64.asm
+OBJ64    := $(patsubst kernel/%.c,build/obj64/%.o,$(C_SRC)) \
+            $(patsubst boot/%.asm,build/obj64/%.o,$(ASM64_SRC))
 
-all: $(KERNEL)
+ESPIMG   := build/esp.img
+
+.PHONY: all apps iso floppy run run-curses clean font debug release release-inner kv64 efi esp
+
+all: $(KERNEL) $(KERNEL64) $(EFI)
 
 # Applications are built by the separate SDK and land in release/apps.
 # The APPS list is expanded while the Makefile is read, so targets that
@@ -44,6 +72,9 @@ all: $(KERNEL)
 # wildcard see the freshly built files.
 apps:
 	@$(MAKE) --no-print-directory -C sdk
+	@mkdir -p release/apps release/apps64
+	@cp sdk/build/*.kapp release/apps/ 2>/dev/null || true
+	@cp sdk/build64/*.kapp release/apps64/ 2>/dev/null || true
 
 build/obj:
 	@mkdir -p build/obj
@@ -56,10 +87,57 @@ build/obj/%.o: boot/%.asm | build/obj
 	@echo "  AS   $<"
 	@$(AS) $(ASFLAGS) $< -o $@
 
+# ---- 64-bit kernel objects ----
+build/obj64:
+	@mkdir -p build/obj64
+
+build/obj64/%.o: kernel/%.c | build/obj64
+	@echo "  CC64 $<"
+	@$(CC) $(CFLAGS64) -c $< -o $@
+
+build/obj64/%.o: boot/%.asm | build/obj64
+	@echo "  AS64 $<"
+	@$(AS) $(ASFLAGS64) $< -o $@
+
+kv64: $(KERNEL64)
+
+$(KERNEL64): $(OBJ64) linker64.ld
+	@echo "  LD64 $@"
+	@$(LD) $(LDFLAGS64) -o $@ $(OBJ64)
+	@size $@ 2>/dev/null || true
+
+# ---- UEFI stub (PE/COFF x86-64 application) ----
+efi: $(EFI)
+
+build/kvantefi.o: boot/kvantefi.c include/efi/efi.h | build/obj
+	@echo "  CCEFI $<"
+	@$(CC) $(CFLAGS_EFI) -maccumulate-outgoing-args -c $< -o $@
+
+build/kvantefi.so: build/kvantefi.o tools/efi.lds
+	@echo "  LDEFI $@"
+	@$(LD) -nostdlib -znocombreloc -shared -Bsymbolic -T tools/efi.lds -o $@ $<
+
+$(EFI): build/kvantefi.so
+	@echo "  EFI  $@"
+	@$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic -j .dynsym \
+	    -j .rel -j .rela -j .reloc --target=efi-app-x86_64 $< $@
+
+# ---- FAT16 ESP image (UEFI boot from CD/USB without any legacy code) ----
+esp: $(ESPIMG)
+
+$(ESPIMG): $(EFI) $(KERNEL64) tools/mkesp.py
+	@$(MAKE) --no-print-directory apps
+	@echo "  ESP  $@"
+	@python3 tools/mkesp.py $@ $(EFI) $(KERNEL64) release/apps64
+
 $(KERNEL): $(OBJ) linker.ld
 	@echo "  LD   $@"
 	@$(LD) $(LDFLAGS) -o $@ $(OBJ)
-	@grub-file --is-x86-multiboot $@ && echo "  OK   Multiboot header is valid"
+	@if command -v grub-file >/dev/null 2>&1; then \
+	    grub-file --is-x86-multiboot $@ && echo "  OK   Multiboot header is valid"; \
+	else \
+	    echo "  SKIP grub-file not installed"; \
+	fi
 	@size $@ 2>/dev/null || true
 
 # --- building the bootable ISO with GRUB ---
@@ -79,7 +157,7 @@ build/hdboot.img: $(KERNEL) grub/grub.cfg | build/obj
 iso: apps
 	@$(MAKE) --no-print-directory $(ISO)
 
-$(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
+$(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg build/hdboot.img
 	@echo "  ISO  $@"
 	@rm -rf build/isodir
 	@mkdir -p build/isodir/boot/grub build/isodir/boot/apps
@@ -87,6 +165,14 @@ $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	@cp grub/grub.cfg build/isodir/boot/grub/grub.cfg
 	@cp build/hdboot.img build/isodir/boot/hdboot.img
 	@for a in $(APPS); do cp $$a build/isodir/boot/apps/; done
+	@# KvantOS 3.0 UEFI path: the EFI stub + 64-bit kernel live in the
+	@# ISO9660 tree (USB/hard-disk installs) and a second copy of them
+	@# goes into esp.img, the El Torito EFI boot image (CD/DVD boot).
+	@mkdir -p build/isodir/EFI/BOOT
+	@cp $(EFI) build/isodir/EFI/BOOT/BOOTX64.EFI
+	@cp $(KERNEL64) build/isodir/boot/kvant64.bin
+	@python3 tools/mkesp.py build/esp.img $(EFI) $(KERNEL64) release/apps64
+	@cp build/esp.img build/isodir/esp.img
 	@# core.img stays MONOLITHIC in GRUB modules: every module the menu
 	@# needs is sewn into it (--install-modules), so GRUB never reads
 	@# the 276 separate .mod files / 2.4 MB font off the disc - on worn
@@ -108,14 +194,20 @@ $(ISO): $(KERNEL) grub/grub.cfg build/hdboot.img
 	    -b boot/grub/i386-pc/eltorito.img \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \
 	    --grub2-boot-info \
+	    -eltorito-alt-boot \
+	    -e esp.img \
+	    -no-emul-boot \
 	    -iso-level 3 -r -J -joliet-long \
 	    -V KVANTOS \
 	    -o $@ build/isodir 2>/dev/null
-	@isohybrid $@ 2>/dev/null || true
+	@isohybrid --uefi $@ 2>/dev/null || isohybrid $@ 2>/dev/null || true
 	@mkdir -p release
 	@cp $@ release/kvantos.iso
 	@cp $(KERNEL) release/kvant.bin
-	@echo "  DONE: release/kvantos.iso"
+	@cp $(KERNEL64) release/kvant64.bin
+	@cp $(EFI) release/kvantefi.efi
+	@cp build/esp.img release/esp.img
+	@echo "  DONE: release/kvantos.iso (BIOS + UEFI)"
 
 floppy: apps
 	@$(MAKE) --no-print-directory build/kvantos.img
@@ -151,8 +243,9 @@ build/kvantos.img: $(KERNEL)
 iso-direct: apps
 	@$(MAKE) --no-print-directory build/kvantos-direct.iso
 
-build/kvantos-direct.iso: $(KERNEL) tools/mkdirect.py boot/direct.asm
-	@python3 tools/mkdirect.py $(KERNEL) release/apps $@
+build/kvantos-direct.iso: $(KERNEL) $(KERNEL64) $(EFI) tools/mkdirect.py boot/direct.asm
+	@python3 tools/mkdirect.py $(KERNEL) release/apps $@ \
+	    --efi $(EFI) --kernel64 $(KERNEL64) --apps64 release/apps64
 	@mkdir -p release && cp $@ release/kvantos-direct.iso
 	@echo "  DONE: release/kvantos-direct.iso"
 
@@ -204,10 +297,11 @@ release:
 release-inner: iso floppy
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
-	@rm -f kvantos-2.0.0-quantum.tar.gz
-	@tar czf kvantos-2.0.0-quantum.tar.gz -C release \
-	    kvantos.iso kvantos-floppy.img kvant.bin kvantos-disk.img apps
-	@echo "  DONE: kvantos-2.0.0-quantum.tar.gz ($$(du -h kvantos-2.0.0-quantum.tar.gz | cut -f1))"
+	@rm -f kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
+	@tar czf kvantos-3.0.0-horizon.tar.gz -C release \
+	    kvantos.iso kvantos-floppy.img kvant.bin kvant64.bin kvantefi.efi \
+	    esp.img kvantos-disk.img apps apps64
+	@echo "  DONE: kvantos-3.0.0-horizon.tar.gz ($$(du -h kvantos-3.0.0-horizon.tar.gz | cut -f1))"
 
 font:
 	@python3 tools/mkfont.py
