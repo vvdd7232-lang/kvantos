@@ -27,6 +27,28 @@ The image boots on real hardware too: write `kvantos.iso` to a USB stick
 (`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) or attach it as a CD in
 VirtualBox/VMware.
 
+### Building without GRUB
+
+`make iso` needs the GRUB toolchain (`grub-mkstandalone`, `grub-file`) and
+`xorriso`. Where those are unavailable there is a fallback path that needs
+only `nasm` and `python3`:
+
+```bash
+make iso-direct   # build/kvantos-direct.iso via tools/mkdirect.py
+```
+
+Instead of GRUB the ISO carries a tiny self-contained Multiboot loader
+(`boot/direct.asm`, about a kilobyte). It enables A20, reads the E820
+memory map, switches the adapter to VBE 1024x768x32 exactly as the
+kernel's Multiboot header asks, loads the kernel segments to 1 MiB and
+the `.kapp` modules to 2 MiB, builds a full `multiboot_info` (command
+line, modules, memory map, framebuffer) and jumps to the kernel. The ISO
+itself is written by the vendored pure-Python `pycdlib`
+(`tools/vendor`). Note the GRUB build additionally provides the boot
+menu (text/safe mode, language) and the `hdboot.img` installer payload;
+`iso-direct` boots straight into graphics mode with all embedded
+applications.
+
 ## Interface language
 
 The whole system speaks **English by default** and can switch to **Russian at

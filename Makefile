@@ -177,15 +177,22 @@ release:
 	    rc=$$?; \
 	    cat build/release.log; \
 	    echo; \
-	    if [ "$$GITHUB_ACTIONS" = "true" ] && [ -d .git ]; then \
-	        git config user.email ci@kvantos.local 2>/dev/null || true; \
-	        git config user.name "KvantOS CI" 2>/dev/null || true; \
-	        tail -c 12000 build/release.log > build/diag.msg 2>/dev/null || true; \
-	        git tag -f ci-diag -F build/diag.msg >/dev/null 2>&1 || true; \
-	        if git push -f origin refs/tags/ci-diag >/dev/null 2>&1; then \
-	            echo "DIAG: pushed tag ci-diag with the build log"; \
-	        else \
-	            echo "DIAG: could not push the ci-diag tag"; \
+	    if [ "$$GITHUB_ACTIONS" = "true" ]; then \
+	        tail -c 1500 build/release.log 2>/dev/null | tr '\n\r' '  ' > build/diag.tail; \
+	        echo "::error::release build failed rc=$$rc tail: $$(cat build/diag.tail)"; \
+	        if [ -d .git ]; then \
+	            git config user.email ci@kvantos.local 2>/dev/null || true; \
+	            git config user.name "KvantOS CI" 2>/dev/null || true; \
+	            tail -c 12000 build/release.log > build/diag.msg 2>/dev/null || true; \
+	            if git tag -f ci-diag -F build/diag.msg >/dev/null 2>&1; then \
+	                if git push -f origin refs/tags/ci-diag >/dev/null 2>build/diag.pusherr; then \
+	                    echo "DIAG: pushed tag ci-diag with the build log"; \
+	                else \
+	                    echo "::error::DIAG tag push failed: $$(tr '\n\r' '  ' < build/diag.pusherr)"; \
+	                fi; \
+	            else \
+	                echo "::error::DIAG git tag creation failed"; \
+	            fi; \
 	        fi; \
 	    fi; \
 	    exit $$rc; \
