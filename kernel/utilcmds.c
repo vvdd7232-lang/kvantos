@@ -678,3 +678,140 @@ void cmd_color(int argc, char **argv) {
     shell_set_fg(VGA_COLOR((u8)fg, (u8)bg));
     kputs(T("  shell colour changed\n\n", "  цвет оболочки изменён\n\n"));
 }
+
+/* ============================================================
+ *  KvantOS 2.0 - text utilities and small additions
+ * ============================================================ */
+
+/* Common file guard for the text tools */
+static rfile_t *text_file_or_warn(const char *cmd, const char *name) {
+    if (!name) {
+        kprintf(T("\n  Usage: %s FILE\n\n", "\n  Использование: %s ФАЙЛ\n\n"), cmd);
+        return NULL;
+    }
+    return file_or_warn(cmd, name);
+}
+
+/* Compare two lines (not necessarily NUL-terminated) */
+static int line_cmp(const char *a, u32 alen, const char *b, u32 blen) {
+    u32 n = alen < blen ? alen : blen;
+    int r = strncmp(a, b, n);
+    if (r) return r;
+    return (alen < blen) ? -1 : (alen > blen ? 1 : 0);
+}
+
+#define TEXT_LINES_MAX 1024
+#define TEXT_SIZE_MAX  16384
+static const char *tl_start[TEXT_LINES_MAX];
+static u32         tl_len[TEXT_LINES_MAX];
+
+/* Collect the lines of a file; returns the count or 0 with a warning */
+static u32 collect_lines(const char *cmd, rfile_t *f) {
+    if (f->size > TEXT_SIZE_MAX) {
+        kprintf(T("  %s: the file is too big (limit 16 KiB)\n\n",
+                  "  %s: файл слишком большой (лимит 16 КиБ)\n\n"), cmd);
+        return 0;
+    }
+    u32 n = 0, i = 0;
+    while (i < f->size && n < TEXT_LINES_MAX) {
+        u32 j = i;
+        while (j < f->size && f->data[j] != '\n') j++;
+        tl_start[n] = f->data + i;
+        tl_len[n] = j - i;
+        n++;
+        i = j + 1;
+    }
+    return n;
+}
+
+static void print_line(const char *p, u32 len) {
+    for (u32 i = 0; i < len; i++) kputc(p[i]);
+    kputc('\n');
+}
+
+void cmd_sort(const char *name) {
+    rfile_t *f = text_file_or_warn("sort", name);
+    if (!f) return;
+    u32 n = collect_lines("sort", f);
+    if (!n) { kputc('\n'); return; }
+    /* insertion sort - the files are tiny, simplicity wins */
+    for (u32 i = 1; i < n; i++) {
+        const char *s = tl_start[i];
+        u32 l = tl_len[i], j = i;
+        while (j > 0 && line_cmp(tl_start[j - 1], tl_len[j - 1], s, l) > 0) {
+            tl_start[j] = tl_start[j - 1];
+            tl_len[j] = tl_len[j - 1];
+            j--;
+        }
+        tl_start[j] = s;
+        tl_len[j] = l;
+    }
+    kputc('\n');
+    for (u32 i = 0; i < n; i++) print_line(tl_start[i], tl_len[i]);
+    kputc('\n');
+}
+
+void cmd_uniq(const char *name) {
+    rfile_t *f = text_file_or_warn("uniq", name);
+    if (!f) return;
+    u32 n = collect_lines("uniq", f);
+    kputc('\n');
+    for (u32 i = 0; i < n; i++) {
+        if (i && tl_len[i] == tl_len[i - 1] &&
+            !strncmp(tl_start[i], tl_start[i - 1], tl_len[i])) continue;
+        print_line(tl_start[i], tl_len[i]);
+    }
+    kputc('\n');
+}
+
+void cmd_tac(const char *name) {
+    rfile_t *f = text_file_or_warn("tac", name);
+    if (!f) return;
+    u32 n = collect_lines("tac", f);
+    kputc('\n');
+    while (n--) print_line(tl_start[n], tl_len[n]);
+    kputc('\n');
+}
+
+void cmd_basename(const char *path) {
+    if (!path) { kputs(T("\n  Usage: basename PATH\n\n", "\n  Использование: basename ПУТЬ\n\n")); return; }
+    const char *base = path;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') base = p + 1;
+    kprintf("\n  %s\n\n", *base ? base : path);
+}
+
+void cmd_dirname(const char *path) {
+    if (!path) { kputs(T("\n  Usage: dirname PATH\n\n", "\n  Использование: dirname ПУТЬ\n\n")); return; }
+    const char *last = NULL;
+    for (const char *p = path; *p; p++) if (*p == '/' || *p == '\\') last = p;
+    if (!last) kprintf("\n  .\n\n");
+    else if (last == path) kprintf("\n  /\n\n");
+    else {
+        kprintf("\n  ");
+        for (const char *p = path; p < last; p++) kputc(*p);
+        kprintf("\n\n");
+    }
+}
+
+void cmd_repeat(int argc, char **argv) {
+    if (argc < 3) {
+        kputs(T("\n  Usage: repeat N TEXT   (prints TEXT N times, N <= 200)\n\n",
+                "\n  Использование: repeat N ТЕКСТ   (выводит ТЕКСТ N раз, N <= 200)\n\n"));
+        return;
+    }
+    int n;
+    if (!parse_num(argv[1], &n) || n < 1) {
+        kputs(T("  repeat: N must be a positive number\n\n", "  repeat: N должно быть положительным числом\n\n"));
+        return;
+    }
+    if (n > 200) n = 200;
+    kputc('\n');
+    for (int i = 0; i < n; i++) {
+        for (int a = 2; a < argc; a++) {
+            if (a > 2) kputc(' ');
+            kputs(argv[a]);
+        }
+        kputc('\n');
+    }
+    kputc('\n');
+}

@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "0.1.0 \"Photon\""
+#define KV_VERSION  "2.0.0 \"Quantum\""
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -161,6 +161,15 @@ void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 
 typedef struct { u8 sec, min, hour, day, month; u16 year; } rtc_time_t;
 void rtc_read(rtc_time_t *t);
+int  rtc_write_time(int h, int m, int s);   /* set the CMOS clock      */
+int  rtc_write_date(int y, int mo, int d);  /* set the CMOS date       */
+
+/* ---------- persistent settings (KvantOS 2.0) ----------
+   Kept as a plain text file on KvFS ("settings.cfg") so that the
+   choices made in one session survive the reboot. Without a mounted
+   KvFS the functions quietly do nothing. */
+void settings_load(void);             /* call once the disk is mounted */
+void settings_save(void);             /* call after a setting changes  */
 
 /* ---------- physical memory ---------- */
 void   pmm_init(u32 mem_upper_kb, u32 mmap_addr, u32 mmap_len);
@@ -450,6 +459,13 @@ void   cmd_leds(int argc, char **argv);
 void   cmd_ascii(void);
 void   cmd_countdown(int argc, char **argv);
 void   cmd_color(int argc, char **argv);
+/* KvantOS 2.0 additions */
+void   cmd_sort(const char *name);
+void   cmd_uniq(const char *name);
+void   cmd_tac(const char *name);
+void   cmd_basename(const char *path);
+void   cmd_dirname(const char *path);
+void   cmd_repeat(int argc, char **argv);
 
 /* ---------- miscellaneous ---------- */
 void   shell_run(void);

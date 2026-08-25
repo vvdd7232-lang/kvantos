@@ -118,10 +118,12 @@ static void cmd_lang(int argc, char **argv)
     }
     if (!strcmp(argv[1], "en") || !strcmp(argv[1], "english")) {
         kv_lang_set(KV_LANG_EN);
+        settings_save();   /* 2.0: remember the choice across reboots */
         kputs("\n  Language: English\n\n");
     } else if (!strcmp(argv[1], "ru") || !strcmp(argv[1], "russian")) {
         kv_lang_set(KV_LANG_RU);
-        kputs("\n  Язык: русский\n\n");
+        settings_save();
+        kputs("\n  Язык: русский (сохранено для будущих загрузок)\n\n");
     } else {
         kputs(T("\n  Use: lang en  or  lang ru\n\n",
                 "\n  Укажите: lang en  или  lang ru\n\n"));
@@ -325,7 +327,8 @@ static void cmd_help(void) {
         {"mem",       T("memory and heap statistics", "статистика памяти и кучи")},
         {"cpu",       T("CPU information", "информация о процессоре")},
         {"uptime",    T("uptime and timer ticks", "время работы и тики таймера")},
-        {"date",      T("date and time from CMOS/RTC", "дата и время из CMOS/RTC")},
+        {"date [set D.M.Y]", T("date from CMOS/RTC; 'date set' writes it", "дата из CMOS/RTC; 'date set' устанавливает её")},
+        {"time [set H:M:S]", T("time from CMOS/RTC; 'time set' writes it", "время из CMOS/RTC; 'time set' устанавливает его")},
         {"ps",        T("list scheduler tasks", "список задач планировщика")},
         {"spawn N",   T("spawn N background counter tasks", "создать N фоновых задач-счётчиков")},
         {"kill ID",   T("terminate a task (see ps)", "завершить задачу (см. ps)")},
@@ -352,6 +355,12 @@ static void cmd_help(void) {
         {"grep S F",  T("find string S in file F", "найти строку S в файле F")},
         {"hexdump F", T("hex dump of a file", "шестнадцатеричный дамп файла")},
         {"sum FILE",  T("FNV-1a checksum of a file", "контрольная сумма файла (FNV-1a)")},
+        {"sort FILE", T("print the lines of a file sorted", "вывести строки файла по алфавиту")},
+        {"uniq FILE", T("collapse adjacent duplicate lines", "убрать соседние повторяющиеся строки")},
+        {"tac FILE",  T("print a file line by line backwards", "вывести файл строками в обратном порядке")},
+        {"basename P",T("the last component of a path", "последний компонент пути")},
+        {"dirname P", T("the directory part of a path", "каталог пути")},
+        {"repeat N T",T("print text N times", "вывести текст N раз")},
         {"guimenu",   T("start graphics mode (mouse + windows)", "запустить графический режим (мышь + окна)")},
         {"setup",     T("INSTALL the system onto a hard disk", "УСТАНОВИТЬ систему на жёсткий диск")},
         {"disk",      T("information about ATA disks", "сведения о дисках ATA")},
@@ -478,7 +487,53 @@ static void cmd_uptime(void) {
     kprintf(T("  Timer ticks: %u (at %u Hz)\n\n", "  Тиков таймера: %u (частота %u Гц)\n\n"), (u32)timer_ticks(), timer_hz());
 }
 
-static void cmd_date(void) {
+/* Split a string on any non-digit separators into at most maxn
+   numbers; returns how many were found or -1 on overflow. */
+static int split_nums(const char *s, int *out, int maxn) {
+    int n = 0, cur = -1;
+    for (; *s; s++) {
+        if (*s >= '0' && *s <= '9') cur = (cur < 0 ? 0 : cur) * 10 + (*s - '0');
+        else if (cur >= 0) {
+            if (n >= maxn) return -1;
+            out[n++] = cur;
+            cur = -1;
+        }
+    }
+    if (cur >= 0) {
+        if (n >= maxn) return -1;
+        out[n++] = cur;
+    }
+    return n;
+}
+
+static void cmd_date_show(void);
+
+static void cmd_datetime(int argc, char **argv, int is_time) {
+    /* 2.0: the clock can finally be set from the shell */
+    if (argc >= 3 && !strcmp(argv[1], "set")) {
+        int v[3];
+        if (split_nums(argv[2], v, 3) != 3) {
+            kputs(is_time ? T("\n  Use: time set HH:MM:SS\n\n", "\n  Формат: time set ЧЧ:ММ:СС\n\n")
+                          : T("\n  Use: date set DD.MM.YYYY\n\n", "\n  Формат: date set ДД.ММ.ГГГГ\n\n"));
+            return;
+        }
+        int r;
+        if (is_time) {
+            r = rtc_write_time(v[0], v[1], v[2]);
+            kputs(r == 0 ? T("\n  The clock has been set\n\n", "\n  Время установлено\n\n")
+                         : T("\n  Bad time (HH:MM:SS, 24-hour)\n\n", "\n  Неверное время (ЧЧ:ММ:СС, 24 часа)\n\n"));
+        } else {
+            int year = v[2] >= 100 ? v[2] : 2000 + v[2];
+            r = rtc_write_date(year, v[1], v[0]);
+            kputs(r == 0 ? T("\n  The date has been set\n\n", "\n  Дата установлена\n\n")
+                         : T("\n  Bad date (DD.MM.YYYY)\n\n", "\n  Неверная дата (ДД.ММ.ГГГГ)\n\n"));
+        }
+        return;
+    }
+    cmd_date_show();
+}
+
+static void cmd_date_show(void) {
     rtc_time_t t;
     rtc_read(&t);
     const char *mn[] = {"", T("January", "января"), T("February", "февраля"), T("March", "марта"), T("April", "апреля"), T("May", "мая"), T("June", "июня"),
@@ -982,7 +1037,8 @@ void shell_run(void) {
         else if (!strcmp(cmd, "mem") || !strcmp(cmd, "free")) cmd_mem();
         else if (!strcmp(cmd, "cpu")) cmd_cpu();
         else if (!strcmp(cmd, "uptime")) cmd_uptime();
-        else if (!strcmp(cmd, "date") || !strcmp(cmd, "time")) cmd_date();
+        else if (!strcmp(cmd, "date")) cmd_datetime(argc, argv, 0);
+        else if (!strcmp(cmd, "time")) cmd_datetime(argc, argv, 1);
         else if (!strcmp(cmd, "ps") || !strcmp(cmd, "tasks")) cmd_ps();
         else if (!strcmp(cmd, "spawn")) cmd_spawn(argc > 1 ? atoi(argv[1]) : 1);
         else if (!strcmp(cmd, "ls") || !strcmp(cmd, "dir")) cmd_ls();
@@ -1064,6 +1120,12 @@ void shell_run(void) {
         else if (!strcmp(cmd, "grep")) cmd_grep(argc, argv);
         else if (!strcmp(cmd, "hexdump") || !strcmp(cmd, "hd")) cmd_hexdump(argc > 1 ? argv[1] : 0);
         else if (!strcmp(cmd, "sum")) cmd_sum(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "sort")) cmd_sort(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "uniq")) cmd_uniq(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "tac")) cmd_tac(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "basename")) cmd_basename(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "dirname")) cmd_dirname(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "repeat")) cmd_repeat(argc, argv);
         else if (!strcmp(cmd, "touch")) cmd_touch(argc > 1 ? argv[1] : 0);
         else if (!strcmp(cmd, "cp") || !strcmp(cmd, "copy")) cmd_cp(argc, argv);
         else if (!strcmp(cmd, "mv") || !strcmp(cmd, "rename")) cmd_mv(argc, argv);

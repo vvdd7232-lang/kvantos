@@ -1,4 +1,12 @@
-# KvantOS 0.1.0 "Photon"
+# KvantOS 2.0.0 "Quantum"
+
+> **New in 2.0** — the real-time clock can finally be set from the shell
+> (`time set HH:MM:SS`, `date set DD.MM.YYYY`); interface settings became
+> **persistent** (the chosen language is written to `settings.cfg` on the
+> KvFS disk and restored at boot); the shell gained the text utilities
+> `sort`, `uniq`, `tac`, `basename`, `dirname` and `repeat`; and the
+> application set grew to ten with **Mines** and **2048**. The full story
+> is in [CHANGELOG.md](CHANGELOG.md).
 
 *Read this in [Русский](README.ru.md).*
 
@@ -393,12 +401,13 @@ hard disk at all**. A disk is only needed so that programs can save their files.
 Inside the system: the **Programs** icon (key **G**) lists, launches and removes
 them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
-Eight applications are bundled — three richly commented samples plus five
+Ten applications are bundled — three richly commented samples plus seven
 more: **Clock** (an analogue dial, integer trigonometry), **Notes** (an editor
 keeping its text on disk), **Snake** (a small game), **Calculator** (buttons
 and keyboard input), **Paint** (mouse drawing with a palette), **Pong** (you
-against the machine), **Life** (Conway's Game of Life) and **Stars**
-(a starfield screensaver).
+against the machine), **Life** (Conway's Game of Life), **Stars**
+(a starfield screensaver) and, new in 2.0, **Mines** (Minesweeper with a
+keyboard cursor and flags) and **2048** (the sliding-tiles puzzle).
 
 If an application crashes, the system removes it and keeps running — this is
 verified by a dedicated test.

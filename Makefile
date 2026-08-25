@@ -204,10 +204,10 @@ release:
 release-inner: iso floppy
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
-	@rm -f kvantos-0.1.0-photon.tar.gz
-	@tar czf kvantos-0.1.0-photon.tar.gz -C release \
+	@rm -f kvantos-2.0.0-quantum.tar.gz
+	@tar czf kvantos-2.0.0-quantum.tar.gz -C release \
 	    kvantos.iso kvantos-floppy.img kvant.bin kvantos-disk.img apps
-	@echo "  DONE: kvantos-0.1.0-photon.tar.gz ($$(du -h kvantos-0.1.0-photon.tar.gz | cut -f1))"
+	@echo "  DONE: kvantos-2.0.0-quantum.tar.gz ($$(du -h kvantos-2.0.0-quantum.tar.gz | cut -f1))"
 
 font:
 	@python3 tools/mkfont.py
