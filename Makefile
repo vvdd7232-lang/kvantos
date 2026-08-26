@@ -307,8 +307,9 @@ release-inner: iso floppy
 	@# --- GITHUB_TOKEN is not exported to recipe shells here, so the     ---
 	@# --- token is taken from the credential helper actions/checkout     ---
 	@# --- leaves in git config.                                          ---
-	@TOK=$$(git config --get http.https://github.com/.extraheader 2>/dev/null | sed 's/^[Aa]uthorization: [Bb]asic //' | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
+	@TOK=$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1 | sed 's/^[Aa]uthorization: [Bb]asic //' | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
 	if [ -z "$$TOK" ]; then TOK="$$GITHUB_TOKEN"; fi; \
+	@echo "  REL  token check: len=$${#TOK} prefix=$$(printf '%s' "$$TOK" | head -c 4)"; \
 	if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1 && [ -n "$$TOK" ]; then \
 	    if ! GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
 	        echo "::notice::gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
