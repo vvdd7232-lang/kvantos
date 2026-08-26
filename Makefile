@@ -305,16 +305,19 @@ release-inner: iso floppy
 	@# --- publish the release assets straight from CI (uploads.github.com ---
 	@# --- is only reachable from the runner, not from the sandbox)      ---
 	@if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1; then \
-	    if ! gh release view v3.0.0 >/dev/null 2>&1; then \
+	    if ! GH_TOKEN="$$GITHUB_TOKEN" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
+	        echo "::notice::GH_TOKEN="$$GITHUB_TOKEN" gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
 	        echo "  REL  release v3.0.0 not found - creating it"; \
-	        gh release create v3.0.0 \
+	        if ! GH_TOKEN="$$GITHUB_TOKEN" gh release create v3.0.0 \
 	            -t "KvantOS 3.0.0 «Horizon» — 64 бита + UEFI" \
 	            -n "Полное описание релиза: см. README и CHANGELOG." \
-	            --target "$$GITHUB_SHA" >/dev/null 2>&1 || true; \
+	            --target "$$GITHUB_SHA" 2>build/relcreate.err; then \
+	            echo "::error::GH_TOKEN="$$GITHUB_TOKEN" gh release create failed: $$(tr '\n\r' '  ' < build/relcreate.err | cut -c1-300)"; \
+	        fi; \
 	    fi; \
-	    if gh release view v3.0.0 >/dev/null 2>&1; then \
+	    if GH_TOKEN="$$GITHUB_TOKEN" gh release view v3.0.0 >/dev/null 2>&1; then \
 	        echo "  REL  attaching assets to release v3.0.0"; \
-	        if gh release upload v3.0.0 --clobber \
+	        if GH_TOKEN="$$GITHUB_TOKEN" gh release upload v3.0.0 --clobber \
 	            kvantos-3.0.0-horizon.tar.gz \
 	            release/kvantos.iso \
 	            release/kvantos-floppy.img \
