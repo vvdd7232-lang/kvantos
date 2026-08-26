@@ -307,9 +307,11 @@ release-inner: iso floppy
 	@# --- GITHUB_TOKEN is not exported to recipe shells here, so the     ---
 	@# --- token is taken from the credential helper actions/checkout     ---
 	@# --- leaves in git config.                                          ---
-	@TOK=$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1 | sed 's/^[Aa]uthorization: [Bb]asic //' | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
+	@HDR=$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1); \
+	B64=$$(printf '%s' "$$HDR" | awk '{print $$NF}'); \
+	TOK=$$(printf '%s' "$$B64" | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
+	echo "::notice::REL b64len=$${#B64} b64head=$$(printf '%s' "$$B64" | head -c 6) toklen=$${#TOK} gtlen=$${#GITHUB_TOKEN}"; \
 	if [ -z "$$TOK" ]; then TOK="$$GITHUB_TOKEN"; fi; \
-	echo "::notice::REL hdr: [$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1 | cut -c1-14)] toklen=$${#TOK} tokprefix=$$(printf '%s' "$$TOK" | head -c 5)"; \
 	if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1 && [ -n "$$TOK" ]; then \
 	    if ! GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
 	        echo "::notice::gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
