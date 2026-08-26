@@ -303,21 +303,26 @@ release-inner: iso floppy
 	    esp.img kvantos-disk.img apps apps64
 	@echo "  DONE: kvantos-3.0.0-horizon.tar.gz ($$(du -h kvantos-3.0.0-horizon.tar.gz | cut -f1))"
 	@# --- publish the release assets straight from CI (uploads.github.com ---
-	@# --- is only reachable from the runner, not from the sandbox)      ---
-	@if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1; then \
-	    if ! GH_TOKEN="$$GITHUB_TOKEN" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
-	        echo "::notice::GH_TOKEN="$$GITHUB_TOKEN" gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
+	@# --- is only reachable from the runner, not from the sandbox).     ---
+	@# --- GITHUB_TOKEN is not exported to recipe shells here, so the     ---
+	@# --- token is taken from the credential helper actions/checkout     ---
+	@# --- leaves in git config.                                          ---
+	@TOK=$$(git config --get http.https://github.com/.extraheader 2>/dev/null | sed 's/^[Aa]uthorization: [Bb]asic //' | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
+	if [ -z "$$TOK" ]; then TOK="$$GITHUB_TOKEN"; fi; \
+	if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1 && [ -n "$$TOK" ]; then \
+	    if ! GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
+	        echo "::notice::gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
 	        echo "  REL  release v3.0.0 not found - creating it"; \
-	        if ! GH_TOKEN="$$GITHUB_TOKEN" gh release create v3.0.0 \
+	        if ! GH_TOKEN="$$TOK" gh release create v3.0.0 \
 	            -t "KvantOS 3.0.0 «Horizon» — 64 бита + UEFI" \
 	            -n "Полное описание релиза: см. README и CHANGELOG." \
 	            --target "$$GITHUB_SHA" 2>build/relcreate.err; then \
-	            echo "::error::GH_TOKEN="$$GITHUB_TOKEN" gh release create failed: $$(tr '\n\r' '  ' < build/relcreate.err | cut -c1-300)"; \
+	            echo "::error::gh release create failed: $$(tr '\n\r' '  ' < build/relcreate.err | cut -c1-300)"; \
 	        fi; \
 	    fi; \
-	    if GH_TOKEN="$$GITHUB_TOKEN" gh release view v3.0.0 >/dev/null 2>&1; then \
+	    if GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>&1; then \
 	        echo "  REL  attaching assets to release v3.0.0"; \
-	        if GH_TOKEN="$$GITHUB_TOKEN" gh release upload v3.0.0 --clobber \
+	        if GH_TOKEN="$$TOK" gh release upload v3.0.0 --clobber \
 	            kvantos-3.0.0-horizon.tar.gz \
 	            release/kvantos.iso \
 	            release/kvantos-floppy.img \
@@ -334,9 +339,8 @@ release-inner: iso floppy
 	        echo "::error::release v3.0.0 could not be created - assets not uploaded"; \
 	    fi; \
 	else \
-	    echo "  REL  not on CI or gh missing - skipping release upload"; \
+	    echo "  REL  not on CI or gh/token missing - skipping release upload"; \
 	fi
-
 font:
 	@python3 tools/mkfont.py
 
