@@ -310,7 +310,6 @@ release-inner: iso floppy
 	@HDR=$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1); \
 	B64=$$(printf '%s' "$$HDR" | awk '{print $$NF}'); \
 	TOK=$$(printf '%s' "$$B64" | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
-	echo "::notice::REL b64len=$${#B64} b64head=$$(printf '%s' "$$B64" | head -c 6) toklen=$${#TOK} gtlen=$${#GITHUB_TOKEN}"; \
 	if [ -z "$$TOK" ]; then TOK="$$GITHUB_TOKEN"; fi; \
 	if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1 && [ -n "$$TOK" ]; then \
 	    if ! GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
