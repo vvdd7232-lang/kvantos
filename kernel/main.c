@@ -27,7 +27,7 @@ static void idle_task(void) {
 }
 
 void kmain(u32 magic, u32 mbi_addr) {
-    multiboot_info_t *mbi = (multiboot_info_t *)mbi_addr;
+    multiboot_info_t *mbi = (multiboot_info_t *)(kv_addr_t)mbi_addr;
 
     serial_init();
 
@@ -35,7 +35,7 @@ void kmain(u32 magic, u32 mbi_addr) {
        then we force the classic VGA 80x25 mode. */
     int force_text = 0, safe_mode = 0;
     if ((mbi->flags & (1u << 2)) && mbi->cmdline) {
-        const char *p = (const char *)mbi->cmdline;
+        const char *p = (const char *)(kv_addr_t)mbi->cmdline;
         for (; *p; p++) {
             if (p[0] == 't' && p[1] == 'e' && p[2] == 'x' && p[3] == 't') force_text = 1;
             if (p[0] == 's' && p[1] == 'a' && p[2] == 'f' && p[3] == 'e') safe_mode = 1;
@@ -125,12 +125,11 @@ void kmain(u32 magic, u32 mbi_addr) {
     kprintf(T("       heap %u MiB at %u MiB\n", "       куча %u МиБ по адресу %u МиБ\n"), heap_size / 1048576, HEAP_BASE / 1048576);
     step(T("Heap: kernel heap (first-fit + coalescing)", "Heap: куча ядра (first-fit + слияние)"));
 
-    /* 1000 Hz instead of 100. With a 10 ms step a frame cannot be timed
-       more precisely than 33 fps, and task_sleep(1) would sleep the full
-       10 ms. A millisecond tick removes that limit; the IRQ overhead is
-       negligible. */
-    timer_init(1000);
-    step(T("PIT: system timer at 1000 Hz (1 ms tick)", "PIT: системный таймер 1000 Гц (шаг 1 мс)"));
+    /* A 2 ms scheduling quantum gives eight ticks per 60 fps frame while
+       halving periodic IRQ/scheduler work versus the previous 1 kHz setting.
+       Keyboard and mouse still arrive on their own IRQs. */
+    timer_init(500);
+    step(T("PIT: system timer at 500 Hz (2 ms tick)", "PIT: системный таймер 500 Гц (шаг 2 мс)"));
 
     keyboard_init();
     /* Diagnostics for machines without a COM port (laptops): light up
@@ -185,7 +184,7 @@ skip_hw:
        a disk with the install command or run straight from ramfs. */
     if ((mbi->flags & (1u << 3)) && mbi->mods_count) {
         struct mb_module { u32 start, end, string, reserved; };
-        struct mb_module *mod = (struct mb_module *)mbi->mods_addr;
+        struct mb_module *mod = (struct mb_module *)(kv_addr_t)mbi->mods_addr;
         u32 added = 0;
         for (u32 i = 0; i < mbi->mods_count && i < 16; i++) {
             u32 size = mod[i].end - mod[i].start;
@@ -194,12 +193,12 @@ skip_hw:
             /* The name comes from the module string: GRUB puts there
                whatever grub.cfg lists as the second word. Only the last
                path component after the slash is kept. */
-            const char *nm = (const char *)mod[i].string;
+            const char *nm = (const char *)(kv_addr_t)mod[i].string;
             const char *base = nm;
             if (nm) for (const char *q = nm; *q; q++) if (*q == '/' || *q == '\\') base = q + 1;
             if (!base || !base[0]) base = "module.kapp";
 
-            if (ramfs_create(base, (const char *)mod[i].start, size) == 0) added++;
+            if (ramfs_create(base, (const char *)(kv_addr_t)mod[i].start, size) == 0) added++;
         }
         if (added) {
             kprintf(T("       applications from the image: %u\n", "       приложений из образа: %u\n"), added);
@@ -254,7 +253,7 @@ skip_hw:
     step(T("Scheduler: pre-emptive round-robin", "Планировщик: round-robin с вытеснением"));
 
     if (mbi->flags & (1 << 9))
-        kprintf(T("       bootloader: %s\n", "       загрузчик: %s\n"), (const char *)mbi->boot_loader_name);
+        kprintf(T("       bootloader: %s\n", "       загрузчик: %s\n"), (const char *)(kv_addr_t)mbi->boot_loader_name);
 
     vga_set_color(VGA_COLOR(VGA_LGREEN, VGA_BLACK));
     kputs(T("\n  Kernel ready. Starting the kvsh shell...\n", "\n  Ядро готово. Запуск оболочки kvsh...\n"));

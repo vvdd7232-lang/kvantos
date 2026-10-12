@@ -12,6 +12,11 @@ static u32  fb_w = 0, fb_h = 0, fb_pitch = 0;
 static u8   fb_bpp = 0;
 static int  fb_ok = 0;
 
+#define FB_CLIP_MAX 24
+static fb_clip_rect_t fb_clip_rects[FB_CLIP_MAX];
+static u32 fb_clip_count = 0;
+static int fb_clip_enabled = 0;
+
 /* positions of the colour fields */
 static u8 r_pos = 16, r_size = 8, g_pos = 8, g_size = 8, b_pos = 0, b_size = 8;
 
@@ -26,6 +31,52 @@ u32  fb_bytes(void)   { return fb_pitch * fb_h; }
 void fb_set_target(void *p) { fb_draw = p ? (u8 *)p : fb_hw; }
 void *fb_get_hw(void)       { return fb_hw; }
 void *fb_get_target(void)   { return fb_draw; }
+
+void fb_clear_clip(void) {
+    fb_clip_enabled = 0;
+    fb_clip_count = 0;
+}
+
+void fb_set_clip_rects(const fb_clip_rect_t *rects, u32 count) {
+    fb_clip_enabled = 1;
+    fb_clip_count = 0;
+    if (!rects) return;
+
+    if (count > FB_CLIP_MAX) count = FB_CLIP_MAX;
+    for (u32 i = 0; i < count; i++) {
+        i32 x = rects[i].x, y = rects[i].y;
+        i32 w = rects[i].w, h = rects[i].h;
+        if (w <= 0 || h <= 0) continue;
+        if (x < 0) { w += x; x = 0; }
+        if (y < 0) { h += y; y = 0; }
+        if (x >= (i32)fb_w || y >= (i32)fb_h || w <= 0 || h <= 0) continue;
+        if (w > (i32)fb_w - x) w = (i32)fb_w - x;
+        if (h > (i32)fb_h - y) h = (i32)fb_h - y;
+        if (w <= 0 || h <= 0) continue;
+        fb_clip_rects[fb_clip_count++] = (fb_clip_rect_t){ x, y, w, h };
+    }
+}
+
+static int clip_has_pixel(i32 x, i32 y) {
+    if (!fb_clip_enabled) return 1;
+    for (u32 i = 0; i < fb_clip_count; i++) {
+        const fb_clip_rect_t *r = &fb_clip_rects[i];
+        if (x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h)
+            return 1;
+    }
+    return 0;
+}
+
+static int clip_contains_box(i32 x, i32 y, i32 w, i32 h) {
+    if (!fb_clip_enabled) return 1;
+    for (u32 i = 0; i < fb_clip_count; i++) {
+        const fb_clip_rect_t *r = &fb_clip_rects[i];
+        if (x >= r->x && y >= r->y &&
+            x + w <= r->x + r->w && y + h <= r->y + r->h)
+            return 1;
+    }
+    return 0;
+}
 
 /* The framebuffer usually sits outside the mapped 16 MiB (around
    0xFD000000). Called right after paging is enabled. */
@@ -90,6 +141,7 @@ int fb_remap(u32 phys, u32 w, u32 h, u32 pitch, u8 bpp) {
     fb_h     = h;
     fb_pitch = pitch;
     fb_bpp   = bpp;
+    fb_clear_clip();
 
     if (bpp == 16) { r_pos = 11; r_size = 5; g_pos = 5; g_size = 6; b_pos = 0; b_size = 5; }
     else           { r_pos = 16; g_pos = 8; b_pos = 0; r_size = g_size = b_size = 8; }
@@ -117,17 +169,11 @@ static inline void put_raw(u32 x, u32 y, u32 c) {
 
 void fb_pixel(u32 x, u32 y, u32 c) {
     if (!fb_ok || x >= fb_w || y >= fb_h) return;
+    if (!clip_has_pixel((i32)x, (i32)y)) return;
     put_raw(x, y, c);
 }
 
-void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
-    if (!fb_ok) return;
-    if (x < 0) { w += x; x = 0; }
-    if (y < 0) { h += y; y = 0; }
-    if (x + w > (i32)fb_w) w = (i32)fb_w - x;
-    if (y + h > (i32)fb_h) h = (i32)fb_h - y;
-    if (w <= 0 || h <= 0) return;
-
+static void fill_unclipped(i32 x, i32 y, i32 w, i32 h, u32 c) {
     for (i32 j = 0; j < h; j++) {
         u8 *row = fb_draw + (u32)(y + j) * fb_pitch + (u32)x * (fb_bpp >> 3);
         if (fb_bpp == 32) {
@@ -136,6 +182,33 @@ void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
         } else {
             for (i32 i = 0; i < w; i++) put_raw((u32)(x + i), (u32)(y + j), c);
         }
+    }
+}
+
+void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
+    if (!fb_ok || w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x >= (i32)fb_w || y >= (i32)fb_h || w <= 0 || h <= 0) return;
+    if (w > (i32)fb_w - x) w = (i32)fb_w - x;
+    if (h > (i32)fb_h - y) h = (i32)fb_h - y;
+    if (w <= 0 || h <= 0) return;
+
+    if (!fb_clip_enabled) {
+        fill_unclipped(x, y, w, h, c);
+        return;
+    }
+
+    /* A frame may have several disjoint damaged rectangles. Intersect the
+       primitive with each one so apps can draw once for the whole frame. */
+    for (u32 i = 0; i < fb_clip_count; i++) {
+        const fb_clip_rect_t *r = &fb_clip_rects[i];
+        i32 x0 = x > r->x ? x : r->x;
+        i32 y0 = y > r->y ? y : r->y;
+        i32 x1 = x + w < r->x + r->w ? x + w : r->x + r->w;
+        i32 y1 = y + h < r->y + r->h ? y + h : r->y + r->h;
+        if (x1 > x0 && y1 > y0)
+            fill_unclipped(x0, y0, x1 - x0, y1 - y0, c);
     }
 }
 
@@ -188,7 +261,8 @@ void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
        needed here - we walk the row with a pointer. There is a lot of
        text on screen, so this loop noticeably affects overall speed. */
     if (fb_bpp == 32 && x >= 0 && y >= 0 &&
-        x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h) {
+        x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h &&
+        clip_contains_box(x, y, 8, 16)) {
         u8 *row = fb_draw + (u32)y * fb_pitch + (u32)x * 4;
         if (bg == 0xFFFFFFFFu) {
             for (i32 r = 0; r < 16; r++, row += fb_pitch) {
@@ -228,7 +302,7 @@ void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
         if (py < 0 || py >= (i32)fb_h) continue;
         for (i32 col = 0; col < 8; col++) {
             i32 px = x + col;
-            if (px < 0 || px >= (i32)fb_w) continue;
+            if (px < 0 || px >= (i32)fb_w || !clip_has_pixel(px, py)) continue;
             if (bits & (0x80 >> col)) put_raw((u32)px, (u32)py, fg);
             else if (bg != 0xFFFFFFFFu) put_raw((u32)px, (u32)py, bg);
         }
@@ -253,11 +327,53 @@ void fb_text_center(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg) {
 
 void fb_clear(u32 c) { fb_fill(0, 0, (i32)fb_w, (i32)fb_h, c); }
 
+/* Copy a rectangular region between two framebuffer-format buffers.
+   This bypasses drawing clips: the GUI uses it to restore cached pixels. */
+void fb_copy_rect(void *dst, const void *src, i32 x, i32 y, i32 w, i32 h) {
+    if (!fb_ok || !dst || !src || w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x >= (i32)fb_w || y >= (i32)fb_h || w <= 0 || h <= 0) return;
+    if (w > (i32)fb_w - x) w = (i32)fb_w - x;
+    if (h > (i32)fb_h - y) h = (i32)fb_h - y;
+    if (w <= 0 || h <= 0) return;
+
+    u32 bytes_per_pixel = fb_bpp >> 3;
+    u32 row_bytes = (u32)w * bytes_per_pixel;
+    const u8 *s = (const u8 *)src + (u32)y * fb_pitch + (u32)x * bytes_per_pixel;
+    u8 *d = (u8 *)dst + (u32)y * fb_pitch + (u32)x * bytes_per_pixel;
+    for (i32 row = 0; row < h; row++) {
+        memcpy(d, s, row_bytes);
+        s += fb_pitch;
+        d += fb_pitch;
+    }
+}
+
+/* Present only a damaged rectangle from a back buffer. */
+void fb_present_rect(const void *back, i32 x, i32 y, i32 w, i32 h) {
+    if (!fb_ok || !back || w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x >= (i32)fb_w || y >= (i32)fb_h || w <= 0 || h <= 0) return;
+    if (w > (i32)fb_w - x) w = (i32)fb_w - x;
+    if (h > (i32)fb_h - y) h = (i32)fb_h - y;
+    if (w <= 0 || h <= 0) return;
+
+    u32 bytes_per_pixel = fb_bpp >> 3;
+    u32 row_bytes = (u32)w * bytes_per_pixel;
+    const u8 *s = (const u8 *)back + (u32)y * fb_pitch + (u32)x * bytes_per_pixel;
+    u8 *d = fb_hw + (u32)y * fb_pitch + (u32)x * bytes_per_pixel;
+    for (i32 row = 0; row < h; row++) {
+        memcpy(d, s, row_bytes);
+        s += fb_pitch;
+        d += fb_pitch;
+    }
+}
+
 /* Fast blit of the back buffer to the screen */
 /* Blit only a part of the frame (the band of rows y0..y1).
-   The GUI redraws the whole back buffer, yet only a small part of the
-   screen actually changes. Pushing all 3 MiB across the bus every frame
-   is pointless - only the affected rows are sent. */
+   The GUI uses this for legacy full-width updates; normal redraws use
+   fb_present_rect() to transfer exactly the damaged pixels. */
 void fb_present_rows(const void *back, u32 y0, u32 y1) {
     if (!fb_ok || !back) return;
     if (y1 > fb_h) y1 = fb_h;

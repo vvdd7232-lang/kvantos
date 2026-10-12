@@ -1,4 +1,4 @@
-# KvantOS 3.0.0 "Horizon"
+# KvantOS 3.1.0
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -41,6 +41,16 @@ The image boots on real hardware too: write `kvantos.iso` to a USB stick
 (`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) or attach it as a CD in
 VirtualBox/VMware.
 
+### Tests
+
+```bash
+make -C tests/fs image && make -C tests/fs check  # FAT/NTFS drivers; system tools and sudo required
+make release                                       # prepare the ISO for the boot smoke test
+tests/boot/qemu-smoke.sh release/kvantos.iso       # BIOS + UEFI, wait for the shell prompt
+```
+
+The boot test requires QEMU and OVMF; see [tests/boot/README.md](tests/boot/README.md).
+
 ### UEFI boot (new in 3.0)
 
 The ISO carries a second El Torito entry: a FAT16 ESP image
@@ -58,6 +68,11 @@ Applications are built for both kernels: `release/apps` carries the
 `release/apps64` the 64-bit ones (for `kvant64.bin`); a header flag
 (`KAPP_FLAG_ARCH64`) makes each kernel refuse files of the wrong
 bitness instead of crashing on them.
+
+**Current 64-bit limit:** the physical-frame allocator and framebuffer mapping
+still use 32-bit physical addresses. The kernel can use at most the first 4 GiB
+of physical address space; a GOP framebuffer above 4 GiB is rejected and the
+system falls back to text mode.
 
 ### Building without GRUB
 
@@ -112,7 +127,7 @@ kept beside them as `*.ru.md`.
 | **GDT** | 5 descriptors: ring 0 and ring 3 code/data, plus a TSS for a future userspace |
 | **IDT** | 32 exception handlers, 16 IRQs, vector `0x80` reserved for system calls |
 | **PIC 8259** | IRQs remapped to vectors 32–47, proper EOI handling |
-| **PIT** | 100 Hz system timer, the source of task preemption |
+| **PIT** | 500 Hz system timer (2 ms scheduling quantum), the source of task preemption |
 | **PMM** | A bitmap of 4 KiB physical pages built from the multiboot mmap |
 | **Paging** | Identity mapping of the first 16 MiB, `CR3`/`CR0.PG`, a `#PF` handler dumping `CR2` |
 | **Heap** | 10 MiB, `kmalloc`/`kfree`/`kcalloc`, first fit, splitting and merging of neighbouring blocks, magic numbers against corruption |
@@ -130,8 +145,12 @@ requested from GRUB through the video fields of the Multiboot header (1024×768�
 * **Taskbar** — buttons for open windows, an RTC clock, a memory gauge
 * **PS/2 mouse** — an IRQ12 driver, the cursor drawn in software, support for
   clicks, dragging and double clicks
-* **Double buffering** — a frame is composed in a heap buffer and flushed to the
-  screen as a whole, so there is no flicker
+* **Adaptive, damage-based double buffering** — dirty rectangles are merged,
+  restored from a cached wallpaper/icon layer, and only intersecting windows are
+  redrawn and presented. Cursor motion updates its old and new bounds; a live
+  app does not rerasterize the rest of the desktop. The KvApp ABI 3 `delta_ms()`
+  clock keeps simulation updates stable at 30/60 fps or uncapped (`L` selects
+  the render cap); ABI-2 applications remain supported.
 * **Mini-applications**: About, Monitor (memory, heap and tasks in real time),
   Files (ramfs), Terminal (help/mem/ps/ls/date/uptime/about/clear), Paint
   (a 44×26 canvas with a palette), Settings, Help, Programs
@@ -157,12 +176,13 @@ A graphical counterpart of the `vidmode`/`refresh` commands, with three tabs:
 * **System** — version, CPU, memory, heap, uptime, the number of tasks and PCI
   devices, and a way back to the console.
 
-Internally there is a system of *hit areas*: every frame the widgets register
-their rectangles, and a mouse click looks for a hit in reverse drawing order.
+Internally there is a system of *hit areas*: widgets register their rectangles
+when the scene is redrawn, and a mouse click looks for a hit in reverse drawing order.
 
 Keys: `T` terminal, `M` monitor, `F` files, `A` about, `P` paint, `S` settings,
-`H` help, `G` programs, `E` close window, arrows + Enter to pick an icon,
-`Esc`/`Q` to return to the text console.
+`G` programs, `E` notepad, `W` close the active window, `L` cycles the frame cap
+(60 / 30 fps / uncapped), arrows + Enter pick an icon, and `Esc`/`Q` returns
+to the text console.
 
 ### Video adapter, resolution and refresh rate
 
@@ -306,7 +326,7 @@ kvantos/
 ├── include/
 │   ├── kernel.h        the single kernel header
 │   ├── i18n.h          the T() macro and run-time language switching
-│   └── kvapp.h         the application ABI, version 2
+│   └── kvapp.h         the application ABI, version 3 (with ABI-2 compatibility)
 ├── kernel/
 │   ├── main.c          subsystem initialisation
 │   ├── i18n.c          the current language and its selector
@@ -408,8 +428,12 @@ real system.
 
 An application is a `.kapp` file: a flat image with a 64-byte header that the
 kernel loads at a fixed address and whose `kapp_main()` function it calls. The
-program receives a table of 30 system functions (drawing, keyboard, mouse, files,
-time, sound) and draws inside its own window on the desktop.
+program receives a versioned system-function table for drawing, keyboard, mouse,
+files, time and sound. ABI 3 appends `delta_ms()` for elapsed-millisecond,
+frame-rate-independent simulation: the non-canvas service count rises from 30 to
+31, and the full table has 33 function pointers (32 in ABI 2) when `width()` and
+`height()` are included. The new pointer is null for ABI-2 applications, so
+existing binaries continue to run unchanged.
 
 The quickest start is to embed a program into the boot image:
 
@@ -425,16 +449,19 @@ hard disk at all**. A disk is only needed so that programs can save their files.
 Inside the system: the **Programs** icon (key **G**) lists, launches and removes
 them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
-Ten applications are bundled — three richly commented samples plus seven
+Eleven applications are bundled — three richly commented samples plus eight
 more: **Clock** (an analogue dial, integer trigonometry), **Notes** (an editor
 keeping its text on disk), **Snake** (a small game), **Calculator** (buttons
 and keyboard input), **Paint** (mouse drawing with a palette), **Pong** (you
 against the machine), **Life** (Conway's Game of Life), **Stars**
-(a starfield screensaver) and, new in 2.0, **Mines** (Minesweeper with a
-keyboard cursor and flags) and **2048** (the sliding-tiles puzzle).
+(a starfield screensaver), **Mines** (Minesweeper with a keyboard cursor and
+flags), **2048** (the sliding-tiles puzzle) and **Maze 3D** (a fixed-point
+first-person ray-cast maze).
 
-If an application crashes, the system removes it and keeps running — this is
-verified by a dedicated test.
+If an application raises a CPU exception, the system attempts to remove it
+and continue — this is verified by a dedicated test. However, `.kapp` programs
+run in ring 0, not in a sandbox: run only trusted applications. Exception
+recovery cannot protect the kernel from arbitrary memory writes or device I/O.
 
 **The full developer guide is [APPS.md](APPS.md)**: the file format, a reference
 for every ABI function, the life cycle, building, installing, debugging, an error
@@ -485,20 +512,22 @@ A detailed step-by-step guide, including real hardware, is in
 
 ## Code audit
 
-A full account of the defects found and fixed (74 items: video memory size
-caching, heap overflows, CapsLock, the icon layout at 640×480 and more) is in
+A detailed history of the defects found and fixed — including video memory
+caching, heap overflows, CapsLock and the 640×480 icon layout — is in
 [AUDIT.md](AUDIT.md).
 
 ## Media and building
 
 | File | Size | When to use it |
 |------|------|----------------|
-| `release/kvantos.iso` | ~1.4 MB | The main option: CD/DVD or USB (the image is hybrid) |
+| `release/kvantos.iso` | ~1.4 MB | Main hybrid CD/DVD or USB image; GRUB menu and installer payload |
+| `release/kvantos-direct.iso` | ~4.7 MiB | GRUB-free BIOS + UEFI image; boots straight into graphics |
 | `release/kvantos-floppy.img` | 1.44 MB | When the drive is worn out and GRUB hangs at "Welcome to GRUB!" |
 
-Both images are **monolithic**: the GRUB modules, `grub.cfg` and the kernel
-itself are embedded inside the boot image, so nothing is read from the medium
-afterwards.
+The GRUB ISO and floppy are **monolithic**: the GRUB modules, `grub.cfg` and
+kernel are embedded, so nothing is read from the medium afterwards. The direct
+ISO is self-contained too: it embeds the loader, kernel and applications and
+also includes the UEFI system partition.
 
 ```
 make iso      # the bootable ISO

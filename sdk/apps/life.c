@@ -15,7 +15,7 @@ static unsigned char grid[GH][GW];
 static unsigned char next[GH][GW];
 static int running;
 static kv_u32 gen;
-static kv_u32 last_step;
+static kv_u32 step_accum_ms;
 
 static void clear_grid(void) {
     sys->mem_set(grid, 0, sizeof(grid));
@@ -49,9 +49,11 @@ static void do_step(void) {
 }
 
 static void on_tick(void) {
-    kv_u32 now = sys->ticks(), hz = sys->hz();
-    if (running && hz && now - last_step >= hz * FPS_MS / 1000) {
-        last_step = now;
+    if (!running) { step_accum_ms = 0; return; }
+    step_accum_ms += sys->delta_ms();
+    int steps = 0;
+    while (step_accum_ms >= FPS_MS && steps++ < 4) {
+        step_accum_ms -= FPS_MS;
         do_step();
     }
 }
@@ -86,7 +88,7 @@ static void on_click(kv_i32 x, kv_i32 y, kv_i32 button) {
 
 static void on_key(kv_i32 k) {
     if (k == ' ') { if (!running) do_step(); }
-    else if (k == 'G' || k == 'g') { running = !running; last_step = sys->ticks(); }
+    else if (k == 'G' || k == 'g') { running = !running; step_accum_ms = 0; }
     else if (k == 'R' || k == 'r') random_grid();
     else if (k == 'C' || k == 'c') clear_grid();
 }
@@ -94,7 +96,7 @@ static void on_key(kv_i32 k) {
 static void on_open(void) {
     random_grid();
     running = 1;
-    last_step = sys->ticks();
+    step_accum_ms = 0;
 }
 
 static kv_app_t me = {

@@ -23,8 +23,7 @@ release/apps64/*.kapp
 # The release archive
 kvantos-*.tar.gz
 
-# The workflow lives in ci/ and is copied to .github/workflows by hand
-.github/
+# GitHub Actions workflows are tracked source files, not build artifacts.
 
 # filesystem test artefacts: disk images and the reference blob are
 # hundreds of megabytes and are rebuilt by tests/fs/mkimage.sh

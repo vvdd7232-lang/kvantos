@@ -27,6 +27,9 @@
 /* ---------- state of the loaded application ---------- */
 static int        loaded = 0;
 static kv_app_t  *app    = NULL;
+static u32        app_delta_time_ms = 0;
+static u32        app_last_tick_sample = 0;
+static int        app_tick_started = 0;
 static char       app_file[40];
 static char       app_title[64];
 static char       last_error[96];
@@ -244,6 +247,7 @@ static void  api_release(void *p) { kfree(p); }
 static kv_u32 api_ticks(void)   { return (u32)timer_ticks(); }
 static kv_u32 api_hz(void)      { return timer_hz(); }
 static kv_u32 api_seconds(void) { return timer_seconds(); }
+static kv_u32 api_delta_ms(void) { return app_delta_time_ms; }
 
 static void api_clock(kv_i32 *h, kv_i32 *m, kv_i32 *s) {
     rtc_time_t t;
@@ -296,7 +300,7 @@ static void api_log(const char *s) { gui_log(s); }
 /* The system language for an application: 0 - English, 1 - Russian. */
 static kv_u32 api_lang(void) { return (kv_u32)kv_lang_get(); }
 
-static const kv_api_t api_table = {
+static kv_api_t api_table = {
     .api_version = KV_API_VERSION,
     .width = api_width,   .height = api_height,
     .rgb = api_rgb,       .clear = api_clear,
@@ -314,7 +318,7 @@ static const kv_api_t api_table = {
     .str_len = api_strlen, .str_cmp = api_strcmp, .str_copy = api_strcpy,
     .format = api_format,
     .random = api_random,  .log = api_log,
-    .lang = api_lang,
+    .lang = api_lang, .delta_ms = api_delta_ms,
 };
 
 /* ============================================================
@@ -343,9 +347,12 @@ static int check_header(const kapp_header_t *h, u32 filesize) {
                   T("file format version %u, the kernel speaks %u", "формат файла версии %u, ядро понимает %u"), h->version, KAPP_FORMAT_VERSION);
         return -1;
     }
-    if (h->api_version != KV_API_VERSION) {
+    if (h->api_version != KV_API_VERSION &&
+        h->api_version != KV_API_LEGACY_VERSION) {
         ksnprintf(last_error, sizeof(last_error),
-                  T("built against ABI %u, the system provides ABI %u", "приложение собрано под ABI %u, в системе ABI %u"), h->api_version, KV_API_VERSION);
+                  T("built against ABI %u, the kernel supports ABI %u and %u",
+                    "приложение собрано под ABI %u, ядро поддерживает ABI %u и %u"),
+                  h->api_version, KV_API_LEGACY_VERSION, KV_API_VERSION);
         return -1;
     }
 #ifdef __x86_64__
@@ -393,6 +400,9 @@ void kapp_unload(void) {
     app = NULL;
     app_file[0] = 0;
     app_status[0] = 0;
+    app_delta_time_ms = 0;
+    app_last_tick_sample = 0;
+    app_tick_started = 0;
 }
 
 /* Loads an application from a KvFS file. 0 on success, otherwise see kapp_last_error() */
@@ -457,6 +467,13 @@ int kapp_load(const char *filename) {
     strncpy(app_title, hdr.name[0] ? hdr.name : filename, sizeof(app_title));
     app_title[sizeof(app_title) - 1] = 0;
     app_status[0] = 0;
+
+    /* The new field is appended to the table, so old ABI-2 binaries see
+       their original prefix unchanged. Keep the advertised version exact. */
+    api_table.api_version = hdr.api_version;
+    api_table.delta_ms = hdr.api_version >= KV_API_VERSION ? api_delta_ms : NULL;
+    app_delta_time_ms = 0;
+    app_tick_started = 0;
 
     /* Call the entry point under the safety net */
     kapp_entry_t entry = (kapp_entry_t)hdr.entry;
@@ -524,6 +541,27 @@ void kapp_draw(i32 x, i32 y, i32 w, i32 h) {
 
 void kapp_tick(i32 x, i32 y, i32 w, i32 h) {
     if (!enter(x, y, w, h)) return;
+
+    /* Keep simulation time independent from the GUI's FPS cap. Unsigned
+       subtraction handles the 32-bit tick counter wrapping naturally. */
+    u32 now = (u32)timer_ticks();
+    u32 hz = timer_hz();
+    if (!app_tick_started) {
+        app_tick_started = 1;
+        app_last_tick_sample = now;
+        app_delta_time_ms = 0;
+    } else if (!hz) {
+        app_last_tick_sample = now;
+        app_delta_time_ms = 0;
+    } else {
+        u32 elapsed_ticks = now - app_last_tick_sample;
+        u32 max_ticks = hz / 4; /* cap catch-up after a pause to 250 ms */
+        if (!max_ticks) max_ticks = 1;
+        if (elapsed_ticks > max_ticks) elapsed_ticks = max_ticks;
+        app_last_tick_sample = now;
+        app_delta_time_ms = elapsed_ticks * 1000u / hz;
+    }
+
     if (app->on_tick) app->on_tick();
     leave();
 }

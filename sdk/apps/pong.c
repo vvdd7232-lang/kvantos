@@ -16,7 +16,7 @@ static int py, ay;                 /* player and AI bat tops */
 static int bx, by, vx, vy;         /* the ball */
 static int ps, as;                 /* scores */
 static int served, over;
-static kv_u32 last_move;
+static kv_u32 simulation_ms;
 
 static void serve(int to_player) {
     bx = W / 2; by = H / 2;
@@ -30,6 +30,7 @@ static void restart(void) {
     ps = 0; as = 0; over = 0;
     py = (H - PAD_H) / 2; ay = py;
     served = 0;
+    simulation_ms = 0;
     sys->status(KV_T(sys, "Space to serve. Up/Down or W/S to move",
                      "Пробел - подача. Вверх/вниз или W/S - движение"));
 }
@@ -48,35 +49,40 @@ static void move_ai(void) {
     if (ay > H - PAD_H) ay = H - PAD_H;
 }
 
+static void game_step(void) {
+    bx += vx; by += vy;
+    if (by < 4) { by = 4; vy = -vy; }
+    if (by > H - 4) { by = H - 4; vy = -vy; }
+
+    /* player bat */
+    if (vx < 0 && bx <= 24 + PAD_W && bx >= 24 && by >= py && by <= py + PAD_H) {
+        vx = -vx; if (vx < 7) vx++;
+        vy += (by - (py + PAD_H / 2)) / 16;
+        sys->beep(700, 20);
+    }
+    /* AI bat */
+    if (vx > 0 && bx >= W - 24 - PAD_W && bx <= W - 24 && by >= ay && by <= ay + PAD_H) {
+        vx = -vx; if (vx > -7) vx--;
+        vy += (by - (ay + PAD_H / 2)) / 16;
+        sys->beep(500, 20);
+    }
+    if (vy > 7) vy = 7;
+    if (vy < -7) vy = -7;
+
+    /* a point */
+    if (bx < -8) { as++; sys->beep(220, 90); if (as >= WIN) over = 1; else serve(1); }
+    if (bx > W + 8) { ps++; sys->beep(1200, 60); if (ps >= WIN) over = 1; else serve(0); }
+
+    move_ai();
+}
+
 static void on_tick(void) {
-    kv_u32 hz = sys->hz(), now = sys->ticks();
-    if (!served || over) return;
-    if (hz && now - last_move >= hz / 60) {
-        last_move = now;
-        bx += vx; by += vy;
-        if (by < 4) { by = 4; vy = -vy; }
-        if (by > H - 4) { by = H - 4; vy = -vy; }
-
-        /* player bat */
-        if (vx < 0 && bx <= 24 + PAD_W && bx >= 24 && by >= py && by <= py + PAD_H) {
-            vx = -vx; if (vx < 7) vx++;
-            vy += (by - (py + PAD_H / 2)) / 16;
-            sys->beep(700, 20);
-        }
-        /* AI bat */
-        if (vx > 0 && bx >= W - 24 - PAD_W && bx <= W - 24 && by >= ay && by <= ay + PAD_H) {
-            vx = -vx; if (vx > -7) vx--;
-            vy += (by - (ay + PAD_H / 2)) / 16;
-            sys->beep(500, 20);
-        }
-        if (vy > 7) vy = 7;
-        if (vy < -7) vy = -7;
-
-        /* a point */
-        if (bx < -8) { as++; sys->beep(220, 90); if (as >= WIN) over = 1; else serve(1); }
-        if (bx > W + 8) { ps++; sys->beep(1200, 60); if (ps >= WIN) over = 1; else serve(0); }
-
-        move_ai();
+    if (!served || over) { simulation_ms = 0; return; }
+    simulation_ms += sys->delta_ms();
+    int steps = 0;
+    while (simulation_ms >= 16 && served && !over && steps++ < 16) {
+        simulation_ms -= 16;
+        game_step();
     }
 }
 

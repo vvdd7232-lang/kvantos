@@ -2,7 +2,7 @@
 
 *Read this in [Русский](APPS.ru.md).*
 
-Interface version: **KvApp ABI 2**
+Interface version: **KvApp ABI 3** (the kernel also runs existing ABI-2 applications)
 File format: **`.kapp`**, version 1
 
 This is an exhaustive description of how KvantOS applications are built and how
@@ -168,8 +168,8 @@ Limits:
 
 * code + bss must not exceed **2 MiB**;
 * the entry point must fall inside the image;
-* on an `api_version` mismatch the kernel refuses to run the file and says
-  plainly which version it needs.
+* the kernel accepts ABI 2 and ABI 3; other `api_version` values are refused
+  with a clear diagnostic. ABI 2 remains supported for existing applications.
 
 The header is produced by `sdk/mkkapp.py` — you never assemble it by hand.
 
@@ -201,9 +201,12 @@ Any handler may be omitted — leave the field zero.
 whole run of the program. Declare it `static`, otherwise you return a pointer to
 a local variable that has already vanished.
 
-A frame is drawn from scratch every time. The kernel fills the window background
-itself, but if the application does not call `clear()` the previous frame stays
-underneath — which is usually exactly what animation wants.
+A visible application is updated before each rendered frame. The kernel clears
+its canvas first, then calls `on_tick()` and `on_draw()`; partial-screen damage
+is clipped below the application API, so app code can keep drawing its complete
+logical canvas. Do not tie simulation speed to the number of draws: ABI 3 adds
+`delta_ms()` for elapsed-time updates. Rendering may be capped at 60 or 30 fps,
+or left uncapped, without changing simulation speed.
 
 ---
 
@@ -270,15 +273,22 @@ kernel zeroes for you.
 | Function | Description |
 |---|---|
 | `kv_u32 ticks(void)` | Timer ticks since boot |
-| `kv_u32 hz(void)` | Timer frequency (currently 1000) |
+| `kv_u32 hz(void)` | Timer frequency (currently 500 Hz) |
 | `kv_u32 seconds(void)` | Seconds since boot |
 | `void clock(&h, &m, &s)` | The real-time clock |
 | `void beep(freq, ms)` | Sound through the PC speaker, no longer than 1 s |
+| `kv_u32 delta_ms(void)` | ABI 3: elapsed milliseconds since the previous `on_tick` |
 
-A tick equals a millisecond, but **do not rely on that** — ask `hz()`. That is
-exactly how the animation in the Notes sample works:
-`(ticks() - mark) / (hz() / 2)` gives half-second intervals regardless of the
-timer settings.
+The PIT runs at 500 Hz, so a timer tick is currently 2 ms — but **do not rely
+on that**; use `hz()` or `delta_ms()`. The delta is zero on the first callback and
+capped at 250 ms after a long pause. The kernel still accepts ABI-2 applications;
+the appended `delta_ms` pointer is null for those legacy binaries.
+
+`on_tick()` runs once per visible rendered frame, so accumulate elapsed time
+instead of advancing one simulation step per callback. For example, a game can
+keep a fixed 100 ms step with `accumulator += sys->delta_ms()` and process steps
+while the accumulator is at least 100. This keeps gameplay stable when the GUI
+runs at 30 fps, 60 fps or uncapped.
 
 ### Strings and memory
 
@@ -652,8 +662,8 @@ Keys: **S** the second hand, **D** the dark theme, **B** a beep.
 ### `sdk/apps/snake.c` — Snake
 
 A game: the snake crawls around a grid, eats food and grows. It demonstrates
-**time-based animation** — movement driven from `on_tick` with a step of
-`hz() / 6`, independent of the frame rate.
+**time-based animation** — `delta_ms()` is accumulated into 167 ms simulation
+steps, independent of the frame rate.
 
 Keys: **arrows** to turn, **space** to restart.
 
@@ -688,26 +698,36 @@ Keys: **1-8** colour, **E** eraser, **C** clear, **B** brush size.
 ### `sdk/apps/pong.c` — Pong
 
 You against the machine, first to seven. It demonstrates frame-rate
-independent movement from `on_tick` (a step every `hz()/60` ticks), simple
-collision response and a dead-zone AI that can actually be beaten.
+independent movement from a `delta_ms()` accumulator (16 ms simulation steps),
+simple collision response and a dead-zone AI that can actually be beaten.
 
 Keys: **Up/Down** or **W/S**, **Space** serves and restarts.
 
 ### `sdk/apps/life.c` — Life
 
 Conway's Game of Life on a torus field. It demonstrates double-buffered
-grid updates, running a simulation from `on_tick` while `on_click` edits
-the cells, and counters in the status text.
+grid updates, a 120 ms `delta_ms()` simulation accumulator while `on_click`
+edits cells, and counters in the status text.
 
 Keys: **Space** one step, **G** run/pause, **R** random field, **C** clear.
 
 ### `sdk/apps/stars.c` — Stars
 
 A starfield screensaver: 160 stars fly past with a perspective projection.
-It demonstrates computing positions per frame from plain integer maths and
+It demonstrates scaling integer movement by elapsed `delta_ms()` and computing
 brightness from depth.
 
 Keys: **+/-** speed, **Space** pause, **Esc** close.
+
+### `sdk/apps/maze3d.c` — Maze 3D
+
+A first-person maze rendered with a fixed-point DDA ray caster — no floating
+point or math library. Find the golden exit. It demonstrates a compact integer
+sine table, perspective projection, wall shading, collision checks, and an
+elapsed-time pulse through ABI 3's `delta_ms()` function.
+
+Keys: **W/S** forward/back, **A/D** strafe, **left/right arrows** turn,
+**Space** restart.
 
 ---
 

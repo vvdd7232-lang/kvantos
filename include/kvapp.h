@@ -1,5 +1,5 @@
 /* ============================================================
- *  KvantOS - application interface (KvApp ABI), version 2
+ *  KvantOS - application interface (KvApp ABI), version 3
  *
  *  This file is the only contract between the kernel and a program.
  *  Both the kernel and every application include it, so it holds
@@ -27,7 +27,8 @@ typedef signed   int       kv_i32;
 
 /* Interface version. The kernel refuses to start an application
    built for an incompatible version and says so explicitly. */
-#define KV_API_VERSION   2
+#define KV_API_LEGACY_VERSION 2 /* retained so existing ABI-2 .kapp files still run */
+#define KV_API_VERSION        3
 
 /* The .kapp file format */
 #define KAPP_MAGIC0 'K'
@@ -87,7 +88,7 @@ typedef struct {
  *  the kernel, so corrupting another window is impossible.
  * ============================================================ */
 typedef struct kv_api {
-    kv_u32 api_version;          /* matches KV_API_VERSION */
+    kv_u32 api_version;          /* packed ABI version: 2 or KV_API_VERSION */
 
     /* ---- canvas size ---- */
     kv_i32 (*width)(void);       /* client area width, pixels  */
@@ -143,6 +144,10 @@ typedef struct kv_api {
        label its buttons in the same language as the system.
        Added in ABI 2. */
     kv_u32 (*lang)(void);
+
+    /* Elapsed milliseconds since the preceding on_tick callback. The value
+       is capped at 250 ms after long pauses. Added in ABI 3; null in ABI 2. */
+    kv_u32 (*delta_ms)(void);
 } kv_api_t;
 
 /* Picks a string according to the current system language. Requires the
@@ -166,7 +171,7 @@ typedef struct kv_app {
     void (*on_draw)(void);                       /* draw a frame           */
     void (*on_key)(kv_i32 key);                  /* a key was pressed      */
     void (*on_click)(kv_i32 x, kv_i32 y, kv_i32 button);  /* mouse click */
-    void (*on_tick)(void);                       /* once per frame, before draw */
+    void (*on_tick)(void);                       /* before draw; use delta_ms() for time-based updates */
     void (*on_close)(void);                      /* the window is closing  */
 } kv_app_t;
 

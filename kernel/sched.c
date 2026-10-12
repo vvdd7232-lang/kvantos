@@ -49,7 +49,7 @@ task_t *task_create(const char *name, void (*entry)(void)) {
 
     u8 *stack = (u8 *)kmalloc(STACK_SIZE);
     if (!stack) { kfree(t); irq_restore(fl); return NULL; }
-    t->stack_base = (u32)stack;
+    t->stack_base = (kv_addr_t)stack;
 
     /* The frame must match context_switch exactly: its pop sequence is
        popfd, edi, esi, ebx, ebp, ret. So from the top of the stack
@@ -91,7 +91,7 @@ static void reap_one(void) {
         if (n->state == TASK_DEAD) {
             p->next = n->next;
             if (tasks == n) tasks = n->next;
-            u32 sb = n->stack_base;
+            kv_addr_t sb = n->stack_base;
             kfree(n);
             if (sb) kfree((void *)sb);
             return;
@@ -136,7 +136,10 @@ void task_sleep(u32 ms) {
     kv_flags_t fl = irq_save();
     current->state = TASK_SLEEPING;
     u32 hz = timer_hz();
-    current->wake_tick = timer_ticks() + (u64)(ms / 1000u * hz + (ms % 1000u) * hz / 1000u);
+    u64 delay = (u64)(ms / 1000u) * hz
+              + ((ms % 1000u) * hz + 999u) / 1000u;
+    if (ms && !delay) delay = 1;
+    current->wake_tick = timer_ticks() + delay;
     irq_restore(fl);
     schedule();
 }

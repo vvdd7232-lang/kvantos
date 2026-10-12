@@ -7,7 +7,7 @@
 #define CELL 16
 static const kv_api_t *sys;
 static int sx[W*H], sy[W*H], slen, dx, dy, fx, fy, dead, score;
-static kv_u32 last_step;
+static kv_u32 step_accum_ms;
 
 static void place_food(void) {
     for (int guard = 0; guard < 200; guard++) {
@@ -22,7 +22,7 @@ static void restart(void) {
     slen = 3; dx = 1; dy = 0; dead = 0; score = 0;
     for (int i = 0; i < slen; i++) { sx[i] = 5 - i; sy[i] = 7; }
     place_food();
-    last_step = sys->ticks();
+    step_accum_ms = 0;
     sys->status(KV_T(sys, "Arrows turn, space restarts", "Стрелки - поворот, пробел - заново"));
 }
 static void step_game(void) {
@@ -39,8 +39,13 @@ static void step_game(void) {
     }
 }
 static void on_tick(void) {
-    kv_u32 hz = sys->hz(), now = sys->ticks();
-    if (hz && now - last_step >= hz/6) { last_step = now; step_game(); }
+    if (dead) { step_accum_ms = 0; return; }
+    step_accum_ms += sys->delta_ms();
+    int steps = 0;
+    while (step_accum_ms >= 167 && !dead && steps++ < 4) {
+        step_accum_ms -= 167;
+        step_game();
+    }
 }
 static void on_draw(void) {
     kv_u32 bg = sys->rgb(24,32,44), grid = sys->rgb(34,44,60);
