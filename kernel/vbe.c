@@ -147,7 +147,7 @@ int vbe_force_text(void) {
         for (volatile int i = 0; i < 200000; i++) {}
     }
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
 
     /* the clock rate and sync polarity of mode 0x03 */
     outb(VGA_MISC_W, 0x67);
@@ -465,7 +465,7 @@ int vbe_set_refresh(u32 hz) {
     u32 vsync_end   = vsync_start + 2;            /* pulse width - 2 lines */
     if (vsync_end >= vtotal) return VBE_ERR_BADPARAM;
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     crtc_unlock();
 
     /* Vertical Total (0x06) + the high bits in Overflow (0x07) */

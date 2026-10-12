@@ -43,6 +43,10 @@ typedef signed   int       kv_i32;
 
 /* Header flags */
 #define KAPP_FLAG_WINDOW  0x0001u         /* windowed application */
+#define KAPP_FLAG_ARCH64  0x0100u         /* built for the 64-bit kernel
+                                             (KvantOS 3.0+); such files
+                                             refuse to run on the 32-bit
+                                             kernel and vice versa */
 
 /* The .kapp header is exactly 64 bytes, the memory image follows */
 typedef struct {

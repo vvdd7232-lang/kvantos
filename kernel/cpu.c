@@ -9,6 +9,9 @@ static inline void cpuid(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
    kills the kernel right after start-up. Its presence is detected by
    trying to toggle bit 21 (ID) in EFLAGS. */
 static int cpuid_supported(void) {
+#ifdef __x86_64__
+    return 1;     /* long mode implies cpuid */
+#else
     u32 res;
     __asm__ volatile(
         "pushfl\n\t"
@@ -25,6 +28,7 @@ static int cpuid_supported(void) {
         "popfl\n\t"
         : "=a"(res) : : "ecx", "cc");
     return res != 0;
+#endif
 }
 
 void cpu_vendor(char *buf13) {

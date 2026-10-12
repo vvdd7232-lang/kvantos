@@ -11,6 +11,12 @@
 static char history[HIST_MAX][CMD_MAX];
 static int  hist_count = 0;
 
+/* The default text colour of the shell. Changed with the `color`
+   command; the prompt restores it after every command. */
+static u8 shell_fg = VGA_COLOR(VGA_LGREY, VGA_BLACK);
+
+void shell_set_fg(u8 color) { shell_fg = color; }
+
 /* Length of a UTF-8 string in characters (for column alignment) */
 static u32 ulen(const char *s) {
     u32 n = 0;
@@ -31,7 +37,7 @@ static void prompt(void) {
     kputs("/");
     vga_set_color(VGA_COLOR(VGA_WHITE, VGA_BLACK));
     kputs("$ ");
-    vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
+    vga_set_color(shell_fg);
 }
 
 static void hist_add(const char *line) {
@@ -112,10 +118,12 @@ static void cmd_lang(int argc, char **argv)
     }
     if (!strcmp(argv[1], "en") || !strcmp(argv[1], "english")) {
         kv_lang_set(KV_LANG_EN);
+        settings_save();   /* 2.0: remember the choice across reboots */
         kputs("\n  Language: English\n\n");
     } else if (!strcmp(argv[1], "ru") || !strcmp(argv[1], "russian")) {
         kv_lang_set(KV_LANG_RU);
-        kputs("\n  Язык: русский\n\n");
+        settings_save();
+        kputs("\n  Язык: русский (сохранено для будущих загрузок)\n\n");
     } else {
         kputs(T("\n  Use: lang en  or  lang ru\n\n",
                 "\n  Укажите: lang en  или  lang ru\n\n"));
@@ -319,13 +327,40 @@ static void cmd_help(void) {
         {"mem",       T("memory and heap statistics", "статистика памяти и кучи")},
         {"cpu",       T("CPU information", "информация о процессоре")},
         {"uptime",    T("uptime and timer ticks", "время работы и тики таймера")},
-        {"date",      T("date and time from CMOS/RTC", "дата и время из CMOS/RTC")},
+        {"date [set D.M.Y]", T("date from CMOS/RTC; 'date set' writes it", "дата из CMOS/RTC; 'date set' устанавливает её")},
+        {"time [set H:M:S]", T("time from CMOS/RTC; 'time set' writes it", "время из CMOS/RTC; 'time set' устанавливает его")},
         {"ps",        T("list scheduler tasks", "список задач планировщика")},
         {"spawn N",   T("spawn N background counter tasks", "создать N фоновых задач-счётчиков")},
+        {"kill ID",   T("terminate a task (see ps)", "завершить задачу (см. ps)")},
+        {"uname",     T("kernel name, version and build", "имя ядра, версия и сборка")},
+        {"sysinfo",   T("one-screen summary of the system", "сводка о системе на один экран")},
+        {"hostname",  T("the machine name", "имя машины")},
+        {"whoami",    T("who runs the shell", "кто работает в оболочке")},
+        {"cal [M Y]", T("calendar of a month (today by default)", "календарь месяца (по умолчанию текущий)")},
+        {"calc EXPR", T("integer calculator with parentheses", "целочисленный калькулятор со скобками")},
+        {"hex N",     T("a number in hexadecimal", "число в шестнадцатеричном виде")},
+        {"bin N",     T("a number in binary", "число в двоичном виде")},
+        {"dec N",     T("hex/binary/decimal to decimal", "hex/двоичное/десятичное в десятичное")},
+        {"rand [N]",  T("a random number (0..N-1 with N)", "случайное число (с N - от 0 до N-1)")},
+        {"seq A B",   T("print numbers from A to B", "вывести числа от A до B")},
+        {"rev TEXT",  T("print text backwards", "вывести текст задом наперёд")},
         {"ls",        T("list files in ramfs", "список файлов в ramfs")},
         {"cat FILE",  T("show the contents of a file", "показать содержимое файла")},
         {"write F T", T("create file F containing text T", "создать файл F с текстом T")},
         {"rm FILE",   T("delete a file", "удалить файл")},
+        {"touch F",   T("create an empty file", "создать пустой файл")},
+        {"cp A B",    T("copy a file in ramfs", "скопировать файл в ramfs")},
+        {"mv A B",    T("rename a file in ramfs", "переименовать файл в ramfs")},
+        {"wc FILE",   T("lines, words and bytes", "строки, слова и байты")},
+        {"grep S F",  T("find string S in file F", "найти строку S в файле F")},
+        {"hexdump F", T("hex dump of a file", "шестнадцатеричный дамп файла")},
+        {"sum FILE",  T("FNV-1a checksum of a file", "контрольная сумма файла (FNV-1a)")},
+        {"sort FILE", T("print the lines of a file sorted", "вывести строки файла по алфавиту")},
+        {"uniq FILE", T("collapse adjacent duplicate lines", "убрать соседние повторяющиеся строки")},
+        {"tac FILE",  T("print a file line by line backwards", "вывести файл строками в обратном порядке")},
+        {"basename P",T("the last component of a path", "последний компонент пути")},
+        {"dirname P", T("the directory part of a path", "каталог пути")},
+        {"repeat N T",T("print text N times", "вывести текст N раз")},
         {"guimenu",   T("start graphics mode (mouse + windows)", "запустить графический режим (мышь + окна)")},
         {"setup",     T("INSTALL the system onto a hard disk", "УСТАНОВИТЬ систему на жёсткий диск")},
         {"disk",      T("information about ATA disks", "сведения о дисках ATA")},
@@ -351,8 +386,15 @@ static void cmd_help(void) {
         {"gfx",       T("video mode and framebuffer information", "сведения о видеорежиме и фреймбуфере")},
         {"hwreport",  T("full hardware report (copied to COM1)", "полный отчёт о железе (дубль в COM1)")},
         {"colors",    T("VGA palette (16 colours)", "палитра VGA (16 цветов)")},
+        {"color F B", T("shell text colour (0-15, color reset)", "цвет текста оболочки (0-15, color reset)")},
         {"lang [en|ru]", T("interface language", "язык интерфейса")},
         {T("beep [Hz]", "beep [Гц]"), T("sound through the PC speaker", "звук через PC-спикер")},
+        {"melody",    T("a tune on the PC speaker", "мелодия на PC-спикере")},
+        {"countdown N", T("a countdown of N seconds with beeps", "отсчёт N секунд со звуком")},
+        {"matrix",    T("digital rain (any key stops)", "цифровой дождь (любая клавиша стоп)")},
+        {"fortune",   T("a random quote", "случайная цитата")},
+        {"ascii",     T("print the ASCII table", "вывести таблицу ASCII")},
+        {"leds MODE", T("keyboard LEDs: on/off/scroll/num/caps/dance", "светодиоды клавиатуры: on/off/scroll/num/caps/dance")},
         {"alloc N",   T("allocate N bytes on the heap (test)", "выделить N байт в куче (тест)")},
         {"crash",     T("raise an exception (panic test)", "вызвать исключение (тест паники)")},
         {"reboot",    T("reboot the machine", "перезагрузить машину")},
@@ -445,7 +487,53 @@ static void cmd_uptime(void) {
     kprintf(T("  Timer ticks: %u (at %u Hz)\n\n", "  Тиков таймера: %u (частота %u Гц)\n\n"), (u32)timer_ticks(), timer_hz());
 }
 
-static void cmd_date(void) {
+/* Split a string on any non-digit separators into at most maxn
+   numbers; returns how many were found or -1 on overflow. */
+static int split_nums(const char *s, int *out, int maxn) {
+    int n = 0, cur = -1;
+    for (; *s; s++) {
+        if (*s >= '0' && *s <= '9') cur = (cur < 0 ? 0 : cur) * 10 + (*s - '0');
+        else if (cur >= 0) {
+            if (n >= maxn) return -1;
+            out[n++] = cur;
+            cur = -1;
+        }
+    }
+    if (cur >= 0) {
+        if (n >= maxn) return -1;
+        out[n++] = cur;
+    }
+    return n;
+}
+
+static void cmd_date_show(void);
+
+static void cmd_datetime(int argc, char **argv, int is_time) {
+    /* 2.0: the clock can finally be set from the shell */
+    if (argc >= 3 && !strcmp(argv[1], "set")) {
+        int v[3];
+        if (split_nums(argv[2], v, 3) != 3) {
+            kputs(is_time ? T("\n  Use: time set HH:MM:SS\n\n", "\n  Формат: time set ЧЧ:ММ:СС\n\n")
+                          : T("\n  Use: date set DD.MM.YYYY\n\n", "\n  Формат: date set ДД.ММ.ГГГГ\n\n"));
+            return;
+        }
+        int r;
+        if (is_time) {
+            r = rtc_write_time(v[0], v[1], v[2]);
+            kputs(r == 0 ? T("\n  The clock has been set\n\n", "\n  Время установлено\n\n")
+                         : T("\n  Bad time (HH:MM:SS, 24-hour)\n\n", "\n  Неверное время (ЧЧ:ММ:СС, 24 часа)\n\n"));
+        } else {
+            int year = v[2] >= 100 ? v[2] : 2000 + v[2];
+            r = rtc_write_date(year, v[1], v[0]);
+            kputs(r == 0 ? T("\n  The date has been set\n\n", "\n  Дата установлена\n\n")
+                         : T("\n  Bad date (DD.MM.YYYY)\n\n", "\n  Неверная дата (ДД.ММ.ГГГГ)\n\n"));
+        }
+        return;
+    }
+    cmd_date_show();
+}
+
+static void cmd_date_show(void) {
     rtc_time_t t;
     rtc_read(&t);
     const char *mn[] = {"", T("January", "января"), T("February", "февраля"), T("March", "марта"), T("April", "апреля"), T("May", "мая"), T("June", "июня"),
@@ -949,7 +1037,8 @@ void shell_run(void) {
         else if (!strcmp(cmd, "mem") || !strcmp(cmd, "free")) cmd_mem();
         else if (!strcmp(cmd, "cpu")) cmd_cpu();
         else if (!strcmp(cmd, "uptime")) cmd_uptime();
-        else if (!strcmp(cmd, "date") || !strcmp(cmd, "time")) cmd_date();
+        else if (!strcmp(cmd, "date")) cmd_datetime(argc, argv, 0);
+        else if (!strcmp(cmd, "time")) cmd_datetime(argc, argv, 1);
         else if (!strcmp(cmd, "ps") || !strcmp(cmd, "tasks")) cmd_ps();
         else if (!strcmp(cmd, "spawn")) cmd_spawn(argc > 1 ? atoi(argv[1]) : 1);
         else if (!strcmp(cmd, "ls") || !strcmp(cmd, "dir")) cmd_ls();
@@ -1014,6 +1103,40 @@ void shell_run(void) {
             volatile int c = a / b;
             (void)c;
         }
+        /* ---- the utilities batch (utilcmds.c) ---- */
+        else if (!strcmp(cmd, "uname")) cmd_uname();
+        else if (!strcmp(cmd, "hostname")) cmd_hostname();
+        else if (!strcmp(cmd, "whoami")) cmd_whoami();
+        else if (!strcmp(cmd, "sysinfo")) cmd_sysinfo();
+        else if (!strcmp(cmd, "calc")) cmd_calc(argc, argv);
+        else if (!strcmp(cmd, "cal")) cmd_cal(argc, argv);
+        else if (!strcmp(cmd, "hex")) cmd_hex(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "bin")) cmd_bin(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "dec")) cmd_dec(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "rand") || !strcmp(cmd, "random")) cmd_rand(argc, argv);
+        else if (!strcmp(cmd, "seq")) cmd_seq(argc, argv);
+        else if (!strcmp(cmd, "rev")) cmd_rev(argc, argv);
+        else if (!strcmp(cmd, "wc")) cmd_wc(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "grep")) cmd_grep(argc, argv);
+        else if (!strcmp(cmd, "hexdump") || !strcmp(cmd, "hd")) cmd_hexdump(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "sum")) cmd_sum(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "sort")) cmd_sort(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "uniq")) cmd_uniq(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "tac")) cmd_tac(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "basename")) cmd_basename(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "dirname")) cmd_dirname(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "repeat")) cmd_repeat(argc, argv);
+        else if (!strcmp(cmd, "touch")) cmd_touch(argc > 1 ? argv[1] : 0);
+        else if (!strcmp(cmd, "cp") || !strcmp(cmd, "copy")) cmd_cp(argc, argv);
+        else if (!strcmp(cmd, "mv") || !strcmp(cmd, "rename")) cmd_mv(argc, argv);
+        else if (!strcmp(cmd, "kill")) cmd_kill(argc, argv);
+        else if (!strcmp(cmd, "matrix")) cmd_matrix();
+        else if (!strcmp(cmd, "fortune") || !strcmp(cmd, "quote")) cmd_fortune();
+        else if (!strcmp(cmd, "melody")) cmd_melody();
+        else if (!strcmp(cmd, "leds")) cmd_leds(argc, argv);
+        else if (!strcmp(cmd, "ascii")) cmd_ascii();
+        else if (!strcmp(cmd, "countdown")) cmd_countdown(argc, argv);
+        else if (!strcmp(cmd, "color")) cmd_color(argc, argv);
         else if (!strcmp(cmd, "reboot")) { kputs(T("  rebooting...\n", "  перезагрузка...\n")); sleep_ms(300); kv_reboot(); }
         else if (!strcmp(cmd, "poweroff") || !strcmp(cmd, "halt")) {
             kputs(T("  powering off...\n", "  выключение...\n")); sleep_ms(300); kv_poweroff();
@@ -1021,7 +1144,7 @@ void shell_run(void) {
         else {
             vga_set_color(VGA_COLOR(VGA_LRED, VGA_BLACK));
             kprintf(T("  kvsh: command '%s' not found. Type help.\n\n", "  kvsh: команда '%s' не найдена. Наберите help.\n\n"), cmd);
-            vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
+            vga_set_color(shell_fg);
         }
     }
 }

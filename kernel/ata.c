@@ -192,7 +192,7 @@ int ata_read(int idx, u32 lba, u8 count, void *buf) {
     ata_drive_t *d = &drives[idx];
     if (lba + count > d->sectors) return -1;
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     int rc = 0;
     if (ata_setup(d, lba, count) < 0) { irq_restore(fl); return -1; }
     outb(d->io + REG_COMMAND, CMD_READ_PIO);
@@ -214,7 +214,7 @@ int ata_write(int idx, u32 lba, u8 count, const void *buf) {
     ata_drive_t *d = &drives[idx];
     if (lba + count > d->sectors) return -1;
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
     int rc = 0;
     if (ata_setup(d, lba, count) < 0) { irq_restore(fl); return -1; }
     outb(d->io + REG_COMMAND, CMD_WRITE_PIO);

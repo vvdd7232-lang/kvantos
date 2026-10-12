@@ -219,6 +219,7 @@ skip_hw:
                 kvfs_stats(&mb, &kb, &nf);
                 kprintf(T("       KvFS: %u files, %u KiB used\n", "       KvFS: файлов %u, занято %u КиБ\n"), nf, kb);
                 step(T("Disk: KvFS mounted (applications persist)", "Диск: KvFS подключён (приложения сохраняются)"));
+                settings_load();   /* 2.0: language & co. survive reboots */
             } else if (m == -3) {
                 step(T("Disk: found but not formatted (format command)", "Диск: найден, но не размечен (команда format)"));
             } else {

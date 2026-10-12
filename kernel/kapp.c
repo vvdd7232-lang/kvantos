@@ -49,7 +49,13 @@ static i32 cl_x, cl_y, cl_w, cl_h;
  *  not panic but jumps back to that point - just like longjmp in plain
  *  C. The application is unloaded and the shell keeps running.
  * ============================================================ */
+#ifdef __x86_64__
+/* 64-bit: same six slots, different registers (r12/r13 take the
+   place of esi/edi - both are callee-saved on SysV). */
+typedef struct { kv_addr_t sp, bp, bx, r12, r13, ip; } kapp_jmp_t;
+#else
 typedef struct { u32 esp, ebp, ebx, esi, edi, eip; } kapp_jmp_t;
+#endif
 
 static kapp_jmp_t    guard_buf;
 static volatile int  in_app = 0;
@@ -66,6 +72,25 @@ static char          fault_reason[64];
  *  enter(), whose frame lives for as long as the application handler
  *  is running.
  */
+#ifdef __x86_64__
+#define GUARD_SET(b, res)                        \
+    __asm__ volatile(                            \
+        "movq %%rsp, 0(%1)\n\t"                  \
+        "movq %%rbp, 8(%1)\n\t"                  \
+        "movq %%rbx, 16(%1)\n\t"                 \
+        "movq %%r12, 24(%1)\n\t"                 \
+        "movq %%r13, 32(%1)\n\t"                 \
+        "leaq 1f(%%rip), %%rdx\n\t"              \
+        "movq %%rdx, 40(%1)\n\t"                 \
+        "xorl %0, %0\n\t"                        \
+        "jmp 2f\n"                               \
+        "1:\n\t"                                 \
+        "movl $1, %0\n"                          \
+        "2:\n\t"                                 \
+        : "=&r"(res)                             \
+        : "r"(b)                                 \
+        : "memory", "cc", "rdx")
+#else
 #define GUARD_SET(b, res)                        \
     __asm__ volatile(                            \
         "movl %%esp, 0(%1)\n\t"                  \
@@ -82,9 +107,21 @@ static char          fault_reason[64];
         : "=&r"(res)                             \
         : "r"(b)                                 \
         : "memory", "cc")
+#endif
 
 /* Jump back to the saved point. Never returns. */
 static __attribute__((noreturn)) void guard_jump(kapp_jmp_t *b) {
+#ifdef __x86_64__
+    __asm__ volatile(
+        "movq 0(%0), %%rsp\n\t"
+        "movq 8(%0), %%rbp\n\t"
+        "movq 16(%0), %%rbx\n\t"
+        "movq 24(%0), %%r12\n\t"
+        "movq 32(%0), %%r13\n\t"
+        "sti\n\t"
+        "jmp *40(%0)\n"
+        :: "r"(b) : "memory");
+#else
     __asm__ volatile(
         "movl 0(%0), %%esp\n\t"
         "movl 4(%0), %%ebp\n\t"
@@ -94,6 +131,7 @@ static __attribute__((noreturn)) void guard_jump(kapp_jmp_t *b) {
         "sti\n\t"
         "jmp *20(%0)\n"
         :: "r"(b) : "memory");
+#endif
     __builtin_unreachable();
 }
 
@@ -310,6 +348,17 @@ static int check_header(const kapp_header_t *h, u32 filesize) {
                   T("built against ABI %u, the system provides ABI %u", "приложение собрано под ABI %u, в системе ABI %u"), h->api_version, KV_API_VERSION);
         return -1;
     }
+#ifdef __x86_64__
+    if (!(h->flags & KAPP_FLAG_ARCH64)) {
+        strncpy(last_error, T("32-bit application on a 64-bit kernel", "32-битное приложение на 64-битном ядре"), sizeof(last_error));
+        return -1;
+    }
+#else
+    if (h->flags & KAPP_FLAG_ARCH64) {
+        strncpy(last_error, T("64-bit application on a 32-bit kernel", "64-битное приложение на 32-битном ядре"), sizeof(last_error));
+        return -1;
+    }
+#endif
     if (h->load_base != KAPP_LOAD_BASE) {
         strncpy(last_error, T("bad load address in the header", "неверный адрес загрузки в заголовке"), sizeof(last_error));
         return -1;

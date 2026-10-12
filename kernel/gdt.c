@@ -1,5 +1,79 @@
-/* Global descriptor table + TSS */
+/* Global descriptor table + TSS (32-bit and 64-bit variants) */
 #include "kernel.h"
+
+#ifdef __x86_64__
+/* ===================== long mode ===================== */
+
+struct gdt_entry {
+    u16 limit_low;
+    u16 base_low;
+    u8  base_mid;
+    u8  access;
+    u8  gran;
+    u8  base_high;
+} __attribute__((packed));
+
+struct gdt_ptr {
+    u16 limit;
+    u64 base;
+} __attribute__((packed));
+
+/* 64-bit TSS: rsp0 is the only field the kernel uses */
+struct tss_entry {
+    u32 reserved0;
+    u64 rsp0, rsp1, rsp2;
+    u64 reserved1;
+    u64 ist1, ist2, ist3, ist4, ist5, ist6, ist7;
+    u64 reserved2;
+    u16 reserved3;
+    u16 iomap_base;
+} __attribute__((packed));
+
+/* TSS takes two GDT slots in long mode (16 bytes) */
+static struct gdt_entry gdt[8];
+static struct gdt_ptr   gp;
+static struct tss_entry tss;
+
+static void gdt_set(int i, u32 base, u32 limit, u8 access, u8 gran) {
+    gdt[i].base_low  = (u16)(base & 0xFFFF);
+    gdt[i].base_mid  = (u8)((base >> 16) & 0xFF);
+    gdt[i].base_high = (u8)((base >> 24) & 0xFF);
+    gdt[i].limit_low = (u16)(limit & 0xFFFF);
+    gdt[i].gran      = (u8)(((limit >> 16) & 0x0F) | (gran & 0xF0));
+    gdt[i].access    = access;
+}
+
+void set_kernel_stack(kv_addr_t rsp0) { tss.rsp0 = rsp0; }
+
+void gdt_init(void) {
+    gp.limit = sizeof(gdt) - 1;
+    gp.base  = (kv_addr_t)&gdt;
+
+    gdt_set(0, 0, 0, 0, 0);                    /* null */
+    gdt_set(1, 0, 0xFFFFF, 0x9A, 0xAF);        /* kernel code 0x08, L=1 */
+    gdt_set(2, 0, 0xFFFFF, 0x92, 0xCF);        /* kernel data 0x10 */
+    gdt_set(3, 0, 0xFFFFF, 0xFA, 0xAF);        /* user code   0x18 */
+    gdt_set(4, 0, 0xFFFFF, 0xF2, 0xCF);        /* user data   0x20 */
+
+    memset(&tss, 0, sizeof(tss));
+    tss.rsp0 = (kv_addr_t)&kernel_stack_top;   /* boot stack */
+    tss.iomap_base = sizeof(tss);
+
+    /* TSS descriptor: base/limit split across 16 bytes, access 0x89
+       (present, 64-bit TSS available) */
+    kv_addr_t base = (kv_addr_t)&tss;
+    u32 limit = sizeof(tss) - 1;
+    gdt_set(5, (u32)base, limit, 0x89, 0x00);
+    gdt_set(6, 0, 0, 0, 0);                    /* high half */
+    u64 *hi = (u64 *)&gdt[6];
+    *hi = (base >> 32) & 0xFFFFFFFF;
+
+    gdt_flush((kv_addr_t)&gp);
+    tss_flush(0x28);
+}
+
+#else
+/* ===================== protected mode ===================== */
 
 struct gdt_entry {
     u16 limit_low;
@@ -37,7 +111,7 @@ static void gdt_set(int i, u32 base, u32 limit, u8 access, u8 gran) {
     gdt[i].access    = access;
 }
 
-void set_kernel_stack(u32 esp0) { tss.esp0 = esp0; }
+void set_kernel_stack(kv_addr_t esp0) { tss.esp0 = (u32)esp0; }
 
 void gdt_init(void) {
     gp.limit = sizeof(gdt) - 1;
@@ -58,3 +132,4 @@ void gdt_init(void) {
     gdt_flush((u32)&gp);
     tss_flush();
 }
+#endif

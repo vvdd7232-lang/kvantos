@@ -1,10 +1,23 @@
-# KvantOS 0.1.0 "Photon"
+# KvantOS 3.0.0 "Horizon"
+
+> **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
+> kernel there is now a second build, `kvant64.bin`, compiled for
+> x86-64 long mode (PML4 paging, 64-bit interrupt frames and GDT/TSS).
+> And with it comes a **UEFI loader** written in plain C —
+> `boot/kvantefi.c`, assembled into `BOOTX64.EFI` with no GRUB, no
+> legacy MBR and no CSM: the only road onto modern hardware. The ISO is
+> hybrid — it boots on old BIOS machines through GRUB and on UEFI
+> firmware through the EFI stub. The full story is in
+> [CHANGELOG.md](CHANGELOG.md).
 
 *Read this in [Русский](README.ru.md).*
 
-A completely hand-written **32-bit operating system** for the i386 architecture.
-Own monolithic kernel, booted by **GRUB 2** through the Multiboot 1 specification.
-No C standard library — only the compiler's freestanding headers.
+A completely hand-written **x86 operating system** with two kernels:
+the classic **32-bit** build (`kvant.bin`, booted by **GRUB 2** through
+the Multiboot 1 specification) and, since 3.0, a **64-bit** build
+(`kvant64.bin`, booted by its own **UEFI stub** on EFI x86-64 firmware).
+Own monolithic kernel. No C standard library — only the compiler's
+freestanding headers.
 
 ```
    ██╗  ██╗██╗   ██╗ █████╗ ███╗   ██╗████████╗
@@ -18,7 +31,8 @@ No C standard library — only the compiler's freestanding headers.
 ## Quick start
 
 ```bash
-make          # build the kernel, build/kvant.bin
+make          # build everything: kvant.bin (32-bit), kvant64.bin
+              # (64-bit) and kvantefi.efi (the UEFI loader)
 make iso      # build the bootable image, build/kvantos.iso
 make run      # run in QEMU (the kernel log is mirrored to COM1/stdout)
 ```
@@ -26,6 +40,46 @@ make run      # run in QEMU (the kernel log is mirrored to COM1/stdout)
 The image boots on real hardware too: write `kvantos.iso` to a USB stick
 (`dd if=build/kvantos.iso of=/dev/sdX bs=4M`) or attach it as a CD in
 VirtualBox/VMware.
+
+### UEFI boot (new in 3.0)
+
+The ISO carries a second El Torito entry: a FAT16 ESP image
+(`tools/mkesp.py`, pure Python — no `mtools` needed) with
+`/EFI/BOOT/BOOTX64.EFI` and `/boot/kvant64.bin`. On firmware that boots
+UEFI-only (no CSM) the stub reads the kernel from the boot volume,
+loads the `.kapp` applications from `/boot/apps`, picks a 1024x768 (or
+the best fitting) GOP graphics mode, converts the EFI memory map into a
+Multiboot-1 style `multiboot_info`, exits the boot services and jumps
+into the 64-bit kernel — which from that point on behaves exactly like
+the 32-bit build: same shell, same applications, same drivers.
+
+Applications are built for both kernels: `release/apps` carries the
+32-bit `.kapp` files (for `kvant.bin` and the GRUB/floppy paths) and
+`release/apps64` the 64-bit ones (for `kvant64.bin`); a header flag
+(`KAPP_FLAG_ARCH64`) makes each kernel refuse files of the wrong
+bitness instead of crashing on them.
+
+### Building without GRUB
+
+`make iso` needs the GRUB toolchain (`grub-mkstandalone`, `grub-file`) and
+`xorriso`. Where those are unavailable there is a fallback path that needs
+only `nasm` and `python3`:
+
+```bash
+make iso-direct   # build/kvantos-direct.iso via tools/mkdirect.py
+```
+
+Instead of GRUB the ISO carries a tiny self-contained Multiboot loader
+(`boot/direct.asm`, about a kilobyte). It enables A20, reads the E820
+memory map, switches the adapter to VBE 1024x768x32 exactly as the
+kernel's Multiboot header asks, loads the kernel segments to 1 MiB and
+the `.kapp` modules to 2 MiB, builds a full `multiboot_info` (command
+line, modules, memory map, framebuffer) and jumps to the kernel. The ISO
+itself is written by the vendored pure-Python `pycdlib`
+(`tools/vendor`). Note the GRUB build additionally provides the boot
+menu (text/safe mode, language) and the `hdboot.img` installer payload;
+`iso-direct` boots straight into graphics mode with all embedded
+applications.
 
 ## Interface language
 
@@ -208,13 +262,18 @@ An interactive command line with history (↑↓ arrows), Ctrl+L and Ctrl+C.
 
 ```
 help      about     clear     echo      mem       cpu
-uptime    date      ps        spawn     ls        cat
-write     rm        colors    beep      alloc     lang
-history   crash     reboot    poweroff  guimenu   gfx
-lspci     gpu       vidmode   refresh   setup     disk
-format    df        dls       dcat      install   uninstall
-apps      hwreport  mount     rescan    vls       vcd
-vcat      vcp       vrm       vmkdir
+uptime    date      ps        spawn     kill      ls
+cat       write     rm        touch     cp        mv
+wc        grep      hexdump   sum       colors    color
+beep      alloc     lang      history   crash     reboot
+poweroff  guimenu   gfx       lspci     gpu       vidmode
+refresh   setup     disk      format    df        dls
+dcat      install   uninstall apps      hwreport  mount
+rescan    vls       vcd       vcat      vcp       vrm
+vmkdir    uname     sysinfo   hostname  whoami    cal
+calc      hex       bin       dec       rand      seq
+rev       matrix    fortune   melody    countdown ascii
+leds      sleep
 ```
 
 `mount` lists the mounted volumes with their type, label and free space,
@@ -224,6 +283,15 @@ volumes again after a disk has been swapped.
 
 `guimenu` starts the graphical environment, `gfx` reports the video mode,
 `lang` switches the interface language.
+
+The utilities batch: `kill` terminates a task from `ps`; `uname`/`sysinfo`
+summarise the system; `cal` prints a month calendar with today highlighted;
+`calc` evaluates integer expressions with parentheses; `hex`/`bin`/`dec`
+convert number bases; `rand` and `seq` produce numbers; `wc`/`grep`/`hexdump`/
+`sum`/`touch`/`cp`/`mv` work with ramfs files; `matrix` shows digital rain;
+`fortune` prints a quote; `melody` and `countdown` use the PC speaker;
+`leds dance` puts the keyboard indicators through a light show; `color`
+changes the shell text colour.
 
 A live status line at the top is updated by a separate background task and shows
 RAM usage, the number of tasks and the system uptime.
@@ -357,9 +425,13 @@ hard disk at all**. A disk is only needed so that programs can save their files.
 Inside the system: the **Programs** icon (key **G**) lists, launches and removes
 them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
-Three richly commented samples are bundled: **Clock** (an analogue dial, integer
-trigonometry), **Notes** (an editor keeping its text on disk) and **Snake**
-(a small game).
+Ten applications are bundled — three richly commented samples plus seven
+more: **Clock** (an analogue dial, integer trigonometry), **Notes** (an editor
+keeping its text on disk), **Snake** (a small game), **Calculator** (buttons
+and keyboard input), **Paint** (mouse drawing with a palette), **Pong** (you
+against the machine), **Life** (Conway's Game of Life), **Stars**
+(a starfield screensaver) and, new in 2.0, **Mines** (Minesweeper with a
+keyboard cursor and flags) and **2048** (the sliding-tiles puzzle).
 
 If an application crashes, the system removes it and keeps running — this is
 verified by a dedicated test.

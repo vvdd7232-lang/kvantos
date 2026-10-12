@@ -40,6 +40,9 @@ static inline void cpuid_raw(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
 
 /* Check bit 21 (ID) in EFLAGS: without CPUID there are no MSRs either. */
 static int has_cpuid(void) {
+#ifdef __x86_64__
+    return 1;
+#else
     u32 res;
     __asm__ volatile(
         "pushfl\n\t"
@@ -56,6 +59,7 @@ static int has_cpuid(void) {
         "popfl\n\t"
         : "=a"(res) : : "ecx", "cc");
     return res != 0;
+#endif
 }
 
 /* Round the length down to a power of two: MTRRs handle nothing else. */
@@ -85,11 +89,16 @@ static int mtrr_program(u32 vcnt, int slot, u32 base, u32 len) {
     }
     if (slot < 0) return -1;
 
-    u32 fl = irq_save();
+    kv_flags_t fl = irq_save();
 
-    u32 cr0;
+    kv_addr_t cr0;
+#ifdef __x86_64__
+    __asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
+    __asm__ volatile("movq %0, %%cr0" : : "r"((cr0 | 0x40000000ul) & ~0x20000000ul));
+#else
     __asm__ volatile("movl %%cr0, %0" : "=r"(cr0));
     __asm__ volatile("movl %0, %%cr0" : : "r"((cr0 | 0x40000000u) & ~0x20000000u));
+#endif
     __asm__ volatile("wbinvd");
 
     u32 def_lo, def_hi;
@@ -104,7 +113,11 @@ static int mtrr_program(u32 vcnt, int slot, u32 base, u32 len) {
     wrmsr(IA32_MTRR_DEF_TYPE, def_lo | (1u << 11), def_hi);
 
     __asm__ volatile("wbinvd");
+#ifdef __x86_64__
+    __asm__ volatile("movq %0, %%cr0" : : "r"(cr0));
+#else
     __asm__ volatile("movl %0, %%cr0" : : "r"(cr0));
+#endif
 
     irq_restore(fl);
     return slot;
@@ -144,7 +157,7 @@ int mtrr_set_wc(u32 base, u32 size) {
        sequence of mode changes cannot exhaust the registers. */
     for (u32 i = 0; i < vcnt && i < 32; i++) {
         if (!(mtrr_owned & (1u << i))) continue;
-        u32 fl = irq_save();
+        kv_flags_t fl = irq_save();
         wrmsr(IA32_MTRR_PHYSBASE0 + i * 2, 0, 0);
         wrmsr(IA32_MTRR_PHYSBASE0 + i * 2 + 1, 0, 0);
         irq_restore(fl);
