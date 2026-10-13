@@ -13,6 +13,7 @@ static const kv_api_t *sys;
 static kv_i32 sx[NSTARS], sy[NSTARS], sz[NSTARS];
 static int speed = 4;
 static int paused;
+static kv_u32 motion_accum;
 
 static void new_star(int i, int far) {
     sx[i] = (kv_i32)(sys->random() % W) - W / 2;
@@ -25,12 +26,19 @@ static void on_open(void) {
     for (int i = 0; i < NSTARS; i++) new_star(i, 0);
     speed = 4;
     paused = 0;
+    motion_accum = 0;
 }
 
 static void on_tick(void) {
-    if (paused) return;
+    if (paused) { motion_accum = 0; return; }
+    /* Preserve the old speed scale (distance per 16 ms) while allowing
+       the GUI to render at 30, 60 or an uncapped frame rate. */
+    motion_accum += (kv_u32)speed * sys->delta_ms();
+    kv_u32 steps = motion_accum / 16;
+    motion_accum %= 16;
+    if (!steps) return;
     for (int i = 0; i < NSTARS; i++) {
-        sz[i] -= speed;
+        sz[i] -= (kv_i32)steps;
         if (sz[i] <= 2) new_star(i, 1);
     }
 }

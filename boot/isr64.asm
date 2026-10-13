@@ -126,24 +126,29 @@ IRQ 15, 47
 
 isr_common:
     PUSH_ALL
-    mov rdi, rsp                    ; arg: pointer to the frame
-    mov rax, rsp
-    and rsp, -16                    ; SysV wants 16-byte alignment
+    ; Keep the original frame pointer in RBX across the C call. RAX is
+    ; caller-saved under SysV and the handler is free to overwrite it.
+    ; The interrupted RBX is already present in the saved frame and will
+    ; be restored by POP_ALL after the C ABI preserves our temporary RBX.
+    mov rbx, rsp
+    mov rdi, rbx                    ; arg: pointer to the frame
+    and rsp, -16                    ; SysV wants 16-byte alignment before CALL
     cld
     call isr_handler
-    mov rsp, rax
+    mov rsp, rbx
     POP_ALL
     add rsp, 16                     ; drop int_no + err_code
     iretq
 
 irq_common:
     PUSH_ALL
-    mov rdi, rsp
-    mov rax, rsp
+    ; Same rule as isr_common: do not keep the saved RSP in volatile RAX.
+    mov rbx, rsp
+    mov rdi, rbx
     and rsp, -16
     cld
     call irq_handler
-    mov rsp, rax
+    mov rsp, rbx
     POP_ALL
     add rsp, 16
     iretq

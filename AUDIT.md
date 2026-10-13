@@ -619,7 +619,7 @@ file there, and no disk was attached to that VM.
 | 71 | kernel/kapp.c | The loader looks for an application on the disk first and **then in ramfs** — programs from the ISO run without being installed |
 | 72 | kernel/gui.c | The Programs window shows applications from the image when no disk is found or it is unformatted (`W_ST_RAM0`) |
 | 73 | sdk/addapp.sh | An "embed my .kapp into the ISO" script: it checks the KAPP signature, updates grub.cfg and rebuilds the images |
-| 74 | sdk/apps/snake.c | A third sample — a game with time-based animation (`on_tick`, a step of `hz()/6`) |
+| 74 | sdk/apps/snake.c | A third sample — a game with time-based animation (`on_tick`, accumulated ABI-3 `delta_ms()`) |
 
 ### Mistakes along the way
 
@@ -706,3 +706,42 @@ Screenshots: `screenshots/56_revert_banner.png`, `57_auto_reverted.png`,
 |---|---|---|
 | release/kvantos.iso | 1 429 504 | `f7e9a63d17ff22fcfbcd0e399262bb37` |
 | release/kvant.bin | 204 336 | `50755791840828f73f2c5c0b19e51418` |
+
+## Follow-up: x86-64 interrupt stack pointer (2026-10-12)
+
+A review of the new UEFI path found that both common interrupt stubs kept the
+saved frame pointer in `RAX` across a call to C. Under the SysV x86-64 ABI,
+`RAX` is caller-saved; the compiled IRQ dispatcher and its timer callback use
+it. Returning from the first timer IRQ after `sti` could therefore restore
+`RSP` from a clobbered value and crash the kernel.
+
+The stubs now keep the frame pointer in `RBX`, which the C ABI preserves; the
+interrupted `RBX` is already in the saved register frame and is restored by
+`POP_ALL`. The new `tests/boot/qemu-smoke.sh` checks that both BIOS/32-bit and
+UEFI/64-bit boots reach the serial shell prompt after interrupts are enabled.
+It is wired into CI, but could not be run in the current sandbox because NASM
+and QEMU/OVMF are not installed.
+
+## Follow-up: GUI idle rendering and timer overhead (2026-10-12)
+
+The GUI previously rebuilt the desktop and every visible window on each
+animation frame. It now tracks and merges dirty rectangles, restores damaged
+pixels from a cached wallpaper/logo/icon layer, redraws only intersecting windows,
+and presents only those framebuffer regions. Multiple clips are composed in one
+pass, so each app's `on_draw()` still runs once per frame; cursor movement marks
+only its old and new bounds. Theme, language and mode changes invalidate the
+background cache, while low-memory systems retain a clipped redraw fallback.
+
+Visible `.kapp` windows receive one update per rendered frame. ABI 3 appends a
+`delta_ms()` clock (capped at 250 ms) so fixed-step simulations can accumulate
+elapsed time instead of running faster at higher FPS. ABI-2 files remain loadable;
+their API-table prefix and existing offsets are unchanged. Snake, Pong, Life and
+Stars use elapsed-time updates, and the SDK now includes a fixed-point ray-cast
+Maze 3D game.
+
+The PIT tick was reduced from 1000 Hz to 500 Hz. Two-millisecond scheduling
+resolution provides eight ticks per 60 fps frame and halves periodic IRQ and
+scheduler work. `sleep_ms` and `task_sleep` now round positive durations up to
+a tick, so a short sleep does not become a no-op at the coarser timer
+resolution. These changes build successfully, but actual GUI performance and
+gameplay have not been measured in QEMU or on physical hardware.

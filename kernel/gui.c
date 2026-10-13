@@ -30,6 +30,13 @@ static int      dragging = -1;
 static i32      drag_dx, drag_dy;
 static int      running = 0;
 static u32     *backbuf = NULL;
+static u32     *desktop_cache = NULL; /* wallpaper, logo and desktop icons */
+static int      desktop_cache_valid = 0;
+
+#define GUI_MAX_DIRTY 24
+static fb_clip_rect_t dirty_rects[GUI_MAX_DIRTY];
+static int dirty_count = 0;
+static int dirty_all = 0;
 
 /* Pending confirmation of a resolution change (the 15-second undo). */
 static int      revert_armed = 0;
@@ -119,6 +126,65 @@ static int hit_test(int win, i32 mx, i32 my) {
     return -1;
 }
 
+static void hit_remove_window(int win) {
+    for (int i = 0; i < hit_count;) {
+        if (hits[i].win != win) { i++; continue; }
+        for (int j = i; j < hit_count - 1; j++) hits[j] = hits[j + 1];
+        hit_count--;
+    }
+}
+
+static int damage_touches(const fb_clip_rect_t *a, const fb_clip_rect_t *b) {
+    return a->x <= b->x + b->w && b->x <= a->x + a->w &&
+           a->y <= b->y + b->h && b->y <= a->y + a->h;
+}
+
+static void damage_full(void) {
+    dirty_count = 0;
+    dirty_all = 1;
+}
+
+static void damage_add_rect(i32 x, i32 y, i32 w, i32 h) {
+    if (dirty_all || w <= 0 || h <= 0 || !scr_w || !scr_h) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x >= (i32)scr_w || y >= (i32)scr_h || w <= 0 || h <= 0) return;
+    if (w > (i32)scr_w - x) w = (i32)scr_w - x;
+    if (h > (i32)scr_h - y) h = (i32)scr_h - y;
+    if (w <= 0 || h <= 0) return;
+
+    fb_clip_rect_t added = { x, y, w, h };
+    /* Keep the list non-overlapping; a merged bounding box can touch a
+       third rectangle, so re-check from the beginning after each merge. */
+    for (int i = 0; i < dirty_count;) {
+        if (!damage_touches(&added, &dirty_rects[i])) { i++; continue; }
+        fb_clip_rect_t *r = &dirty_rects[i];
+        i32 x0 = added.x < r->x ? added.x : r->x;
+        i32 y0 = added.y < r->y ? added.y : r->y;
+        i32 x1 = added.x + added.w > r->x + r->w ? added.x + added.w : r->x + r->w;
+        i32 y1 = added.y + added.h > r->y + r->h ? added.y + added.h : r->y + r->h;
+        added = (fb_clip_rect_t){ x0, y0, x1 - x0, y1 - y0 };
+        for (int j = i; j < dirty_count - 1; j++) dirty_rects[j] = dirty_rects[j + 1];
+        dirty_count--;
+        i = 0;
+    }
+    if (dirty_count >= GUI_MAX_DIRTY) { damage_full(); return; }
+    dirty_rects[dirty_count++] = added;
+
+    u32 screen_area = scr_w * scr_h;
+    u32 area = 0;
+    for (int i = 0; i < dirty_count; i++) {
+        u32 rarea = (u32)dirty_rects[i].w * (u32)dirty_rects[i].h;
+        if (rarea >= screen_area - area) { area = screen_area; break; }
+        area += rarea;
+    }
+    if (area > screen_area / 2) damage_full();
+}
+
+static void damage_panel(void) {
+    damage_add_rect(0, (i32)scr_h - PANEL_H, (i32)scr_w, PANEL_H);
+}
+
 /* identifiers of the Settings controls */
 #define W_TAB      100    /* + tab number   */
 #define W_RES      200    /* + mode number  */
@@ -188,7 +254,8 @@ static int win_open(const char *title, int app, i32 x, i32 y, i32 w, i32 h, u32 
 }
 
 static void win_close(int id) {
-    if (id < 0 || !wins[id].used) return;
+    if (id < 0 || id >= MAX_WIN || !wins[id].used) return;
+    hit_remove_window(id);
     wins[id].used = 0;
     int pos = -1;
     for (int i = 0; i < win_count; i++) if (z_order[i] == id) { pos = i; break; }
@@ -1415,7 +1482,7 @@ static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
         T("  E — notepad (text editor)", "  E — блокнот (редактор текста)"),
         T("  G — programs (install and run)", "  G — программы (установка и запуск)"),
         T("  S — display and appearance settings", "  S — настройки экрана и оформления"),
-        T("  L — frame rate cap: off / 60 / 30", "  L — предел частоты кадров: нет / 60 / 30"),
+        T("  L — frame rate cap: 60 / 30 / off", "  L — предел частоты кадров: 60 / 30 / выкл."),
         T("  Esc or Q — leave for the text console", "  Esc или Q — выйти в текстовую консоль"),
         "",
         "",
@@ -1505,6 +1572,19 @@ static icon_t icons[] = {
 #define ICON_COUNT ((int)(sizeof(icons) / sizeof(icons[0])))
 
 static int  sel_icon = -1;
+
+static void layout_icons(void) {
+    i32 dh = (i32)scr_h - PANEL_H;
+    /* Both the top margin (50) and the caption height under an icon
+       (58) are included so the last row never meets the taskbar. */
+    i32 usable = dh - 50 - 58;
+    int per_col = usable / 90 + 1;
+    if (per_col < 1) per_col = 1;
+    for (int i = 0; i < ICON_COUNT; i++) {
+        icons[i].x = 30 + (i / per_col) * (ICON_W + 20);
+        icons[i].y = 50 + (i % per_col) * 90;
+    }
+}
 
 static void draw_icon_glyph(int app, i32 x, i32 y) {
     switch (app) {
@@ -1618,21 +1698,11 @@ static void draw_desktop(void) {
     }
     (void)wm; (void)lx;
 
-    /* Icons: at a low resolution (640x480) the bottom rows did not fit
-       and were drawn underneath the taskbar. They are laid out in
-       columns according to the available height. */
-    /* Both the top margin (50) and the caption height under an icon
-       (58) are taken into account, otherwise the bottom row ran into
-       the taskbar. */
-    i32 usable = dh - 50 - 58;
-    int per_col = usable / 90 + 1;
-    if (per_col < 1) per_col = 1;
-
+    /* Icon placement depends only on screen geometry; the cache keeps
+       this whole layer until the selection, language, theme or mode changes. */
+    layout_icons();
     for (int i = 0; i < ICON_COUNT; i++) {
-        i32 x = 30 + (i / per_col) * (ICON_W + 20);
-        i32 y = 50 + (i % per_col) * 90;
-        icons[i].x = x;
-        icons[i].y = y;
+        i32 x = icons[i].x, y = icons[i].y;
         if (i == sel_icon)
             fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(50, 80, 130));
         draw_icon_glyph(icons[i].app, x + ICON_W / 2 - 24, y);
@@ -1640,8 +1710,37 @@ static void draw_desktop(void) {
     }
 }
 
-static u32 gui_fps = 0;      /* frames per second, for measurements */
-static u32 gui_fps_limit = 0;  /* 0 = unlimited; otherwise the target fps */
+static u32 gui_fps = 0;       /* frames per second, for measurements */
+static u32 gui_fps_limit = 60; /* smooth default without spinning at unlimited FPS */
+
+/* .kapp callbacks may animate their scene, so keep rendering those windows
+   at the selected frame rate. Ordinary desktop windows are static and are
+   refreshed only for input, once per second for the clock, or at 4 Hz for
+   the live system monitor. */
+static int gui_animated_window(void) {
+    if (!kapp_loaded()) return -1;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].used && wins[i].visible && !wins[i].minimized &&
+            wins[i].app == APP_USER)
+            return i;
+    return -1;
+}
+
+static int gui_has_animated_window(void) {
+    return gui_animated_window() >= 0;
+}
+
+static u32 gui_refresh_period(void) {
+    u32 hz = timer_hz();
+    if (!hz) return 1;
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].used && wins[i].visible && !wins[i].minimized &&
+            wins[i].app == APP_SYSMON) {
+            u32 quarter = hz / 4;
+            return quarter ? quarter : 1;
+        }
+    return hz;
+}
 
 static void draw_panel(void) {
     i32 py = (i32)scr_h - PANEL_H;
@@ -1711,13 +1810,133 @@ static void draw_panel(void) {
     ksnprintf(mem, sizeof(mem), T("RAM %u MiB", "ОЗУ %u МиБ"), pmm_used_frames() * 4096 / 1048576);
     fb_text((i32)scr_w - 190, py + 10, mem, fb_rgb(160, 200, 240), 0xFFFFFFFF);
 
-    /* A frame counter: it exists to measure speed on real hardware
-       instead of guessing. Updated once per second. */
+    /* Show throughput only while an application is animating; a quiet,
+       event-driven desktop is idle, not a one-frame-per-second lag. */
     char fps[24];
-    ksnprintf(fps, sizeof(fps), T("%u fps", "%u к/с"), gui_fps);
+    int animating = gui_has_animated_window();
+    if (animating) ksnprintf(fps, sizeof(fps), T("%u fps", "%u к/с"), gui_fps);
+    else            ksnprintf(fps, sizeof(fps), "%s", T("idle", "простой"));
     fb_text((i32)scr_w - 260, py + 10, fps,
-            gui_fps >= 25 ? fb_rgb(140, 230, 150) : fb_rgb(240, 200, 120),
+            animating && gui_fps >= 25 ? fb_rgb(140, 230, 150)
+                                       : fb_rgb(160, 168, 184),
             0xFFFFFFFF);
+}
+
+static void damage_window_rect(i32 x, i32 y, i32 w, i32 h) {
+    if (w <= 0 || h <= 0) return;
+    /* Include the four-pixel drop shadow as well as the window body. */
+    damage_add_rect(x, y, w + 4, h + 4);
+}
+
+static void damage_window(const window_t *v) {
+    if (!v || !v->used || !v->visible || v->minimized) return;
+    damage_window_rect(v->x, v->y, v->w, v->h);
+}
+
+static int rect_intersects(const fb_clip_rect_t *r, i32 x, i32 y, i32 w, i32 h) {
+    return w > 0 && h > 0 && r->x < x + w && x < r->x + r->w &&
+           r->y < y + h && y < r->y + r->h;
+}
+
+static int window_intersects_dirty(const window_t *v) {
+    if (!v || !v->used || !v->visible || v->minimized) return 0;
+    for (int i = 0; i < dirty_count; i++)
+        if (rect_intersects(&dirty_rects[i], v->x, v->y, v->w + 4, v->h + 4)) return 1;
+    return 0;
+}
+
+static int dirty_intersects_panel(void) {
+    i32 py = (i32)scr_h - PANEL_H;
+    for (int i = 0; i < dirty_count; i++)
+        if (rect_intersects(&dirty_rects[i], 0, py, (i32)scr_w, PANEL_H)) return 1;
+    return 0;
+}
+
+static int dirty_intersects_banner(void) {
+    if (!revert_armed) return 0;
+    for (int i = 0; i < dirty_count; i++)
+        if (rect_intersects(&dirty_rects[i], 0, 0, (i32)scr_w, 48)) return 1;
+    return 0;
+}
+
+static void hit_prune_invisible(void) {
+    for (int i = 0; i < hit_count;) {
+        int id = hits[i].win;
+        if (id >= 0 && id < MAX_WIN && wins[id].used && wins[id].visible && !wins[id].minimized) {
+            i++;
+            continue;
+        }
+        for (int j = i; j < hit_count - 1; j++) hits[j] = hits[j + 1];
+        hit_count--;
+    }
+}
+
+static void build_desktop_cache(void) {
+    if (desktop_cache) { kfree(desktop_cache); desktop_cache = NULL; }
+    desktop_cache_valid = 0;
+
+    i32 desktop_h = (i32)scr_h - PANEL_H;
+    if (desktop_h <= 0) return;
+    u32 bytes = fb_pitch_get() * (u32)desktop_h;
+    desktop_cache = (u32 *)kmalloc(bytes);
+    if (!desktop_cache) return; /* correct, uncached redraw remains available */
+
+    void *target = fb_get_target();
+    fb_clear_clip();
+    fb_set_target(desktop_cache);
+    draw_desktop();
+    fb_set_target(target);
+    desktop_cache_valid = 1;
+}
+
+/* Reconstruct and present only the union of dirty rectangles. Each window
+   is drawn once with a multi-rectangle framebuffer clip, so app callbacks
+   still run once per frame even when the damage list is disjoint. */
+static void render_damage(void) {
+    if (!dirty_count && !dirty_all) return;
+    int was_full = dirty_all;
+    if (was_full) {
+        dirty_rects[0] = (fb_clip_rect_t){ 0, 0, (i32)scr_w, (i32)scr_h };
+        dirty_count = 1;
+    }
+
+    if (!desktop_cache_valid) build_desktop_cache();
+    fb_set_target(backbuf);
+    fb_set_clip_rects(dirty_rects, (u32)dirty_count);
+
+    if (desktop_cache_valid) {
+        i32 desktop_h = (i32)scr_h - PANEL_H;
+        for (int i = 0; i < dirty_count; i++) {
+            fb_clip_rect_t r = dirty_rects[i];
+            if (r.y >= desktop_h) continue;
+            if (r.y + r.h > desktop_h) r.h = desktop_h - r.y;
+            fb_copy_rect(backbuf, desktop_cache, r.x, r.y, r.w, r.h);
+        }
+    } else {
+        /* Low-memory fallback: redraw only the clipped part, not the screen. */
+        draw_desktop();
+    }
+
+    if (was_full) hit_reset();
+    else hit_prune_invisible();
+
+    int top = top_window();
+    for (int i = 0; i < win_count; i++) {
+        int id = z_order[i];
+        if (!window_intersects_dirty(&wins[id])) continue;
+        if (!was_full) hit_remove_window(id);
+        draw_window(id, id == top);
+    }
+    if (dirty_intersects_panel() || dirty_intersects_banner()) draw_panel();
+
+    fb_clear_clip();
+    for (int i = 0; i < dirty_count; i++) {
+        fb_clip_rect_t r = dirty_rects[i];
+        fb_present_rect(backbuf, r.x, r.y, r.w, r.h);
+    }
+
+    dirty_count = 0;
+    dirty_all = 0;
 }
 
 /* the mouse cursor - an arrow with a tail */
@@ -1788,6 +2007,8 @@ static int mode_switch_buffered(const vmode_t *want, const vmode_t *fallback) {
     u32 est_w = (want->width + 15u) & ~15u;   /* the adapter may widen the scanline */
     u32 need  = est_w * (want->bpp >> 3) * want->height;
 
+    if (desktop_cache) { kfree(desktop_cache); desktop_cache = NULL; }
+    desktop_cache_valid = 0;
     if (backbuf) { kfree(backbuf); backbuf = NULL; }
     fb_set_target(NULL);
 
@@ -2393,9 +2614,9 @@ static void handle_key(int c) {
            Without a cap the picture is as smooth as possible but the
            CPU is fully loaded - on a laptop that drains the battery. */
         case 'l': case 'L':
-            if      (gui_fps_limit == 0)  gui_fps_limit = 60;
-            else if (gui_fps_limit == 60) gui_fps_limit = 30;
-            else                          gui_fps_limit = 0;
+            if      (gui_fps_limit == 60) gui_fps_limit = 30;
+            else if (gui_fps_limit == 30) gui_fps_limit = 0;
+            else                          gui_fps_limit = 60;
             break;
         case 's': case 'S': open_app(APP_SETTINGS); break;
         case 'w': case 'W': {
@@ -2404,6 +2625,128 @@ static void handle_key(int c) {
             break;
         }
     }
+}
+
+typedef struct {
+    window_t wins[MAX_WIN];
+    int z_order[MAX_WIN];
+    int win_count, sel_icon;
+    int theme_accent, theme_wall, opt_shadows, opt_seconds;
+    int revert_armed;
+    kv_lang_t language;
+    u32 scr_w, scr_h, pitch;
+    u8 bpp;
+} gui_snapshot_t;
+
+static void gui_snapshot_take(gui_snapshot_t *s) {
+    memcpy(s->wins, wins, sizeof(wins));
+    memcpy(s->z_order, z_order, sizeof(z_order));
+    s->win_count = win_count;
+    s->sel_icon = sel_icon;
+    s->theme_accent = theme_accent;
+    s->theme_wall = theme_wall;
+    s->opt_shadows = opt_shadows;
+    s->opt_seconds = opt_seconds;
+    s->revert_armed = revert_armed;
+    s->language = kv_lang_get();
+    s->scr_w = scr_w; s->scr_h = scr_h;
+    s->pitch = fb_pitch_get();
+    s->bpp = fb_bpp_get();
+}
+
+static int snapshot_window_visible(const window_t *v) {
+    return v->used && v->visible && !v->minimized;
+}
+
+static int snapshot_order(const int *order, int count, int id) {
+    for (int i = 0; i < count; i++) if (order[i] == id) return i;
+    return -1;
+}
+
+static int window_visual_state_changed(const window_t *a, const window_t *b) {
+    return a->used != b->used || a->visible != b->visible ||
+           a->minimized != b->minimized || a->x != b->x || a->y != b->y ||
+           a->w != b->w || a->h != b->h || a->app != b->app ||
+           a->accent != b->accent || strcmp(a->title, b->title) != 0;
+}
+
+static void damage_snapshot_window(const window_t *v) {
+    if (snapshot_window_visible(v)) damage_window_rect(v->x, v->y, v->w, v->h);
+}
+
+static void damage_icon(int i) {
+    if (i < 0 || i >= ICON_COUNT) return;
+    damage_add_rect(icons[i].x - 6, icons[i].y - 6, ICON_W, ICON_H);
+}
+
+static int window_at(i32 x, i32 y) {
+    for (int i = win_count - 1; i >= 0; i--) {
+        int id = z_order[i];
+        window_t *v = &wins[id];
+        if (v->used && v->visible && !v->minimized &&
+            x >= v->x && x < v->x + v->w && y >= v->y && y < v->y + v->h)
+            return id;
+    }
+    return -1;
+}
+
+static void gui_damage_after_input(const gui_snapshot_t *before, int content_win) {
+    int geometry_changed = before->scr_w != scr_w || before->scr_h != scr_h ||
+                           before->pitch != fb_pitch_get() || before->bpp != fb_bpp_get();
+    if (geometry_changed) {
+        desktop_cache_valid = 0;
+        layout_icons();
+        damage_full();
+        return;
+    }
+
+    if (before->theme_accent != theme_accent || before->theme_wall != theme_wall ||
+        before->language != kv_lang_get()) {
+        desktop_cache_valid = 0;
+        damage_full();
+        return;
+    }
+
+    if (before->sel_icon != sel_icon) {
+        /* Selection is part of the cached desktop layer, but only its old
+           and new icon bounds need to be presented after rebuilding it. */
+        desktop_cache_valid = 0;
+        damage_icon(before->sel_icon);
+        damage_icon(sel_icon);
+    }
+
+    if (before->opt_shadows != opt_shadows) {
+        for (int i = 0; i < MAX_WIN; i++) {
+            damage_snapshot_window(&before->wins[i]);
+            damage_window(&wins[i]);
+        }
+    }
+
+    int panel_changed = before->win_count != win_count ||
+                        before->opt_seconds != opt_seconds ||
+                        before->revert_armed != revert_armed;
+    if (before->revert_armed != revert_armed)
+        damage_add_rect(0, 0, (i32)scr_w, 48); /* confirmation banner */
+
+    for (int i = 0; i < MAX_WIN; i++) {
+        const window_t *old = &before->wins[i];
+        const window_t *now = &wins[i];
+        int order_changed = snapshot_order(before->z_order, before->win_count, i) !=
+                            snapshot_order(z_order, win_count, i);
+        if (window_visual_state_changed(old, now) || order_changed) {
+            damage_snapshot_window(old);
+            damage_window(now);
+            panel_changed = 1;
+        }
+    }
+
+    /* App callbacks and built-in controls can mutate private state that is
+       not represented in window_t; conservatively repaint that one window. */
+    if (content_win >= 0 && content_win < MAX_WIN) {
+        damage_snapshot_window(&before->wins[content_win]);
+        damage_window(&wins[content_win]);
+    }
+    if (panel_changed) damage_panel();
 }
 
 /* ---------- main loop ---------- */
@@ -2433,16 +2776,17 @@ int gui_run(void) {
     mouse_set_bounds((i32)scr_w, (i32)scr_h);
     mouse_set_pos((i32)scr_w / 2, (i32)scr_h / 2);
 
-    /* Tracking the changed screen area. A full frame blit (3 MiB at
-       1024x768) is the most expensive operation in the loop, so only
-       the band of rows that actually changed is sent to video memory:
-       windows, the panel, the cursor. */
-    int full_redraw = 1;                 /* the first frame is blitted in full */
-    int frame_tick = 0;
+    /* The first complete frame also builds the static desktop cache. After
+       that, each event contributes only the rectangles whose pixels changed. */
+    layout_icons();
+    damage_full();
     u32 fps_frames = 0;
     u64 fps_mark = timer_ticks();
-    i32 prev_mx = mouse_x(), prev_my = mouse_y();
-    (void)prev_mx;
+    i32 prev_mx = mouse_x(), prev_my = mouse_y(); /* last rendered cursor */
+    i32 seen_mx = prev_mx, seen_my = prev_my;     /* last input sample */
+    u32 refresh_period = gui_refresh_period();
+    u64 next_refresh = timer_ticks() + refresh_period;
+    int was_animated = 0;
 
     open_app(APP_ABOUT);
 
@@ -2453,100 +2797,153 @@ int gui_run(void) {
         /* keyboard input */
         int c;
         while ((c = kbd_getchar_nb()) >= 0) {
+            gui_snapshot_t before;
+            gui_snapshot_take(&before);
+
             /* Any deliberate keystroke proves the screen is readable:
                Enter/Y confirms the new mode, Esc undoes it at once. */
             if (revert_armed) {
-                if (c == 27 || c == 'n' || c == 'N') { mode_revert_now(); full_redraw = 1; continue; }
+                if (c == 27 || c == 'n' || c == 'N') {
+                    mode_revert_now();
+                    gui_damage_after_input(&before, -1);
+                    continue;
+                }
                 revert_armed = 0;
                 set_status(T("Resolution confirmed", "Разрешение подтверждено"), C_GREEN);
-                if (c == '\n' || c == '\r' || c == 'y' || c == 'Y') { full_redraw = 1; continue; }
+                if (c == '\n' || c == '\r' || c == 'y' || c == 'Y') {
+                    gui_damage_after_input(&before, -1);
+                    continue;
+                }
             }
-            handle_key(c); full_redraw = 1;
+
+            int content_win = top_window();
+            handle_key(c);
+            gui_damage_after_input(&before, content_win);
         }
 
         /* the user never confirmed - the screen is probably blank */
         if (revert_armed && timer_ticks() >= revert_deadline) {
+            gui_snapshot_t before;
+            gui_snapshot_take(&before);
             mode_revert_now();
-            full_redraw = 1;
+            gui_damage_after_input(&before, -1);
         }
 
         /* mouse */
         i32 mx = mouse_x(), my = mouse_y();
         int btn = mouse_buttons() & 1;
+        int mouse_moved = (mx != seen_mx || my != seen_my);
         if (btn && !prev_btn) {
+            gui_snapshot_t before;
+            gui_snapshot_take(&before);
+            int content_win = window_at(mx, my);
             if (revert_armed) {
                 revert_armed = 0;
                 set_status(T("Resolution confirmed", "Разрешение подтверждено"), C_GREEN);
             }
-            handle_click(mx, my, 1); full_redraw = 1;
+            handle_click(mx, my, 1);
+            gui_damage_after_input(&before, content_win);
         }
-        else if (!btn && prev_btn) { handle_click(mx, my, 0); full_redraw = 1; }
-        else if (btn && prev_btn) {
-            handle_drag(mx, my);
-            full_redraw = 1;
-            int top = top_window();
-            if (dragging < 0 && top >= 0 && wins[top].app == APP_PAINT)
-                handle_click(mx, my, 1);      /* continuous drawing */
+        else if (!btn && prev_btn) {
+            handle_click(mx, my, 0);
         }
-        prev_btn = btn;
-
-        /* frame */
-        u64 frame_start = timer_ticks();
-        hit_reset();
-        draw_desktop();
-        int top = top_window();
-        for (int i = 0; i < win_count; i++) draw_window(z_order[i], z_order[i] == top);
-        draw_panel();
-        draw_cursor(mx, my);
-
-        if (backbuf) {
-            if (full_redraw) {
-                fb_present(backbuf);          /* the contents changed entirely */
+        else if (btn && prev_btn && mouse_moved) {
+            if (dragging >= 0 && wins[dragging].used) {
+                gui_snapshot_t before;
+                gui_snapshot_take(&before);
+                int content_win = dragging;
+                handle_drag(mx, my);
+                gui_damage_after_input(&before, content_win);
             } else {
-                /* Nothing changed structurally: only the cursor band
-                   (its old and new place) and the panel with the clock
-                   are sent to video memory. That is tens of kilobytes
-                   instead of three megabytes. */
-                i32 cy0 = (my < prev_my ? my : prev_my) - 2;
-                i32 cy1 = (my > prev_my ? my : prev_my) + 22;
-                if (cy0 < 0) cy0 = 0;
-                if (cy1 > (i32)fb_height()) cy1 = (i32)fb_height();
-                if (cy1 > cy0) fb_present_rows(backbuf, (u32)cy0, (u32)cy1);
-
-                i32 py = (i32)fb_height() - PANEL_H;
-                if (py < 0) py = 0;
-                fb_present_rows(backbuf, (u32)py, fb_height());
+                int top = top_window();
+                if (top >= 0 && wins[top].app == APP_PAINT) {
+                    gui_snapshot_t before;
+                    gui_snapshot_take(&before);
+                    handle_click(mx, my, 1);  /* paint only on a new mouse sample */
+                    gui_damage_after_input(&before, top);
+                }
             }
         }
-        prev_mx = mx; prev_my = my;
-        full_redraw = 0;
+        prev_btn = btn;
+        seen_mx = mx; seen_my = my;
 
-        /* The Monitor window shows live counters and the panel clock
-           ticks on its own. Every 8 frames (roughly a quarter of a
-           second) the whole screen is blitted so that such changes do
-           not freeze. */
-        if (++frame_tick >= 8) { frame_tick = 0; full_redraw = 1; }
-
-        /* Measuring the frame rate with the system timer (100 Hz). */
-        fps_frames++;
-        u64 now = timer_ticks();
-        u32 hz = timer_hz();
-        if (now - fps_mark >= hz) {
-            u32 span = (u32)(now - fps_mark);      /* about a second, it fits */
-            gui_fps = span ? (fps_frames * hz / span) : 0;
+        /* Apps receive one elapsed-time update per rendered frame, while
+           rendering and transfer stay confined to their damaged window. */
+        u64 frame_start = timer_ticks();
+        u64 loop_now = frame_start;
+        int animated_id = gui_animated_window();
+        int animate = animated_id >= 0;
+        if (animate != was_animated) {
             fps_frames = 0;
-            fps_mark = now;
+            fps_mark = loop_now;
+            gui_fps = 0;
+            was_animated = animate;
+            damage_panel();
+        }
+        u32 wanted_period = gui_refresh_period();
+        if (wanted_period != refresh_period) {
+            refresh_period = wanted_period;
+            next_refresh = loop_now + refresh_period;
         }
 
-        /* There is no frame rate cap: we draw as fast as the hardware
-           allows. Control is still yielded to the scheduler, otherwise
-           background tasks would never get the CPU.
-           gui_fps_limit = 0 means unlimited, otherwise it is the
-           target fps. */
+        if (animate) {
+            window_t *v = &wins[animated_id];
+            damage_window(v);
+            damage_panel(); /* the FPS readout changes with animation */
+            if (revert_armed) damage_add_rect(0, 0, (i32)scr_w, 48);
+        } else if (loop_now >= next_refresh) {
+            /* Live widgets and expiring status text need a periodic update,
+               but only their own windows are damaged (not the wallpaper). */
+            for (int i = 0; i < MAX_WIN; i++)
+                if (wins[i].used && wins[i].visible && !wins[i].minimized)
+                    damage_window(&wins[i]);
+            damage_panel();
+            if (revert_armed) damage_add_rect(0, 0, (i32)scr_w, 48);
+            next_refresh = loop_now + refresh_period;
+        }
+
+        /* Restore the old pointer and paint the new one from the clean scene. */
+        if (mx != prev_mx || my != prev_my) {
+            damage_add_rect(prev_mx, prev_my, 13, 17);
+            damage_add_rect(mx, my, 13, 17);
+        }
+
+        /* An idle desktop sleeps until an IRQ. Animation uses the selected
+           frame cap; its on_tick delta remains based on elapsed wall time. */
+        if (!dirty_count && !dirty_all) {
+            __asm__ volatile("hlt" ::: "memory");
+            continue;
+        }
+
+        render_damage();
+
+        /* Keep the cursor out of both buffers. Any later damage under it is
+           reconstructed from the desktop cache and window layers. */
+        fb_set_target(NULL);
+        draw_cursor(mx, my);
+        fb_set_target(backbuf);
+        prev_mx = mx; prev_my = my;
+
+        /* Count animation frames only; sparse idle updates are not FPS data. */
+        if (animate) {
+            fps_frames++;
+            u64 fps_now = timer_ticks();
+            u32 hz = timer_hz();
+            if (fps_now - fps_mark >= hz) {
+                u32 span = (u32)(fps_now - fps_mark);
+                gui_fps = span ? (fps_frames * hz / span) : 0;
+                fps_frames = 0;
+                fps_mark = fps_now;
+            }
+        }
+
+        /* Animated applications are capped at 60 fps by default. The
+           scheduler still gets control between frames; L selects 30 fps
+           or unlimited rendering when desired. */
         if (gui_fps_limit) {
             u32 hz     = timer_hz();
             u32 budget = hz / gui_fps_limit;                   /* ticks per frame */
-            u32 spent  = (u32)(timer_ticks() - frame_start);   /* always too few */
+            u32 spent  = (u32)(timer_ticks() - frame_start);
             if (spent < budget) {
                 u32 left_ms = (budget - spent) * 1000u / hz;
                 if (left_ms) task_sleep(left_ms);
@@ -2559,7 +2956,10 @@ int gui_run(void) {
         }
     }
 
+    fb_clear_clip();
     fb_set_target(NULL);
+    if (desktop_cache) { kfree(desktop_cache); desktop_cache = NULL; }
+    desktop_cache_valid = 0;
     if (backbuf) { kfree(backbuf); backbuf = NULL; }
     return 0;
 }

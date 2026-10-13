@@ -79,7 +79,7 @@ apps:
 build/obj:
 	@mkdir -p build/obj
 
-build/obj/%.o: kernel/%.c | build/obj
+build/obj/%.o: kernel/%.c include/kernel.h | build/obj
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -91,7 +91,7 @@ build/obj/%.o: boot/%.asm | build/obj
 build/obj64:
 	@mkdir -p build/obj64
 
-build/obj64/%.o: kernel/%.c | build/obj64
+build/obj64/%.o: kernel/%.c include/kernel.h | build/obj64
 	@echo "  CC64 $<"
 	@$(CC) $(CFLAGS64) -c $< -o $@
 
@@ -258,13 +258,10 @@ run-curses: $(ISO)
 debug: $(ISO)
 	qemu-system-i386 -cdrom $(ISO) -m 128 -s -S -serial stdio
 
-# The full distribution set: ISO, floppy, kernel, applications and an
-# empty disk for files. This is the archive attached to a GitHub
-# release - the repository itself carries no binaries.
-#
-# On CI the whole build is logged; when it fails, the tail of the log
-# is pushed back to the repository as the annotated tag "ci-diag", so
-# the failure reason can be inspected even without Actions log access.
+# The full distribution set: GRUB and direct BIOS/UEFI ISOs, floppy,
+# kernels, applications and an empty disk image. This target only builds
+# files locally; publishing is
+# handled separately by .github/workflows/release.yml on the v3.1.0 tag.
 release:
 	@mkdir -p build
 	@if $(MAKE) --no-print-directory release-inner >build/release.log 2>&1; then \
@@ -272,77 +269,20 @@ release:
 	else \
 	    rc=$$?; \
 	    cat build/release.log; \
-	    echo; \
-	    if [ "$$GITHUB_ACTIONS" = "true" ]; then \
-	        tail -c 1500 build/release.log 2>/dev/null | tr '\n\r' '  ' > build/diag.tail; \
-	        echo "::error::release build failed rc=$$rc tail: $$(cat build/diag.tail)"; \
-	        if [ -d .git ]; then \
-	            git config user.email ci@kvantos.local 2>/dev/null || true; \
-	            git config user.name "KvantOS CI" 2>/dev/null || true; \
-	            tail -c 12000 build/release.log > build/diag.msg 2>/dev/null || true; \
-	            if git tag -f ci-diag -F build/diag.msg >/dev/null 2>&1; then \
-	                if git push -f origin refs/tags/ci-diag >/dev/null 2>build/diag.pusherr; then \
-	                    echo "DIAG: pushed tag ci-diag with the build log"; \
-	                else \
-	                    echo "::error::DIAG tag push failed: $$(tr '\n\r' '  ' < build/diag.pusherr)"; \
-	                fi; \
-	            else \
-	                echo "::error::DIAG git tag creation failed"; \
-	            fi; \
-	        fi; \
-	    fi; \
 	    exit $$rc; \
 	fi
 
 release-inner: iso floppy
+	@# Run the direct builder after the GRUB ISO: both currently create build/esp.img.
+	@$(MAKE) --no-print-directory iso-direct
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
-	@rm -f kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
-	@tar czf kvantos-3.0.0-horizon.tar.gz -C release \
-	    kvantos.iso kvantos-floppy.img kvant.bin kvant64.bin kvantefi.efi \
-	    esp.img kvantos-disk.img apps apps64
-	@echo "  DONE: kvantos-3.0.0-horizon.tar.gz ($$(du -h kvantos-3.0.0-horizon.tar.gz | cut -f1))"
-	@# --- publish the release assets straight from CI (uploads.github.com ---
-	@# --- is only reachable from the runner, not from the sandbox).     ---
-	@# --- GITHUB_TOKEN is not exported to recipe shells here, so the     ---
-	@# --- token is taken from the credential helper actions/checkout     ---
-	@# --- leaves in git config.                                          ---
-	@HDR=$$(git config --get-all http.https://github.com/.extraheader 2>/dev/null | tail -1); \
-	B64=$$(printf '%s' "$$HDR" | awk '{print $$NF}'); \
-	TOK=$$(printf '%s' "$$B64" | base64 -d 2>/dev/null | sed 's/^x-access-token://'); \
-	if [ -z "$$TOK" ]; then TOK="$$GITHUB_TOKEN"; fi; \
-	if [ "$$GITHUB_ACTIONS" = "true" ] && command -v gh >/dev/null 2>&1 && [ -n "$$TOK" ]; then \
-	    if ! GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>build/relview.err; then \
-	        echo "::notice::gh release view failed: $$(tr '\n\r' '  ' < build/relview.err | cut -c1-200)"; \
-	        echo "  REL  release v3.0.0 not found - creating it"; \
-	        if ! GH_TOKEN="$$TOK" gh release create v3.0.0 \
-	            -t "KvantOS 3.0.0 «Horizon» — 64 бита + UEFI" \
-	            -n "Полное описание релиза: см. README и CHANGELOG." \
-	            --target "$$GITHUB_SHA" 2>build/relcreate.err; then \
-	            echo "::error::gh release create failed: $$(tr '\n\r' '  ' < build/relcreate.err | cut -c1-300)"; \
-	        fi; \
-	    fi; \
-	    if GH_TOKEN="$$TOK" gh release view v3.0.0 >/dev/null 2>&1; then \
-	        echo "  REL  attaching assets to release v3.0.0"; \
-	        if GH_TOKEN="$$TOK" gh release upload v3.0.0 --clobber \
-	            kvantos-3.0.0-horizon.tar.gz \
-	            release/kvantos.iso \
-	            release/kvantos-floppy.img \
-	            release/kvant.bin \
-	            release/kvant64.bin \
-	            release/kvantefi.efi \
-	            release/esp.img \
-	            release/kvantos-disk.img 2>build/relup.err; then \
-	            echo "  REL  assets uploaded"; \
-	        else \
-	            echo "::error::release asset upload failed: $$(tr '\n\r' '  ' < build/relup.err | cut -c1-300)"; \
-	        fi; \
-	    else \
-	        echo "::error::release v3.0.0 could not be created - assets not uploaded"; \
-	    fi; \
-	else \
-	    echo "  REL  not on CI or gh/token missing - skipping release upload"; \
-	fi
+	@rm -f kvantos-3.1.0.tar.gz kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
+	@tar czf kvantos-3.1.0.tar.gz -C release \
+	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
+	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64
+	@echo "  DONE: kvantos-3.1.0.tar.gz ($$(du -h kvantos-3.1.0.tar.gz | cut -f1))"
+
 font:
 	@python3 tools/mkfont.py
 

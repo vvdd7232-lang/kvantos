@@ -50,7 +50,7 @@ build64:
 	@mkdir -p build64
 
 # Each application is one .c file, a separate ELF, then packaging
-build/%.elf: apps/%.c kapp.ld | build
+build/%.elf: apps/%.c kapp.ld ../include/kvapp.h | build
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) -c $< -o build/$*.o
 	@echo "  LD   $@"
@@ -60,7 +60,7 @@ build/%.kapp: build/%.elf mkkapp.py
 	@python3 mkkapp.py $< $@ "$(shell sed -n 's/.*KAPP_NAME[ \t]*"\(.*\)".*/\1/p' apps/$*.c | head -1)"
 	@mkdir -p ../release/apps && cp $@ ../release/apps/
 
-build64/%.elf: apps/%.c kapp.ld | build64
+build64/%.elf: apps/%.c kapp.ld ../include/kvapp.h | build64
 	@echo "  CC64 $<"
 	@$(CC) $(CFLAGS64) -c $< -o build64/$*.o
 	@echo "  LD64 $@"

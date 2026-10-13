@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.0.0 \"Horizon\""
+#define KV_VERSION  "3.1.0"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -359,6 +359,11 @@ u32  fb_rgb(u8 r, u8 g, u8 b);
 void fb_set_target(void *p);
 void *fb_get_hw(void);
 void *fb_get_target(void);
+typedef struct { i32 x, y, w, h; } fb_clip_rect_t;
+void fb_set_clip_rects(const fb_clip_rect_t *rects, u32 count);
+void fb_clear_clip(void);
+void fb_copy_rect(void *dst, const void *src, i32 x, i32 y, i32 w, i32 h);
+void fb_present_rect(const void *back, i32 x, i32 y, i32 w, i32 h);
 void fb_pixel(u32 x, u32 y, u32 c);
 void fb_fill(i32 x, i32 y, i32 w, i32 h, u32 c);
 void fb_rect(i32 x, i32 y, i32 w, i32 h, u32 c);

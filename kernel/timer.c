@@ -30,7 +30,12 @@ void timer_init(u32 hz) {
 }
 
 void sleep_ms(u32 ms) {
-    u64 target = ticks + (u64)(ms / 1000u * frequency + (ms % 1000u) * frequency / 1000u);
+    /* Round up without a 64-bit division so a sub-tick sleep cannot
+       become a no-op; the caller waits at least one timer interrupt. */
+    u64 delay = (u64)(ms / 1000u) * frequency
+              + ((ms % 1000u) * frequency + 999u) / 1000u;
+    if (ms && !delay) delay = 1;
+    u64 target = ticks + delay;
     while (ticks < target) __asm__ volatile("hlt");
 }
 

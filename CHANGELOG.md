@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.1.0
+
+### Graphics and timing
+
+* The desktop renderer now tracks dirty rectangles, restores the static
+  wallpaper/icon layer from a cache, redraws only intersecting windows and
+  presents only damaged regions. Cursor movement no longer repaints the whole
+  desktop; the idle GUI sleeps between events.
+* KvApp ABI 3 appends `delta_ms()` while preserving the ABI-2 layout and runtime
+  compatibility. The 500 Hz timer and elapsed-time simulation keep Pong, Snake,
+  Life and Stars steady across the 30/60 fps and uncapped render modes.
+
+### Applications and boot images
+
+* Added **Maze 3D**, a fixed-point, integer-only first-person maze with DDA
+  ray-casting, wall shading, collision detection and a minimap.
+* The SDK now ships eleven applications for both 32-bit and 64-bit kernels.
+* The GRUB-free direct ISO now carries BIOS and UEFI boot entries. The release
+  archive includes it alongside the standard hybrid ISO and floppy image.
+* Version bump: the kernel reports **3.1.0**.
+
 ## 3.0.0 "Horizon"
 
 ### Architecture: the move to 64-bit
