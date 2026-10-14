@@ -473,7 +473,7 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
     gBS = systab->boot_services;
     gImage = image;
 
-    print("KvantOS 3.1.0 UEFI loader (x86-64)\n");
+    print("KvantOS 3.1.1 UEFI loader (x86-64)\n");
 
     if (!gBS) fail(EFI_UNSUPPORTED, "no boot services");
 
@@ -529,7 +529,7 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
 
     /* --- strings --- */
     const char *cl = "kvantefi uefi";
-    const char *ln = "KvantEFI 3.1.0 (UEFI x86_64)";
+    const char *ln = "KvantEFI 3.1.1 (UEFI x86_64)";
     memcpyb(cmdline, cl, str_len(cl) + 1);
     memcpyb(loader, ln, str_len(ln) + 1);
     mbi->cmdline = (u32)(meta + 0x400);
@@ -537,7 +537,7 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
     mbi->boot_loader_name = (u32)(meta + 0x440);
     mbi->flags |= (1u << 9);
 
-    print("Booting KvantOS 3.1.0 (64-bit)...\n");
+    print("Booting KvantOS 3.1.1 (64-bit)...\n");
 
     /* --- memory map, fresh fetch right before handing over --- */
     map_size = 0;

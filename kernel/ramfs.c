@@ -59,6 +59,26 @@ int ramfs_create(const char *name, const char *data, u32 size) {
     return -1;
 }
 
+/* Allocate before replacing: a failed save must retain the previous file. */
+int ramfs_write(const char *name, const char *data, u32 size) {
+    if (!name || !name[0]) return -4;
+    if (strlen(name) >= sizeof(files[0].name)) return -5;
+    if (!size && data) size = (u32)strlen(data);
+    if (size == 0xFFFFFFFFu) return -3;
+    rfile_t *f = ramfs_find(name);
+    if (!f) return ramfs_create(name, data, size);
+    char *replacement = (char *)kmalloc(size + 1);
+    if (!replacement) return -3;
+    if (data) memcpy(replacement, data, size);
+    else memset(replacement, 0, size);
+    replacement[size] = 0;
+    char *old = f->data;
+    f->data = replacement;
+    f->size = size;
+    kfree(old);
+    return 0;
+}
+
 int ramfs_delete(const char *name) {
     rfile_t *f = ramfs_find(name);
     if (!f) return -1;

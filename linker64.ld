@@ -31,4 +31,6 @@ SECTIONS
     }
 
     kernel_end = ALIGN(4K);
+
+    /DISCARD/ : { *(.eh_frame*) *(.comment) }
 }

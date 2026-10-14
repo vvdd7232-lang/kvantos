@@ -76,7 +76,7 @@ iso.close()
 count = struct.unpack_from('<I', direct, 1536)[0]
 assert count == struct.unpack_from('<I', direct, 1792)[0]
 assert 1536 + 4 + count * 12 <= 1792 and 1792 + 4 + count * 12 <= 2048
-_, loads, _, _ = elf_loads(Path('release/kvant.bin').read_bytes())
+_, loads, _, bss_end = elf_loads(Path('release/kvant.bin').read_bytes())
 expected = [blob for _, blob in loads]
 expected += [p.read_bytes() for p in sorted(Path('release/apps').glob('*.kapp'))]
 assert count == len(expected)
@@ -84,6 +84,7 @@ for i, blob in enumerate(expected):
     lba, sectors, bounce = struct.unpack_from('<3I', direct, 1540 + i * 12)
     source, destination, size = struct.unpack_from('<3I', direct, 1796 + i * 12)
     offset = (lba - base_lba) * 2048
+    if i >= len(loads): assert destination >= bss_end, "module overlaps kernel BSS"
     assert source == bounce and size == len(blob) and sectors * 2048 >= size
     assert offset >= 2048 and offset + sectors * 2048 <= len(direct)
     assert direct[offset:offset + size] == blob

@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.1.0"
+#define KV_VERSION  "3.1.1"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -251,6 +251,7 @@ typedef struct { char name[24]; char *data; u32 size; int used; } rfile_t;
 void    ramfs_init(void);
 rfile_t *ramfs_find(const char *name);
 int     ramfs_create(const char *name, const char *data, u32 size);
+int     ramfs_write(const char *name, const char *data, u32 size);
 int     ramfs_delete(const char *name);
 rfile_t *ramfs_table(void);
 

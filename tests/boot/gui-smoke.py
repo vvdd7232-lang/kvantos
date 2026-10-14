@@ -54,7 +54,7 @@ def run(arch):
         else:
             raise RuntimeError(log.read_text(errors='replace'))
         text = log.read_text(errors='replace')
-        assert 'KvantOS 3.1.0' in text, text
+        assert 'KvantOS 3.1.1' in text, text
         sock = socket.socket(socket.AF_UNIX)
         sock.settimeout(5)
         sock.connect(str(monitor))

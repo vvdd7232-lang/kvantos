@@ -1,4 +1,4 @@
-# KvantOS 3.1.0
+# KvantOS 3.1.1
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -27,6 +27,17 @@ freestanding headers.
    ██║  ██╗ ╚████╔╝ ██║  ██║██║ ╚████║   ██║
    ╚═╝  ╚═╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝
 ```
+
+## C Workshop — build applications inside the OS
+
+Press **B** or open the **C Workshop** desktop icon for the built-in `hello.c`.
+**F5** builds a native `.kapp`; **F6** rebuilds and runs it. Both **32-bit BIOS**
+and **64-bit UEFI** kernels are supported without a host GCC or network inside
+the guest. This is a limited C subset, not full GCC. **Ctrl+S** saves source,
+**F2** opens it. KvFS persists files; RAM-only files disappear on reboot.
+The Workshop and Notepad have independent documents.
+
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.1](RELEASE.md)
 
 ## Quick start
 
@@ -545,3 +556,8 @@ of RAM — booted from the floppy image, the kvsh console works.
 - **NumLock lit up** — the kernel reached keyboard initialisation.
 - **Three indicators blinked plus a beep** — the system is fully up.
 - The `hwreport` command prints a summary of CPU, RAM, PCI and video mode.
+
+### C Workshop 3.1.1 (actual QEMU captures)
+
+![x86-64 Workshop: successful diskless build](screenshots/60-c-workshop-x64.png)
+![Native application compiled inside the x86-64 Workshop](screenshots/62-native-c-x64.png)

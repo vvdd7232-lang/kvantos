@@ -75,7 +75,7 @@ def main():
 
     # ---- lay out the image: stub, table, then 4K-aligned blobs ----
     blobs = [(vaddr, seg) for vaddr, seg in loads]
-    mod_dst = MOD_BASE
+    mod_dst = max(MOD_BASE, (bss_end + MOD_ALIGN - 1) & ~(MOD_ALIGN - 1))
     app_meta = []
     for name, data in apps:
         blobs.append((mod_dst, data))

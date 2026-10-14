@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.1.1
+
+* Added the in-system C Workshop: desktop icon/B, independent source editor,
+  F5 build/F6 rebuild-and-run, source/app persistence to RAM and KvFS.
+* Added a native x86-64 backend beside i386: pointer-width memory operations,
+  SysV event wrappers, aligned API/variadic calls and architecture-tagged apps.
+* Added atomic RAMFS replacement and shared safe .kapp window launching.
+* Discarded unused kernel unwind metadata to fit the embedded HDD installer;
+  direct boot modules now start beyond the kernel BSS.
+* Added bilingual guides, 73 execution tests and 40000 sanitizer mutations per
+  target, plus full guest compilation/run/reboot/diskless/ABI tests on both.
+
 ## 3.1.0
 
 ### Release validation and boot fixes

@@ -1,20 +1,20 @@
-name: Release 3.1.0
+name: Release 3.1.1
 
 on:
   push:
-    tags: ['v3.1.0']
+    tags: ['v3.1.1']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.1.0
+        default: v3.1.1
 
 permissions:
   contents: write
 
 concurrency:
-  group: kvantos-release-3.1.0
+  group: kvantos-release-3.1.1
   cancel-in-progress: false
 
 jobs:
@@ -30,9 +30,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-12 gcc-multilib nasm binutils xorriso mtools \
-            grub-pc-bin grub-common qemu-system-x86 ovmf python3
+            grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip
+      - name: Install compiler execution test dependency
+        run: python3 -m pip install --user --break-system-packages unicorn
       - name: Build distribution
         run: make CC=gcc-12 release
+      - name: Test native compiler and RAM saves
+        run: make -C tests/mcc CC=gcc-12 check sanitize ramfs
       - name: Validate images
         run: python3 tests/boot/check-images.py
       - name: Test BIOS and UEFI CD boot
@@ -43,12 +47,14 @@ jobs:
         run: BOOT_MEDIA=usb bash tests/boot/qemu-smoke.sh release/kvantos.iso
       - name: Test desktop and native application on both kernels
         run: python3 tests/boot/gui-smoke.py
+      - name: Test C Workshop on BIOS and UEFI
+        run: python3 tests/mcc/smoke.py
       - name: Package versioned sources and checksums
         run: bash tools/package-release.sh
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.1.0-release
+          name: kvantos-3.1.1-release
           path: packages/
       - name: Publish GitHub release
         env:
@@ -56,11 +62,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # Never silently replace an existing release or its assets.
-          if gh release view v3.1.0 >/dev/null 2>&1; then
-            echo 'Release v3.1.0 already exists; refusing to overwrite it.' >&2
+          if gh release view v3.1.1 >/dev/null 2>&1; then
+            echo 'Release v3.1.1 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.1.0 --verify-tag --latest \
-            --title 'KvantOS 3.1.0' --notes-file RELEASE.ru.md \
+          gh release create v3.1.1 --verify-tag --latest \
+            --title 'KvantOS 3.1.1' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
             packages/*.bin packages/*.efi packages/*SHA256SUMS.txt

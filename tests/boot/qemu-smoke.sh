@@ -117,7 +117,7 @@ fi
 
 ovmf_vars="$scratch/OVMF_VARS.fd"
 cp "$ovmf_vars_template" "$ovmf_vars"
-run_case "UEFI 64-bit" "KvantEFI 3.1.0 (UEFI x86_64)" \
+run_case "UEFI 64-bit" "KvantEFI 3.1.1 (UEFI x86_64)" \
     -machine q35,accel=tcg -cpu max -m 256 \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,file=$ovmf_vars" \

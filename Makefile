@@ -79,6 +79,9 @@ apps:
 build/obj:
 	@mkdir -p build/obj
 
+build/obj/mcc.o: CFLAGS += -Os
+build/obj64/mcc.o: CFLAGS64 += -Os
+
 build/obj/%.o: kernel/%.c include/kernel.h | build/obj
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -263,7 +266,7 @@ debug: $(ISO)
 # The full distribution set: GRUB and direct BIOS/UEFI ISOs, floppy,
 # kernels, applications and an empty disk image. This target only builds
 # files locally; publishing is
-# handled separately by .github/workflows/release.yml on the v3.1.0 tag.
+# handled separately by .github/workflows/release.yml on the v3.1.1 tag.
 release:
 	@mkdir -p build
 	@if $(MAKE) --no-print-directory release-inner >build/release.log 2>&1; then \
@@ -279,14 +282,16 @@ release-inner: iso floppy
 	@$(MAKE) --no-print-directory iso-direct
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
-	@rm -f kvantos-3.1.0.tar.gz kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
+	@rm -f kvantos-3.1.1.tar.gz kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
 	@cp LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md release/
+	@mkdir -p release/sdk
+	@cp sdk/WORKSHOP.md sdk/WORKSHOP.ru.md release/sdk/
 	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp > SHA256SUMS
-	@tar czf kvantos-3.1.0.tar.gz -C release \
+	@tar czf kvantos-3.1.1.tar.gz -C release \
 	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
 	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64 \
-	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md
-	@echo "  DONE: kvantos-3.1.0.tar.gz ($$(du -h kvantos-3.1.0.tar.gz | cut -f1))"
+	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md sdk
+	@echo "  DONE: kvantos-3.1.1.tar.gz ($$(du -h kvantos-3.1.1.tar.gz | cut -f1))"
 
 font:
 	@python3 tools/mkfont.py

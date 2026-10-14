@@ -6,6 +6,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "filemgr.h"
+#include "mcc.h"
 
 #define MAX_WIN 8
 #define TITLE_H 22
@@ -51,18 +52,18 @@ static u32 C_ACCENT, C_GREEN, C_RED, C_YELLOW, C_CYAN, C_SHADOW;
 
 enum { APP_ABOUT = 0, APP_SYSMON, APP_FILES, APP_TERM, APP_PAINT, APP_HELP, APP_SETTINGS, APP_EDIT,
        APP_STORE,      /* installing and launching programs */
-       APP_USER };     /* the window of a running .kapp application */
+       APP_DEV, APP_USER };     /* the window of a running .kapp application */
 
 /* Application names. A static initialiser cannot contain a function
    call, so both languages live in separate tables and app_name()
    returns the right string. */
 static const char *app_names_en[] = {
     "About", "Monitor", "Files", "Terminal", "Paint", "Help", "Settings", "Notepad",
-    "Programs", "Application"
+    "Programs", "C Workshop", "Application"
 };
 static const char *app_names_ru[] = {
     "О системе", "Монитор", "Файлы", "Терминал", "Рисование", "Справка", "Настройки", "Блокнот",
-    "Программы", "Приложение"
+    "Программы", "C-мастерская", "Приложение"
 };
 static const char *app_name(int i)
 {
@@ -351,21 +352,39 @@ static void app_sysmon(window_t *v, i32 cx, i32 cy, i32 cw) {
 #define ED_COLS     120        /* characters per line */
 #define ED_VIEW     20         /* visible lines without scrolling */
 
-static char ed_buf[ED_ROWS][ED_COLS + 1];
-static int  ed_lines   = 1;    /* how many lines are used */
-static int  ed_cy      = 0;    /* cursor line */
-static int  ed_cx      = 0;    /* cursor column (in bytes) */
-static int  ed_top     = 0;    /* first visible line */
-static int  ed_dirty   = 0;    /* there are unsaved changes */
-static char ed_name[24] = "untitled.txt";   /* set in gui_run() when the language changes */
-static char ed_status[64] = "";
-static u64  ed_status_until = 0;
-static int  ed_name_mode = 0;  /* 1 - a file name is being typed */
-static char ed_name_in[24] = "";
-static int  ed_blink = 0;
+/* Both editors share editing/drawing code, but never document state.
+   name_mode is first for the host smoke test's i386 memory inspection. */
+typedef struct {
+    int name_mode;
+    char buf[ED_ROWS][ED_COLS + 1];
+    int lines, cy, cx, top, left, dirty;
+    char name[24], status[96], name_in[24];
+    u64 status_until;
+} editor_t;
+static editor_t note_editor;
+static editor_t dev_editor;
+static editor_t *editor = &note_editor;
+#define ed_buf          (editor->buf)
+#define ed_lines        (editor->lines)
+#define ed_cy           (editor->cy)
+#define ed_cx           (editor->cx)
+#define ed_top          (editor->top)
+#define ed_left         (editor->left)
+#define ed_dirty        (editor->dirty)
+#define ed_name         (editor->name)
+#define ed_status       (editor->status)
+#define ed_status_until (editor->status_until)
+#define ed_name_mode    (editor->name_mode)
+#define ed_name_in      (editor->name_in)
+static char editor_text[ED_ROWS * (ED_COLS + 1)];
+static int dev_initialized, dev_help;
+static void dev_new(void);
+static int dev_build(void);
+static void dev_run(void);
 
 /* identifiers of the editor toolbar buttons */
 enum { W_ED_NEW = 40, W_ED_OPEN, W_ED_SAVE, W_ED_DEL, W_ED_FILE0 };
+enum { W_DEV_BUILD = 90, W_DEV_RUN, W_DEV_HELP };
 /* Programs window: 200 - format the disk, 201 - refresh, 210+ - a list
    row, and 300+ - the Delete button next to that same row. */
 enum { W_ST_FORMAT = 200, W_ST_REFRESH = 201, W_ST_ITEM0 = 210, W_ST_DEL0 = 300,
@@ -373,58 +392,82 @@ enum { W_ST_FORMAT = 200, W_ST_REFRESH = 201, W_ST_ITEM0 = 210, W_ST_DEL0 = 300,
        W_ST_SETUP = 500, W_ST_SETUP_KEEP = 501 };   /* installation onto the hard disk */
 
 static void ed_msg(const char *m) {
-    u32 i = 0;
-    for (; m[i] && i < sizeof(ed_status) - 1; i++) ed_status[i] = m[i];
-    ed_status[i] = 0;
-    ed_status_until = timer_ticks() + timer_hz() * 3;
+    strncpy(ed_status, m, sizeof(ed_status));
+    ed_status_until = timer_ticks() + timer_hz() * (editor == &dev_editor ? 15 : 3);
+}
+
+/* Both toolbar Save and Ctrl+S must ask for a name. */
+static void ed_prompt_save(const char *message) {
+    ed_name_mode = 1;
+    strncpy(ed_name_in, ed_name, sizeof(ed_name_in));
+    ed_msg(message);
 }
 
 static void ed_reset(void) {
     for (int i = 0; i < ED_ROWS; i++) ed_buf[i][0] = 0;
-    ed_lines = 1; ed_cy = 0; ed_cx = 0; ed_top = 0; ed_dirty = 0;
+    ed_lines = 1; ed_cy = 0; ed_cx = 0; ed_top = 0; ed_left = 0; ed_dirty = 0;
 }
 
-/* Load a file from ramfs into the line buffer. */
+/* The workshop can reopen a persisted KvFS source after reboot. */
 static int ed_load(const char *name) {
     rfile_t *f = ramfs_find(name);
-    if (!f) return 0;
-
+    const char *text;
+    u32 size;
+    if (f) { text = f->data; size = f->size; }
+    else {
+        if (editor != &dev_editor || !kvfs_mounted()) return 0;
+        size = kvfs_size(name);
+        if (!size || size >= sizeof(editor_text)) return 0;
+        int got = kvfs_read(name, editor_text, sizeof(editor_text) - 1);
+        if (got < 0 || (u32)got != size) return 0;
+        text = editor_text;
+    }
+    if (editor == &dev_editor) {
+        u32 row = 0, col = 0;
+        for (u32 i = 0; i < size; i++) {
+            if (!text[i]) return 0;
+            if (text[i] == '\n') { row++; col = 0; }
+            else if (text[i] != '\r') col++;
+            if (row >= ED_ROWS || col > ED_COLS) return 0;
+        }
+    }
     ed_reset();
     int row = 0, col = 0;
-    for (u32 i = 0; i < f->size && row < ED_ROWS; i++) {
-        char c = f->data[i];
-        if (c == '\n') {
-            ed_buf[row][col] = 0;
-            row++; col = 0;
-            continue;
-        }
-        if (c == '\r') continue;
-        if (col < ED_COLS) ed_buf[row][col++] = c;
+    for (u32 i = 0; i < size && row < ED_ROWS; i++) {
+        char c = text[i];
+        if (c == '\n') { ed_buf[row][col] = 0; row++; col = 0; }
+        else if (c != '\r' && col < ED_COLS) ed_buf[row][col++] = c;
     }
     if (row < ED_ROWS) ed_buf[row][col] = 0;
-    ed_lines = row + 1;
-    if (ed_lines > ED_ROWS) ed_lines = ED_ROWS;
-
-    u32 k = 0;
-    for (; name[k] && k < sizeof(ed_name) - 1; k++) ed_name[k] = name[k];
-    ed_name[k] = 0;
-    ed_dirty = 0;
+    ed_lines = row < ED_ROWS ? row + 1 : ED_ROWS;
+    strncpy(ed_name, name, sizeof(ed_name));
     return 1;
+}
+
+static u32 ed_export(void) {
+    u32 n = 0;
+    for (int r = 0; r < ed_lines; r++) {
+        for (int c = 0; ed_buf[r][c] && n < sizeof(editor_text) - 2; c++)
+            editor_text[n++] = ed_buf[r][c];
+        if (r < ed_lines - 1) editor_text[n++] = '\n';
+    }
+    editor_text[n] = 0;
+    return n;
 }
 
 /* Save the buffer into ramfs in one piece. */
 static int ed_save(void) {
-    static char out[ED_ROWS * (ED_COLS + 1)];
-    u32 n = 0;
-    for (int r = 0; r < ed_lines; r++) {
-        for (int c = 0; ed_buf[r][c] && n < sizeof(out) - 2; c++)
-            out[n++] = ed_buf[r][c];
-        if (r < ed_lines - 1 && n < sizeof(out) - 1) out[n++] = '\n';
+    u32 n = ed_export();
+    int rc = ramfs_write(ed_name, editor_text, n);
+    if (editor == &dev_editor && rc == 0) {
+        if (kvfs_mounted()) {
+            rc = kvfs_write(ed_name, editor_text, n, 0);
+            if (rc < 0) { ed_msg(T("RAM saved; disk save failed", "В RAM сохранено; ошибка записи на диск")); return 0; }
+            ed_msg(T("Source saved to RAM + disk", "Исходник сохранён в RAM и на диск"));
+        } else ed_msg(T("Saved to RAM only (lost on reboot)", "Только RAM: исчезнет при перезагрузке"));
+        ed_dirty = 0;
+        return 1;
     }
-    out[n] = 0;
-
-    ramfs_delete(ed_name);            /* rewriting: the old copy is removed */
-    int rc = ramfs_create(ed_name, out, n);
     if (rc >= 0) { ed_dirty = 0; ed_msg(T("File saved", "Файл сохранён")); return 1; }
     if (rc == -5) ed_msg(T("Name too long (max 23)", "Имя слишком длинное (макс. 23)"));
     else if (rc == -4) ed_msg(T("Empty file name", "Пустое имя файла"));
@@ -436,7 +479,7 @@ static int ed_save(void) {
 /* Insert a character at the cursor, shifting the rest of the line. */
 static void ed_insert_char(char c) {
     char *line = ed_buf[ed_cy];
-    int len = 0; while (line[len]) len++;
+    int len = (int)strlen(line);
     if (len >= ED_COLS) { ed_msg(T("Line is full", "Строка заполнена")); return; }
     for (int i = len; i >= ed_cx; i--) line[i + 1] = line[i];
     line[ed_cx] = c;
@@ -447,16 +490,11 @@ static void ed_insert_char(char c) {
 /* Enter: split the line and push the rest down. */
 static void ed_newline(void) {
     if (ed_lines >= ED_ROWS) { ed_msg(T("Line limit reached", "Достигнут предел строк")); return; }
-    for (int r = ed_lines; r > ed_cy + 1; r--) {
-        int k = 0;
-        for (; ed_buf[r - 1][k]; k++) ed_buf[r][k] = ed_buf[r - 1][k];
-        ed_buf[r][k] = 0;
-    }
+    for (int r = ed_lines; r > ed_cy + 1; r--)
+        strcpy(ed_buf[r], ed_buf[r - 1]);
     char *cur = ed_buf[ed_cy];
     char *nxt = ed_buf[ed_cy + 1];
-    int k = 0;
-    for (; cur[ed_cx + k]; k++) nxt[k] = cur[ed_cx + k];
-    nxt[k] = 0;
+    strcpy(nxt, cur + ed_cx);
     cur[ed_cx] = 0;
     ed_lines++;
     ed_cy++; ed_cx = 0;
@@ -475,17 +513,12 @@ static void ed_backspace(void) {
     if (ed_cy == 0) return;
 
     char *prev = ed_buf[ed_cy - 1];
-    int plen = 0; while (prev[plen]) plen++;
+    int plen = (int)strlen(prev);
     char *cur = ed_buf[ed_cy];
-    int k = 0;
-    for (; cur[k] && plen + k < ED_COLS; k++) prev[plen + k] = cur[k];
-    prev[plen + k] = 0;
+    strncpy(prev + plen, cur, ED_COLS - plen + 1);
 
-    for (int r = ed_cy; r < ed_lines - 1; r++) {
-        int j = 0;
-        for (; ed_buf[r + 1][j]; j++) ed_buf[r][j] = ed_buf[r + 1][j];
-        ed_buf[r][j] = 0;
-    }
+    for (int r = ed_cy; r < ed_lines - 1; r++)
+        strcpy(ed_buf[r], ed_buf[r + 1]);
     ed_buf[ed_lines - 1][0] = 0;
     ed_lines--;
     ed_cy--; ed_cx = plen;
@@ -1139,18 +1172,23 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
 
 /* Drawing the Notepad window. */
 static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
+    int workshop = v->app == APP_DEV;
+    editor = workshop ? &dev_editor : &note_editor;
     int wid = (int)(v - wins);
     i32 y = cy + 8;
+    int caret_on = ((u32)timer_ticks() / (timer_hz() / 2 + 1)) % 2 == 0;
 
     /* ----- toolbar ----- */
     struct { int id; const char *cap; i32 w; } btns[] = {
         { W_ED_NEW,  T("New", "Создать"),   78 },
         { W_ED_OPEN, T("Open", "Открыть"),   78 },
         { W_ED_SAVE, T("Save", "Сохранить"), 92 },
-        { W_ED_DEL,  T("Delete", "Удалить"),   78 },
+        { workshop ? W_DEV_BUILD : W_ED_DEL, workshop ? T("Build F5", "Сборка F5") : T("Delete", "Удалить"), 84 },
+        { W_DEV_RUN, T("Run F6", "Пуск F6"), 74 },
+        { W_DEV_HELP, T("Help F1", "Справка"), 72 },
     };
     i32 bx = cx + 10;
-    for (u32 i = 0; i < sizeof(btns) / sizeof(btns[0]); i++) {
+    for (u32 i = 0; i < (workshop ? 6u : 4u); i++) {
         fb_round_fill(bx, y, btns[i].w, 24, fb_rgb(238, 241, 246));
         fb_rect(bx, y, btns[i].w, 24, fb_rgb(198, 204, 214));
         fb_text_center(bx, y + 5, btns[i].w, btns[i].cap, C_TEXT, 0xFFFFFFFF);
@@ -1164,7 +1202,7 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
     fb_rect(cx + 10, y, cw - 20, 22, ed_name_mode ? C_ACCENT : fb_rgb(200, 206, 216));
     if (ed_name_mode) {
         char tmp[40];
-        ksnprintf(tmp, sizeof(tmp), T("Name: %s%s", "Имя: %s%s"), ed_name_in, ed_blink < 15 ? "_" : "");
+        ksnprintf(tmp, sizeof(tmp), T("Name: %s%s", "Имя: %s%s"), ed_name_in, caret_on ? "_" : "");
         fb_text(cx + 16, y + 4, tmp, C_TEXT, 0xFFFFFFFF);
     } else {
         char tmp[48];
@@ -1182,6 +1220,13 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
 
     int vis = area_h / 16;
     if (vis > ED_VIEW) vis = ED_VIEW;
+    if (ed_cy < ed_top) ed_top = ed_cy;
+    if (ed_cy >= ed_top + vis) ed_top = ed_cy - vis + 1;
+    int cols = (text_w - 50) / 8;
+    if (cols < 1) cols = 1;
+    if (cols > ED_COLS) cols = ED_COLS;
+    if (ed_cx < ed_left) ed_left = ed_cx;
+    if (ed_cx >= ed_left + cols) ed_left = ed_cx - cols + 1;
 
     for (int i = 0; i < vis; i++) {
         int r = ed_top + i;
@@ -1197,11 +1242,15 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
         if (r == ed_cy)
             fb_fill(cx + 44, ly - 1, text_w - 40, 16, fb_rgb(238, 243, 252));
 
-        fb_text(cx + 46, ly, ed_buf[r], C_TEXT, 0xFFFFFFFF);
+        char visible[ED_COLS + 1];
+        int len = (int)strlen(ed_buf[r]);
+        int offset = ed_left < len ? ed_left : len;
+        strncpy(visible, ed_buf[r] + offset, (u32)cols + 1);
+        fb_text(cx + 46, ly, visible, C_TEXT, 0xFFFFFFFF);
 
         /* cursor */
-        if (r == ed_cy && !ed_name_mode && ed_blink < 15) {
-            i32 curx = cx + 46 + ed_cx * 8;
+        if (r == ed_cy && !ed_name_mode && caret_on) {
+            i32 curx = cx + 46 + (ed_cx - ed_left) * 8;
             fb_fill(curx, ly - 1, 2, 15, C_ACCENT);
         }
     }
@@ -1227,6 +1276,8 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
     int shown = 0;
     for (int i = 0; i < RAMFS_MAX_FILES && fy < y + area_h - 16; i++) {
         if (!tbl[i].used) continue;
+        u32 len = (u32)strlen(tbl[i].name);
+        if (workshop && (len < 3 || strcmp(tbl[i].name + len - 2, ".c"))) continue;
         int cur = !strcmp(tbl[i].name, ed_name);
         if (cur) fb_fill(lx + 2, fy - 1, 104, 16, fb_rgb(225, 235, 250));
         fb_text(lx + 6, fy, tbl[i].name, cur ? C_ACCENT : C_TEXT, 0xFFFFFFFF);
@@ -1248,6 +1299,32 @@ static void app_edit(window_t *v, i32 cx, i32 cy, i32 cw) {
                   (u32)(ed_cy + 1), (u32)ed_lines, (u32)(ed_cx + 1));
         fb_text(cx + 12, sy, st, C_TEXT_DIM, 0xFFFFFFFF);
     }
+}
+
+static void app_dev(window_t *v, i32 cx, i32 cy, i32 cw) {
+    app_edit(v, cx, cy, cw);
+    if (!dev_help) return;
+    const char *lines[] = {
+        T("C Workshop - F1/Esc closes help", "C-мастерская: F1/Esc закрывает справку"),
+        T("F2 open .c, Ctrl+S save, F5 build, F6 build+run", "F2 открыть .c, Ctrl+S сохранить, F5 сборка, F6 пуск"),
+        T("RAM is temporary. KvFS saves survive reboot.", "RAM временна. На KvFS файлы сохраняются после перезапуска."),
+        "",
+        "void draw(void) { clear(rgb(20,30,50)); }",
+        "void key(int k) { /* keyboard handler */ }",
+        "void click(int x,int y,int b) { /* mouse */ }",
+        T("Optional: open(), tick(), close(); main() = open()", "Необязательные: open(), tick(), close(); main() = open()"),
+        "int, char, pointers; + - * / %; if/else; while; for;",
+        "return; break; continue; ++ --; && ||; functions;",
+        "rgb clear fill rect line text status ticks seconds",
+        T("Use Help in docs: sdk/WORKSHOP.md", "Полное описание: sdk/WORKSHOP.ru.md"),
+        T("No includes, structs, arrays, casts, floats or libc.", "Нет include, структур, массивов, cast, float и libc."),
+        T("Native ring-0 code: an infinite loop can hang the OS!", "Код в ring 0: бесконечный цикл может повесить ОС!"),
+    };
+    i32 x = cx + 6, y = cy + 76;
+    fb_fill(x, y, cw - 12, 244, fb_rgb(24, 32, 50));
+    fb_rect(x, y, cw - 12, 244, C_ACCENT);
+    for (unsigned i = 0; i < sizeof(lines)/sizeof(lines[0]); i++)
+        fb_text(x + 8, y + 8 + (i32)i * 16, lines[i], C_WHITE, 0xFFFFFFFF);
 }
 
 /* ============================================================
@@ -1480,6 +1557,7 @@ static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
         T("  A — about the system", "  A — о системе"),
         T("  P — paint", "  P — рисование"),
         T("  E — notepad (text editor)", "  E — блокнот (редактор текста)"),
+        T("  B — C Workshop (F5 build, F6 run)", "  B — C-мастерская (F5 сборка, F6 пуск)"),
         T("  G — programs (install and run)", "  G — программы (установка и запуск)"),
         T("  S — display and appearance settings", "  S — настройки экрана и оформления"),
         T("  L — frame rate cap: 60 / 30 / off", "  L — предел частоты кадров: 60 / 30 / выкл."),
@@ -1548,6 +1626,7 @@ static void draw_window(int id, int active) {
         case APP_HELP:   app_help(v, cx, cy, cw); break;
         case APP_SETTINGS: app_settings(v, cx, cy, cw); break;
         case APP_EDIT:   app_edit(v, cx, cy, cw); break;
+        case APP_DEV:    app_dev(v, cx, cy, cw); break;
         case APP_STORE:  app_store(v, cx, cy, cw); break;
         case APP_USER:   app_user(v, cx, cy, cw); break;
     }
@@ -1563,6 +1642,7 @@ static icon_t icons[] = {
     { 30, 140, APP_SYSMON   },
     { 30, 230, APP_FILES    },
     { 30, 320, APP_TERM     },
+    { 30, 365, APP_DEV      },
     { 30, 410, APP_PAINT    },
     { 30, 500, APP_SETTINGS },
     { 30, 590, APP_EDIT     },
@@ -1604,6 +1684,11 @@ static void draw_icon_glyph(int app, i32 x, i32 y) {
             fb_fill(x, y + 6, 16, 4, C_YELLOW);
             fb_fill(x, y + 10, 36, 24, C_YELLOW);
             fb_fill(x + 3, y + 14, 30, 2, fb_rgb(200, 150, 40));
+            break;
+        case APP_DEV:
+            fb_fill(x, y + 2, 36, 30, fb_rgb(18, 36, 58));
+            fb_rect(x, y + 2, 36, 30, C_ACCENT);
+            fb_text(x + 6, y + 10, "C{}", C_CYAN, 0xFFFFFFFF);
             break;
         case APP_TERM:
             fb_fill(x, y + 2, 36, 30, fb_rgb(18, 22, 30));
@@ -1972,6 +2057,17 @@ static void draw_cursor(i32 mx, i32 my) {
 /* ---------- input handling ---------- */
 
 static void open_app(int app) {
+    if (app == APP_EDIT && !note_editor.lines) {
+        note_editor.lines = 1;
+        strncpy(note_editor.name, "untitled.txt", sizeof(note_editor.name));
+    }
+    if (app == APP_DEV && !dev_initialized) {
+        editor_t *previous = editor;
+        editor = &dev_editor;
+        dev_new();
+        editor = previous;
+        dev_initialized = 1;
+    }
     /* if a window of this application already exists, raise it */
     for (int i = 0; i < MAX_WIN; i++)
         if (wins[i].used && wins[i].app == app) {
@@ -1988,12 +2084,109 @@ static void open_app(int app) {
     if (app == APP_SETTINGS) { w = 470; h = 430; }
     if (app == APP_STORE)  { w = 560; h = 420; }
     if (app == APP_FILES)  { w = 720; h = 480; }   /* two panes need width */
+    if (app == APP_DEV) { w = 700; h = 500; }
     if (app == APP_USER)   { w = kapp_pref_w() + 2; h = kapp_pref_h() + TITLE_H + 24; }
     i32 x = 190 + (win_count % 4) * 34;
     i32 y = 60 + (win_count % 4) * 28;
     if (x + w > (i32)scr_w) x = (i32)scr_w - w - 10;
     if (y + h > (i32)scr_h - PANEL_H) y = 40;
     win_open(app_name(app), app, x, y, w, h, C_TITLE);
+}
+
+/* Only one .kapp may run; image and disk launches have the same lifecycle. */
+static void close_user_windows(void) {
+    for (int i = 0; i < MAX_WIN; i++)
+        if (wins[i].used && wins[i].app == APP_USER) win_close(i);
+}
+
+static int launch_user_app(const char *name, const char *message) {
+    close_user_windows();
+    if (kapp_load(name) != 0) {
+        store_say(kapp_last_error());
+        return 0;
+    }
+    open_app(APP_USER);
+    int id = top_window();
+    if (id < 0 || wins[id].app != APP_USER) {
+        kapp_unload();
+        store_say(T("No free window slots", "Нет свободного места для окна"));
+        return 0;
+    }
+    {
+        window_t *v = &wins[id];
+        strncpy(v->title, kapp_name(), sizeof(v->title) - 1);
+        kapp_opened(v->x + 1, v->y + TITLE_H + 1,
+                    v->w - 2, v->h - TITLE_H - 22);
+    }
+    store_say(message);
+    return 1;
+}
+
+/* The same source can be built without a disk; Program Manager sees the
+   generated RAM .kapp immediately. KvFS receives a persistent copy if mounted. */
+static const char dev_template[] =
+    "// F5 builds, F6 builds and runs. No #include needed.\n"
+    "int count = 0;\n"
+    "void draw(void) {\n"
+    "    clear(rgb(24, 32, 50));\n"
+    "    text(20, 20, \"My first C app\", rgb(230,240,255), -1);\n"
+    "    text(20, 50, \"Click to move the square\", rgb(150,200,240), -1);\n"
+    "    fill(20 + count * 12, 90, 40, 40, rgb(60,160,240));\n"
+    "}\n"
+    "void click(int x, int y, int button) {\n"
+    "    count = (count + 1) % 20;\n"
+    "}\n";
+
+static void dev_new(void) {
+    ed_reset();
+    ed_name_mode = dev_help = 0;
+    strncpy(ed_name, "hello.c", sizeof(ed_name));
+    int row = 0, col = 0;
+    for (const char *p = dev_template; *p && row < ED_ROWS; p++) {
+        if (*p == '\n') { ed_buf[row++][col] = 0; col = 0; }
+        else ed_buf[row][col++] = *p;
+    }
+    ed_lines = row + 1;
+    ed_dirty = 1;
+    ed_msg(T("F5 build, F6 run, F1 help; save before reboot", "F5 сборка, F6 пуск, F1 справка; сохраните до перезапуска"));
+}
+
+static char dev_output[24];
+static int dev_build(void) {
+    static u8 binary[MCC_OUTPUT_MAX];
+    u32 size = 0, len = (u32)strlen(ed_name);
+    if (len < 3 || len > 20 || strcmp(ed_name + len - 2, ".c")) {
+        ed_msg(T("Name: up to 18 characters + .c", "Имя: до 18 символов и расширение .c")); return 0;
+    }
+    ed_export();
+    if (mcc_compile(editor_text, ed_name, binary, sizeof(binary), &size) < 0) {
+        char message[96];
+        int row = mcc_error_line() - 1;
+        ed_cy = row < 0 ? 0 : row >= ed_lines ? ed_lines - 1 : row;
+        ed_cx = 0; ed_scroll_to_cursor();
+        ksnprintf(message, sizeof(message), T("Line %d: %s", "Строка %d: %s"), mcc_error_line(), mcc_error());
+        ed_msg(message); return 0;
+    }
+    /* Save source before publishing the binary; never run a stale disk image. */
+    if (!ed_save()) return 0;
+    memcpy(dev_output, ed_name, len - 2);
+    strcpy(dev_output + len - 2, ".kapp");
+    if (kvfs_mounted() && kvfs_write(dev_output, binary, size, 1) < 0) {
+        ed_msg(T("Cannot write .kapp to disk", "Не удалось записать .kapp на диск")); return 0;
+    }
+    if (ramfs_write(dev_output, (const char *)binary, size) < 0) {
+        ed_msg(T("Cannot write .kapp to RAM", "Не удалось записать .kapp в RAM")); return 0;
+    }
+    char message[96];
+    ksnprintf(message, sizeof(message), T("%s: %u bytes, %s", "%s: %u байт, %s"),
+              dev_output, size, kvfs_mounted() ? T("RAM + disk", "RAM и диск") : T("RAM only: temporary", "только RAM: временно"));
+    ed_msg(message); return 1;
+}
+
+static void dev_run(void) {
+    if (!dev_build()) return;
+    if (!launch_user_app(dev_output, T("Built and started", "Собрано и запущено")))
+        ed_msg(store_msg);
 }
 
 /* Apply the selected resolution straight from the desktop.
@@ -2297,18 +2490,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                     rfile_t *tbl = ramfs_table();
                     int ri = ht->id - W_ST_RAM0;
                     if (ri >= 0 && ri < RAMFS_MAX_FILES && tbl[ri].used) {
-                        for (int q = 0; q < MAX_WIN; q++)
-                            if (wins[q].used && wins[q].app == APP_USER) win_close(q);
-                        if (kapp_load(tbl[ri].name) == 0) {
-                            open_app(APP_USER);
-                            int uw = top_window();
-                            if (uw >= 0) {
-                                strncpy(wins[uw].title, kapp_name(), sizeof(wins[uw].title) - 1);
-                                kapp_opened(wins[uw].x + 1, wins[uw].y + TITLE_H + 1,
-                                            wins[uw].w - 2, wins[uw].h - TITLE_H - 22);
-                            }
-                            store_say(T("Started from the image", "Запущено из образа"));
-                        } else store_say(kapp_last_error());
+                        launch_user_app(tbl[ri].name, T("Started from the image", "Запущено из образа"));
                     }
                     return;
                 }
@@ -2330,20 +2512,7 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                     char nm[44];
                     if (kvfs_list(ht->id - W_ST_ITEM0, nm, NULL, NULL) == 0) {
                         /* the old application window is closed: only one program at a time */
-                        for (int q = 0; q < MAX_WIN; q++)
-                            if (wins[q].used && wins[q].app == APP_USER) win_close(q);
-                        if (kapp_load(nm) == 0) {
-                            open_app(APP_USER);
-                            int uw = top_window();
-                            if (uw >= 0) {
-                                strncpy(wins[uw].title, kapp_name(), sizeof(wins[uw].title) - 1);
-                                kapp_opened(wins[uw].x + 1, wins[uw].y + TITLE_H + 1,
-                                            wins[uw].w - 2, wins[uw].h - TITLE_H - 22);
-                            }
-                            store_say(T("Started", "Запущено"));
-                        } else {
-                            store_say(kapp_last_error());
-                        }
+                        launch_user_app(nm, T("Started", "Запущено"));
                     }
                     return;
                 }
@@ -2361,7 +2530,15 @@ static void handle_click(i32 mx, i32 my, int pressed) {
         }
 
         /* the Notepad buttons and file list */
-        if (v->app == APP_EDIT) {
+        if (v->app == APP_EDIT || v->app == APP_DEV) {
+            editor = v->app == APP_DEV ? &dev_editor : &note_editor;
+            int widget = hit_test(id, mx, my);
+            if (v->app == APP_DEV) {
+                if (widget == W_DEV_HELP) { dev_help = !dev_help; return; }
+                if (dev_help) return;
+                if (widget == W_DEV_BUILD) { dev_build(); return; }
+                if (widget == W_DEV_RUN) { dev_run(); return; }
+            }
             for (int k = 0; k < hit_count; k++) {
                 hit_t *ht = &hits[k];
                 if (ht->win != id) continue;
@@ -2369,21 +2546,20 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                 if (my < ht->y || my >= ht->y + ht->h) continue;
 
                 if (ht->id == W_ED_NEW) {
+                    if (v->app == APP_DEV) { dev_new(); return; }
                     ed_reset();
                     ed_msg(T("New document", "Новый документ"));
                     return;
                 }
                 if (ht->id == W_ED_SAVE) {
-                    /* ask for a name when the file has no meaningful one yet */
-                    ed_name_mode = 1;
-                    int n = 0;
-                    for (; ed_name[n] && n < (int)sizeof(ed_name_in) - 1; n++)
-                        ed_name_in[n] = ed_name[n];
-                    ed_name_in[n] = 0;
-                    ed_msg(T("Type a name and press Enter", "Введите имя и нажмите Enter"));
+                    ed_prompt_save(T("Type a name and press Enter", "Введите имя и нажмите Enter"));
                     return;
                 }
                 if (ht->id == W_ED_OPEN) {
+                    if (v->app == APP_DEV) {
+                        ed_prompt_save(T("Open: name.c then Enter", "Открыть: имя.c и Enter"));
+                        ed_name_mode = 2; return;
+                    }
                     ed_msg(T("Pick a file from the list on the right", "Выберите файл в списке справа"));
                     return;
                 }
@@ -2486,15 +2662,34 @@ static void handle_key(int c) {
     }
 
     /* ----- Notepad on top: the editor takes all input ----- */
-    if (top >= 0 && wins[top].app == APP_EDIT) {
+    if (top >= 0 && (wins[top].app == APP_EDIT || wins[top].app == APP_DEV)) {
+        int workshop = wins[top].app == APP_DEV;
+        editor = workshop ? &dev_editor : &note_editor;
+        if (workshop && !ed_name_mode) {
+            if (c == KEY_F1) { dev_help = !dev_help; return; }
+            if (dev_help) { if (c == 27) dev_help = 0; return; }
+            if (c == KEY_F5) { dev_build(); return; }
+            if (c == KEY_F6) { dev_run(); return; }
+            if (c == KEY_F2) {
+                ed_prompt_save(T("Open: name.c then Enter", "Открыть: имя.c и Enter"));
+                ed_name_mode = 2; return;
+            }
+        }
         /* file name input mode */
         if (ed_name_mode) {
-            int len = 0; while (ed_name_in[len]) len++;
+            int len = (int)strlen(ed_name_in);
             if (c == '\n') {
                 if (len) {
-                    for (int i = 0; i <= len; i++) ed_name[i] = ed_name_in[i];
-                    ed_name_mode = 0;
-                    ed_save();
+                    if (ed_name_mode == 2) {
+                        char name[24]; strncpy(name, ed_name_in, sizeof(name));
+                        ed_name_mode = 0;
+                        ed_msg(ed_load(name) ? T("Source opened", "Исходник открыт")
+                                            : T("Cannot open: missing, binary or too large", "Не открыть: нет файла, двоичный или слишком большой"));
+                    } else {
+                        strncpy(ed_name, ed_name_in, sizeof(ed_name));
+                        ed_name_mode = 0;
+                        ed_save();
+                    }
                 } else {
                     ed_name_mode = 0;
                     ed_msg(T("No name given", "Имя не задано"));
@@ -2502,6 +2697,7 @@ static void handle_key(int c) {
                 return;
             }
             if (c == 27) { ed_name_mode = 0; ed_msg(T("Cancelled", "Отменено")); return; }
+            if (c == 21) { ed_name_in[0] = 0; return; } /* Ctrl+U clears the name */
             if (c == '\b') { if (len) ed_name_in[len - 1] = 0; return; }
             if (c >= 32 && c < 127 && len < (int)sizeof(ed_name_in) - 1) {
                 ed_name_in[len] = (char)c;
@@ -2516,56 +2712,53 @@ static void handle_key(int c) {
                 return;
             case '\n': ed_newline();      ed_scroll_to_cursor(); return;
             case '\b': ed_backspace();    ed_scroll_to_cursor(); return;
+            case KEY_HOME: ed_cx = 0; ed_scroll_to_cursor(); return;
+            case KEY_END: ed_cx = (int)strlen(ed_buf[ed_cy]); ed_scroll_to_cursor(); return;
+            case KEY_DEL: {
+                int len = (int)strlen(ed_buf[ed_cy]);
+                if (ed_cx < len) {
+                    memmove(ed_buf[ed_cy] + ed_cx, ed_buf[ed_cy] + ed_cx + 1, (u32)(len - ed_cx));
+                    ed_dirty = 1;
+                } else if (ed_cy < ed_lines - 1) { ed_cy++; ed_cx = 0; ed_backspace(); }
+                ed_scroll_to_cursor(); return;
+            }
             case KEY_LEFT:
                 if (ed_cx > 0) ed_cx--;
                 else if (ed_cy > 0) {
                     ed_cy--;
-                    ed_cx = 0; while (ed_buf[ed_cy][ed_cx]) ed_cx++;
+                    ed_cx = (int)strlen(ed_buf[ed_cy]);
                 }
                 ed_scroll_to_cursor();
                 return;
             case KEY_RIGHT: {
-                int len = 0; while (ed_buf[ed_cy][len]) len++;
+                int len = (int)strlen(ed_buf[ed_cy]);
                 if (ed_cx < len) ed_cx++;
                 else if (ed_cy < ed_lines - 1) { ed_cy++; ed_cx = 0; }
                 ed_scroll_to_cursor();
                 return;
             }
             case KEY_UP:
-                if (ed_cy > 0) {
-                    ed_cy--;
-                    int len = 0; while (ed_buf[ed_cy][len]) len++;
+            case KEY_DOWN: {
+                int next = ed_cy + (c == KEY_UP ? -1 : 1);
+                if (next >= 0 && next < ed_lines) {
+                    ed_cy = next;
+                    int len = (int)strlen(ed_buf[ed_cy]);
                     if (ed_cx > len) ed_cx = len;
                 }
                 ed_scroll_to_cursor();
                 return;
-            case KEY_DOWN:
-                if (ed_cy < ed_lines - 1) {
-                    ed_cy++;
-                    int len = 0; while (ed_buf[ed_cy][len]) len++;
-                    if (ed_cx > len) ed_cx = len;
-                }
-                ed_scroll_to_cursor();
-                return;
+            }
             case 19:                       /* Ctrl+S - save */
-                /* Ask for a name, otherwise the document was silently
-                   saved under the default name. */
-                ed_name_mode = 1;
-                {
-                    int n = 0;
-                    for (; ed_name[n] && n < (int)sizeof(ed_name_in) - 1; n++)
-                        ed_name_in[n] = ed_name[n];
-                    ed_name_in[n] = 0;
-                }
-                ed_msg(T("File name then Enter (Esc cancels)", "Имя файла и Enter (Esc - отмена)"));
+                ed_prompt_save(T("File name then Enter (Esc cancels)", "Имя файла и Enter (Esc - отмена)"));
                 return;
             case 14:                       /* Ctrl+N - new document */
+                if (workshop) { dev_new(); return; }
                 ed_reset();
                 ed_msg(T("New document", "Новый документ"));
                 return;
             case '\t':
                 for (int i = 0; i < 4; i++) ed_insert_char(' ');
-                return;
+                ed_scroll_to_cursor(); return;
         }
         if (c >= 32 && c < 127) { ed_insert_char((char)c); ed_scroll_to_cursor(); }
         return;
@@ -2609,6 +2802,7 @@ static void handle_key(int c) {
         case 'g': case 'G': open_app(APP_STORE); break;
         case 'p': case 'P': open_app(APP_PAINT); break;
         case 'e': case 'E': open_app(APP_EDIT); break;
+        case 'b': case 'B': open_app(APP_DEV); break;
         case 'h': case 'H': case '?': open_app(APP_HELP); break;
         /* The L key toggles the frame rate cap.
            Without a cap the picture is as smooth as possible but the
