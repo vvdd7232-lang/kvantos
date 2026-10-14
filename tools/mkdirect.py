@@ -125,7 +125,7 @@ def main():
         off = (len(img) + MOD_ALIGN - 1) & ~(MOD_ALIGN - 1)
         img += b"\0" * (off - len(img))
         padded = (len(data) + MOD_ALIGN - 1) & ~(MOD_ALIGN - 1)
-        entries.append((off // 512, padded // 512, bounce))
+        entries.append((off // 2048, padded // 2048, bounce))
         copies.append((bounce, dst, len(data)))
         bounce += padded
         img += data
@@ -193,6 +193,20 @@ def main():
 
     iso.write(iso_path)
     iso.close()
+    # INT 13h uses absolute 2048-byte CD LBAs, not offsets into DIRECT.IMG.
+    check = pycdlib.PyCdlib()
+    check.open(iso_path)
+    image_lba = check.get_record(iso_path="/BOOT/DIRECT.IMG;1").extent_location()
+    check.close()
+    table = struct.pack("<I", len(entries))
+    for lba, sectors, destination in entries:
+        table += struct.pack("<III", image_lba + lba, sectors, destination)
+    with open(iso_path, "r+b") as output:
+        output.seek(image_lba * 2048 + TABLE_OFF)
+        output.write(table)
+    with open(img_path, "r+b") as output:
+        output.seek(TABLE_OFF)
+        output.write(table)
     print(f"mkdirect: {iso_path} written ({os.path.getsize(iso_path)} B)")
     return 0
 

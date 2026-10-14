@@ -73,6 +73,14 @@ static void reserve(u64 base, u64 end) {
         reserved[reserved_count].base = base;
         reserved[reserved_count].end = end;
         reserved_count++;
+        /* Map clipping walks reservations in physical-address order. */
+        for (int i = reserved_count - 1; i > 0 &&
+             reserved[i].base < reserved[i - 1].base; i--) {
+            u64 b = reserved[i - 1].base, e = reserved[i - 1].end;
+            reserved[i - 1].base = reserved[i].base;
+            reserved[i - 1].end = reserved[i].end;
+            reserved[i].base = b; reserved[i].end = e;
+        }
     }
 }
 
@@ -140,10 +148,10 @@ static __attribute__((noreturn)) void fail(efi_status_t rc, const char *where) {
     for (;;) __asm__ volatile("cli; hlt");
 }
 
-/* Allocate pages below 4 GiB: the 64-bit kernel still keeps every
-   physical address in 32 bits, exactly like the 32-bit build. */
+/* Boot metadata and modules must remain inside the kernel
+   initial 128 MiB identity mapping after it replaces the EFI CR3. */
 static u64 alloc_pages_below4g(u64 pages) {
-    u64 addr = 0xFFFFFFFFULL;
+    u64 addr = 0x07FFFFFFULL;
     efi_status_t s = gBS->allocate_pages(AllocateMaxAddress, EfiLoaderData, pages, &addr);
     if (EFI_ERR(s)) return 0;
     return addr;
@@ -202,14 +210,15 @@ static const efi_guid_t li_guid  = EFI_LOADED_IMAGE_PROTOCOL_GUID;
    offers it, otherwise the largest mode up to 1920x1080. */
 static void setup_gop(mb_info_t *mbi) {
     u64 hsize = 0;
-    if (EFI_ERR(gBS->locate_handle(1 /* ByProtocol */, (efi_guid_t *)&gop_guid,
-                                   0, &hsize, 0))) return;
+    efi_status_t status = gBS->locate_handle(2 /* ByProtocol */,
+                                            (efi_guid_t *)&gop_guid, 0, &hsize, 0);
+    if (status != EFI_BUFFER_TOO_SMALL && EFI_ERR(status)) return;
     if (!hsize) return;
     u64 hcap = hsize + 8 * sizeof(efi_handle_t);
     u64 hbuf = alloc_pages_below4g((hcap + 4095) >> 12);
     if (!hbuf) return;
     hsize = hcap;
-    if (EFI_ERR(gBS->locate_handle(1, (efi_guid_t *)&gop_guid, 0, &hsize,
+    if (EFI_ERR(gBS->locate_handle(2, (efi_guid_t *)&gop_guid, 0, &hsize,
                                    (efi_handle_t *)hbuf))) return;
 
     efi_graphics_output_t *gop = 0;
@@ -306,16 +315,6 @@ static int mb_type_for(u32 efi_type) {
     }
 }
 
-/* Check that [base,end) lies inside an available EFI region. */
-static int range_available(u64 map_size, u64 desc_size, u64 base, u64 end) {
-    for (u64 off = 0; off < map_size; off += desc_size) {
-        efi_memory_descriptor_t *d = (efi_memory_descriptor_t *)(map_buf + off);
-        u64 ds = d->phys_start, de = ds + (d->pages << 12);
-        if (base >= ds && end <= de && mb_type_for(d->type) == 1) return 1;
-    }
-    return 0;
-}
-
 /* Convert the EFI map into the Multiboot-1 mmap, clipping out the
    regions the kernel must keep (kernel image, modules, tables). */
 static u64 build_mb_mmap(mb_mmap_t *out, u64 max_entries, u64 map_size,
@@ -377,27 +376,41 @@ static u64 load_kernel(u64 file_addr, u64 file_size) {
     if (file_size < sizeof(elf64_ehdr_t)) return 0;
     elf64_ehdr_t *eh = (elf64_ehdr_t *)file_addr;
     if (eh->e_ident[0] != 0x7F || eh->e_ident[1] != 'E' ||
-        eh->e_ident[2] != 'L'  || eh->e_ident[3] != 'F') return 0;
-    if (eh->e_ident[4] != 2 || eh->e_machine != 62) return 0;   /* 64-bit x86-64 */
+        eh->e_ident[2] != 'L' || eh->e_ident[3] != 'F' ||
+        eh->e_ident[4] != 2 || eh->e_machine != 62 ||
+        eh->e_phentsize != sizeof(elf64_phdr_t) ||
+        eh->e_phoff > file_size ||
+        eh->e_phnum > (file_size - eh->e_phoff) / sizeof(elf64_phdr_t)) return 0;
 
     u64 max_end = 0;
+    int entry_ok = 0;
     for (int i = 0; i < eh->e_phnum; i++) {
         elf64_phdr_t *ph = (elf64_phdr_t *)(file_addr + eh->e_phoff +
                                             (u64)i * eh->e_phentsize);
         if (ph->p_type != PT_LOAD || !ph->p_memsz) continue;
-        if (ph->p_paddr != ph->p_vaddr) continue;     /* identity kernel */
-
-        u64 dst = ph->p_vaddr;
-        if (dst < KERNEL_BASE) return 0;              /* refuses to clobber low memory */
-        if (ph->p_offset + ph->p_filesz > file_size) return 0;
-        memcpyb((void *)dst, (void *)(file_addr + ph->p_offset), ph->p_filesz);
-        if (ph->p_memsz > ph->p_filesz)
-            memsetb((void *)(dst + ph->p_filesz), 0, ph->p_memsz - ph->p_filesz);
-
-        u64 end = (dst + ph->p_memsz + 4095) & ~4095ULL;
+        if (ph->p_paddr != ph->p_vaddr || ph->p_vaddr < KERNEL_BASE ||
+            ph->p_vaddr >= 0x1000000ULL ||
+            ph->p_memsz > 0x1000000ULL - ph->p_vaddr ||
+            ph->p_filesz > ph->p_memsz || ph->p_offset > file_size ||
+            ph->p_filesz > file_size - ph->p_offset) return 0;
+        u64 end = (ph->p_vaddr + ph->p_memsz + 4095) & ~4095ULL;
         if (end > max_end) max_end = end;
+        if ((ph->p_flags & 1) && eh->e_entry >= ph->p_vaddr &&
+            eh->e_entry - ph->p_vaddr < ph->p_filesz) entry_ok = 1;
     }
-    if (!max_end || !eh->e_entry) return 0;
+    if (!max_end || !entry_ok) return 0;
+    /* Claim only the actual image, not an arbitrary 1..16 MiB window.
+       AllocateAddress also prevents overwriting firmware-owned pages. */
+    u64 base = KERNEL_BASE;
+    if (EFI_ERR(gBS->allocate_pages(AllocateAddress, EfiLoaderData,
+                                    (max_end - base) >> 12, &base))) return 0;
+    for (int i = 0; i < eh->e_phnum; i++) {
+        elf64_phdr_t *ph = (elf64_phdr_t *)(file_addr + eh->e_phoff +
+                                            (u64)i * eh->e_phentsize);
+        if (ph->p_type != PT_LOAD || !ph->p_memsz) continue;
+        memcpyb((void *)ph->p_vaddr, (void *)(file_addr + ph->p_offset), ph->p_filesz);
+        memsetb((void *)(ph->p_vaddr + ph->p_filesz), 0, ph->p_memsz - ph->p_filesz);
+    }
     reserve(KERNEL_BASE, max_end);
     return eh->e_entry;
 }
@@ -460,7 +473,7 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
     gBS = systab->boot_services;
     gImage = image;
 
-    print("KvantOS 3.0 UEFI loader (x86-64)\n");
+    print("KvantOS 3.1.0 UEFI loader (x86-64)\n");
 
     if (!gBS) fail(EFI_UNSUPPORTED, "no boot services");
 
@@ -485,11 +498,6 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
     u32 desc_version = 0;
     if (EFI_ERR(fetch_memory_map(&map_size, &map_key, &desc_size, &desc_version)))
         fail(EFI_LOAD_ERROR, "memory map");
-
-    /* The kernel lives in the 1..16 MiB window; refuse to clobber
-       anything if the firmware says the window is not free RAM. */
-    if (!range_available(map_size, desc_size, KERNEL_BASE, 0x1000000ULL))
-        fail(EFI_LOAD_ERROR, "the 1-16 MiB window is not available RAM");
 
     u64 entry = load_kernel(kfile, ksize);
     if (!entry) fail(EFI_LOAD_ERROR, "kvant64.bin is not a valid ELF64 kernel");
@@ -521,13 +529,15 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
 
     /* --- strings --- */
     const char *cl = "kvantefi uefi";
-    const char *ln = "KvantEFI 3.0 (UEFI x86_64)";
+    const char *ln = "KvantEFI 3.1.0 (UEFI x86_64)";
     memcpyb(cmdline, cl, str_len(cl) + 1);
     memcpyb(loader, ln, str_len(ln) + 1);
     mbi->cmdline = (u32)(meta + 0x400);
     mbi->flags |= (1u << 2);
     mbi->boot_loader_name = (u32)(meta + 0x440);
     mbi->flags |= (1u << 9);
+
+    print("Booting KvantOS 3.1.0 (64-bit)...\n");
 
     /* --- memory map, fresh fetch right before handing over --- */
     map_size = 0;
@@ -549,7 +559,6 @@ efi_status_t EFIAPI efi_main(efi_handle_t image, efi_system_table_t *systab) {
         /* the key went stale: map changed, try again with the new one */
     }
 
-    print("Booting KvantOS 3.0 (64-bit)...\n");
 
     void (*start)(u64, u64) = (void (*)(u64, u64))entry;
     start(MULTIBOOT_MAGIC, meta);

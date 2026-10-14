@@ -6,7 +6,8 @@ ENTRY(efi_main)
 
 SECTIONS
 {
-    . = 0;
+    /* Leave the first page for PE headers; sections must not overlap them. */
+    . = 4096;
 
     .text :
     {
@@ -26,7 +27,17 @@ SECTIONS
         *(.data.*)
         *(.sdata)
         *(.gnu.linkonce.d.*)
+        /* objcopy selects .data; include zero-initialized globals as well. */
+        *(.bss*)
+        *(COMMON)
     }
+
+    . = ALIGN(4096);
+
+    /* Fully RIP-relative code needs no fixups, but EFI loaders require a
+       base relocation directory when loading away from ImageBase zero.
+       IMAGE_REL_BASED_ABSOLUTE entries are deliberate no-ops. */
+    .reloc : { LONG(0); LONG(12); SHORT(0); SHORT(0); }
 
     . = ALIGN(4096);
 

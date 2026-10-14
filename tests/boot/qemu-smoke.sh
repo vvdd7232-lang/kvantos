@@ -76,10 +76,18 @@ run_case() {
     return 1
 }
 
+# BOOT_MEDIA=usb exercises the raw hybrid image, not El Torito CD boot.
+if [[ ${BOOT_MEDIA:-cd} == usb ]]; then
+    media=(-drive "if=none,id=bootmedia,format=raw,readonly=on,file=$iso"
+           -device qemu-xhci -device usb-storage,drive=bootmedia -boot c)
+else
+    media=(-cdrom "$iso" -boot d)
+fi
+
 # BIOS / GRUB / 32-bit kernel, using an old CPU model as a compatibility check.
-run_case "BIOS 32-bit" "" \
+run_case "BIOS 32-bit (${BOOT_MEDIA:-cd})" "" \
     -machine pc,accel=tcg -cpu pentium -m 128 \
-    -vga std -cdrom "$iso" -boot d
+    -vga std "${media[@]}"
 
 # Find a matching OVMF CODE/VARS pair. CI installs the standard Ubuntu package.
 ovmf_code=${OVMF_CODE:-}
@@ -109,8 +117,8 @@ fi
 
 ovmf_vars="$scratch/OVMF_VARS.fd"
 cp "$ovmf_vars_template" "$ovmf_vars"
-run_case "UEFI 64-bit" "KvantEFI 3.0 (UEFI x86_64)" \
+run_case "UEFI 64-bit" "KvantEFI 3.1.0 (UEFI x86_64)" \
     -machine q35,accel=tcg -cpu max -m 256 \
     -drive "if=pflash,format=raw,readonly=on,file=$ovmf_code" \
     -drive "if=pflash,format=raw,file=$ovmf_vars" \
-    -cdrom "$iso" -boot order=d
+    "${media[@]}"

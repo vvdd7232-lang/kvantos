@@ -2,6 +2,19 @@
 
 ## 3.1.0
 
+### Release validation and boot fixes
+
+* Fixed EFI PE layout, base-relocation metadata and zero-initialized globals.
+* Corrected EFI memory types and GOP enumeration; claim kernel pages before
+  copying and keep boot metadata/modules within the initial identity mapping.
+* Removed the EFI console call after ExitBootServices.
+* Fixed direct BIOS loading: absolute CD LBAs, 2048-byte sectors, copy-table
+  address/counter, register preservation and safe real-mode stack placement.
+* The main ISO now carries a GRUB disk bootstrap and GPT ESP, tested as USB.
+* Updated the GRUB version and included all eleven application modules.
+* Added image structure, dual-kernel GUI/application and USB boot regressions,
+  SHA-256 manifests, bilingual release notes and a tag-driven release workflow.
+
 ### Graphics and timing
 
 * The desktop renderer now tracks dirty rectangles, restores the static

@@ -191,6 +191,9 @@ $(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg build/hdboot.img
 	@cp build/eltorito.img build/isodir/boot/grub/i386-pc/eltorito.img
 	@xorriso -as mkisofs \
 	    -graft-points \
+	    --grub2-mbr /usr/lib/grub/i386-pc/boot_hybrid.img \
+	    -partition_offset 16 \
+	    -efi-boot-part --efi-boot-image \
 	    -b boot/grub/i386-pc/eltorito.img \
 	    -no-emul-boot -boot-load-size 4 -boot-info-table \
 	    --grub2-boot-info \
@@ -200,7 +203,6 @@ $(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg build/hdboot.img
 	    -iso-level 3 -r -J -joliet-long \
 	    -V KVANTOS \
 	    -o $@ build/isodir 2>/dev/null
-	@isohybrid --uefi $@ 2>/dev/null || isohybrid $@ 2>/dev/null || true
 	@mkdir -p release
 	@cp $@ release/kvantos.iso
 	@cp $(KERNEL) release/kvant.bin
@@ -278,9 +280,12 @@ release-inner: iso floppy
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
 	@rm -f kvantos-3.1.0.tar.gz kvantos-3.0.0-horizon.tar.gz kvantos-2.0.0-quantum.tar.gz
+	@cp LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md release/
+	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp > SHA256SUMS
 	@tar czf kvantos-3.1.0.tar.gz -C release \
 	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
-	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64
+	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64 \
+	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md
 	@echo "  DONE: kvantos-3.1.0.tar.gz ($$(du -h kvantos-3.1.0.tar.gz | cut -f1))"
 
 font:

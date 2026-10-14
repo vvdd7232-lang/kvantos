@@ -31,3 +31,8 @@ tests/fs/build/
 tests/fs/include/
 tests/fs/mnt_bigdata.ref
 __pycache__/
+
+# Complete generated release output and offline publication bundle
+/release/
+/packages/
+kvantos-*.bundle

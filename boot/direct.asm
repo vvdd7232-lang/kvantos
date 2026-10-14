@@ -23,7 +23,7 @@
 bits 16
 org 0x7C00
 
-STACK_TOP   equ 0x7F00
+STACK_TOP   equ 0x7000
 E820_BUF    equ 0x80000
 E820_MAX    equ 64
 VBINFO      equ 0x81000
@@ -40,7 +40,7 @@ MMAP_TAB    equ 0x92000
 STR_AREA    equ 0x91000
 MB_MAGIC    equ 0x2BADB002
 READ_TABLE  equ 0x8200              ; fourth sector of the loaded stub
-COPY_TABLE  equ 0x8280              ; bounce -> final addresses, same sector
+COPY_TABLE  equ 0x8300              ; bounce -> final addresses, same sector
 DAP         equ 0x6000
 BOUNCE      equ 0x10000             ; INT 13h can only address seg:off
                                     ; (up to ~1.06 MiB), so everything is
@@ -49,6 +49,7 @@ BOUNCE      equ 0x10000             ; INT 13h can only address seg:off
 
 start:
     cli
+    cld
     xor ax, ax
     mov ds, ax
     mov es, ax
@@ -175,17 +176,22 @@ start:
     mov eax, dword [esi]            ; LBA
     mov ebx, dword [esi + 4]        ; sectors
     mov edi, dword [esi + 8]        ; bounce destination
+    pushad
     call read_sectors
+    popad
     add esi, 12
     dec ecx
-    mov si, msg_dot                 ; progress dot (SI only)
+    pushad
+    mov si, msg_dot
     call say
+    popad
     jmp .read_next
 .read_done:
 
     ; ---- protected mode ----
     mov si, msg_pm
     call say
+    cli
     lgdt [gdt_ptr]
     mov eax, cr0
     or eax, 1
@@ -239,14 +245,16 @@ read_sectors:
     mov word [DAP + 6], dx          ; segment
     mov dword [DAP + 8], eax        ; LBA low
     mov dword [DAP + 12], 0         ; LBA high
+    pushad                         ; BIOS may clobber registers
     mov ah, 0x42
     mov si, DAP
     mov dl, byte [boot_drive]
     int 0x13
+    popad                          ; does not alter carry
     jc .rs_err
-    shl ebp, 9
+    shl ebp, 11
     add edi, ebp
-    shr ebp, 9
+    shr ebp, 11
     add eax, ebp
     sub ebx, ebp
     jmp .rs_loop
@@ -293,8 +301,11 @@ pm_entry:
     mov ebp, dword [ebx + 8]        ; byte size
     add ebp, 3
     shr ebp, 2
+    push ecx
+    mov ecx, ebp
     cld
     rep movsd
+    pop ecx
     add ebx, 12
     dec ecx
     jmp .copy_next
