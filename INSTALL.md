@@ -33,7 +33,7 @@ kvant:/$ ls              <- your .kapp is already here
 kvant:/$ guimenu         <- graphics mode
 ```
 
-Press **G** (or the Programs icon) → your program is in the list → clicking the
+Click **Programs** or **KVANT → Programs** → your program is in the list → clicking the
 row launches it.
 
 Several applications at once:

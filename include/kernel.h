@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.1.1"
+#define KV_VERSION  "3.1.2"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -157,6 +157,9 @@ int   kbd_getchar_nb(void);      /* -1 when no character is available */
 char  kbd_getchar(void);         /* blocking read */
 void  kbd_set_leds(u8 mask);     /* bits: 1 Scroll, 2 Num, 4 Caps */
 u8    kbd_get_leds(void);        /* the mask currently lit */
+int   kbd_shift(void);
+int   kbd_mousekeys(void);
+void  kbd_mousekeys_set(int on);
 void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 
 #define KEY_UP     0x81
@@ -387,6 +390,9 @@ u8   mouse_buttons(void);
 u32  mouse_events(void);
 void mouse_set_bounds(i32 w, i32 h);
 void mouse_set_pos(i32 x, i32 y);
+int  mouse_wheel_delta(void);
+void mouse_move_rel(i32 dx, i32 dy);
+void mouse_set_button(int btn, int down);
 
 /* ---------- PCI bus ---------- */
 #define PCI_MAX_DEV 48

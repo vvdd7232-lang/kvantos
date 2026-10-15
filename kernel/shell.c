@@ -702,7 +702,7 @@ static void cmd_guimenu(void) {
         return;
     }
     kputs(T("\n  Switching to graphics mode...\n", "\n  Переключение в графический режим...\n"));
-    kputs(T("  Back to the console: Esc or Q\n", "  Выход обратно в консоль: Esc или Q\n"));
+    kputs(T("  Back to the console: KVANT menu > Exit to console\n", "  Выход в консоль: меню КВАНТ > Выйти в консоль\n"));
     sleep_ms(400);
 
     int grc = gui_run();

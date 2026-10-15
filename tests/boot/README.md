@@ -48,3 +48,20 @@ After committing/tagging `v3.1.0`, `bash tools/package-release.sh` creates the
 source archive and external checksums under `packages/`. The workflow
 `.github/workflows/release.yml` builds/tests/packages before publishing on a
 `v3.1.0` tag push and refuses to overwrite an existing release.
+
+
+## Mouse-first editors (3.1.2)
+
+```sh
+make CC=gcc-12 release
+make -C tests/mcc CC=gcc-12 editors
+python3 tests/boot/editor-smoke.py
+```
+
+Uses real pointer input with bounded guest-coordinate feedback, never blind
+mouse retries. Checks disabled letter launchers, single-click icons and menu,
+caret/selection/edge auto-scroll, cross-editor clipboard, undo/redo, UTF-8,
+RAM/disk file pickers and paging, filename caret, empty/binary/oversize files,
+new/close/quit/overwrite guards, wheel, both draggable scrollbars, optional
+MouseKeys, 640x480 bounds, Russian UI and actual Notepad KvFS persistence.
+Generated screenshots and private disks live under `build/editor-smoke/`.

@@ -1,39 +1,55 @@
-# KvantOS 3.1.1 — C Workshop
+# KvantOS 3.1.2 — mouse-first editors
 
-October 14, 2026. Corrective release after 3.1.0: **the C Workshop is now actually included in both kernel images**.
+October 15, 2026. A separate update to Notepad, C Workshop and desktop navigation for **BIOS/i386 and UEFI/x86-64**. Older releases and assets are not replaced.
 
-## Opening it
+## Getting started
 
-Boot the new **v3.1.1 `kvantos.iso`**, enter `guimenu`, then press **B** or open the **C Workshop** desktop icon. Icons wrap into a second column on shorter screens. The built-in `hello.c` is ready to build with **F5** or rebuild/run with **F6**. Clicking inside the generated application's window moves its square through a native C callback.
+1. Boot **v3.1.2 `kvantos.iso`** and enter `guimenu` in the text shell.
+2. Single-click **Notepad** or **C Workshop**, or choose it from the bottom-left **KVANT** menu.
+3. Click text to position the caret; drag to select. **Copy / Cut / Paste / Undo / Select all** have clickable buttons.
+4. In Workshop, click **Build** or **Run** to compile the built-in `hello.c` into a native application. **Help** has its own Close help button.
+5. Close windows with the cross, switch with the taskbar/menu, and use **KVANT → Exit to console** to leave.
 
-## Added
+Single-letter desktop launch/close/quit commands such as **G/B/E/T/Q/W** are gone. The keyboard remains for text and optional editor shortcuts; **in-game keyboard controls are preserved**. Esc in an editor dismisses a dialog/selection, not the window or desktop.
 
-- An independent source editor with line numbers, scrolling, Home/End/Delete/Tab and no shared Notepad document state.
-- Native compilation of a limited C subset **inside the OS**, without a host GCC, network or external tools.
-- **i386 and x86-64 backends**, selected by the running kernel. The 64-bit backend implements native-width pointers, SysV callback wrappers and aligned API/variadic calls.
-- **Ctrl+S** saves, **F2** opens by filename, **Ctrl+U** clears the filename, **F1** shows help and **Ctrl+N** restores the template.
-- RAM source/application storage plus persistent copies on mounted KvFS. F2 reopens persisted source after a reboot. Diskless mode explicitly warns that files are temporary.
-- Compilation error line reporting; F6 never runs stale output in place of a failed build.
-- Atomic RAMFS replacement and safe handling of exhausted window slots on `.kapp` launches.
+## Changes
 
-See [the Workshop guide](sdk/WORKSHOP.md).
+- Mouse caret positioning, multiline selection and edge auto-scroll. UTF-8 caret, selection and deletion respect character boundaries.
+- Shared clipboard between editors; independent documents and one-step undo/redo. Click Undo again to redo.
+- **Open / Save as** dialogs with RAM/Disk (KvFS) file lists, paging, a clickable filename caret, confirmation and cancel buttons. Selecting a file no longer requires typing a path or pressing Enter.
+- Working draggable vertical/horizontal scrollbars with arrow/page controls; mouse wheel and Shift+wheel. Scrolling does not chase an unchanged caret during repaint.
+- Unsaved-change guards on new/open/close and both desktop exit paths. Replacing another existing file or deleting requires confirmation.
+- **Notepad now saves to RAM + mounted KvFS**, like Workshop. Without a supported disk RAM is temporary and the status warns about it.
+- Atomic bounded editing: 128 lines, 120 bytes/line. Overflowing paste, line joins or loads never silently truncate or discard the current document. Binary input is rejected.
+- Optional **MouseKeys**, enabled through KVANT or NumLock: keypad 8/2/4/6 and diagonals move, 5 clicks, 0 holds, decimal releases, Shift is precise, Ctrl faster and +/- adjust speed. Off by default.
+
+Dirty-rectangle rendering, desktop caching, both native compiler backends, `.c/.kapp`, RAM/KvFS, eleven SDK apps per architecture and both boot paths remain intact. Editor layouts also fit **640×480**.
+
+[Workshop guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.2/sdk/WORKSHOP.md) · [README](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.2/README.md).
+
+![Mouse selection in Notepad](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.2/screenshots/63_notepad_mouse_uefi64.png)
+
+![Mouse-first Workshop](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.2/screenshots/64_workshop_mouse_uefi64.png)
 
 ## Validation
 
-- **73 generated-code execution checks per backend**, 146 total. x86-64 tests use a stack above 4 GiB and verify pointers, SysV alignment and callee-saved registers.
-- **40,000 input mutations per backend**, 80,000 total, under ASan/UBSan, plus atomic RAMFS save/OOM regressions.
-- Both QEMU BIOS/i386 and UEFI/x86-64 guests: compilation, native execution/clicks, independent editors, error paths, KvFS persistence across a full reboot and Russian diskless build/run.
-- Both guests additionally compile/run locals, double pointers, heap allocation, an eight-argument function and variadic `format`.
-- BIOS/UEFI CD boot, BIOS/UEFI USB boot and native Maze 3D regressions from 3.1.0 remain enabled.
+Built with GCC 12. The release workflow runs these checks before publishing:
 
-GCC 12 is used to build this release. Tests are shipped with the sources and run by the release workflow before publishing.
+- 73 generated-code checks/backend, 40,000 compiler mutations/backend under ASan/UBSan, atomic RAMFS/OOM tests.
+- Text model: selection, UTF-8, undo/redo, limits and atomic failures, plus 25,000 edits under ASan/UBSan.
+- Both QEMU kernels: actual mouse editing, clipboard, file dialogs, save/cancel/overwrite, empty/binary/oversize files, wheel and both thumbs, edge auto-scroll, file paging, MouseKeys, Russian UI, exit guards and 640×480 bounds.
+- Actual Notepad KvFS persistence, inspecting disk content after the guest exits.
+- In-guest C compilation/execution, independent editors, native draw/click, no stale run after errors, source reopening after a full reboot, ABI/heap/eight arguments/variadic format and Russian diskless build/run.
+- BIOS/UEFI CD and USB, GRUB-free direct ISO and native Maze 3D keyboard/timer regressions.
+
+Pointer tests use measured guest coordinates and bounded movement, not blind mouse retries. Physical hardware is not separately certified.
 
 ## Downloads and running
 
-- **`kvantos.iso`**: recommended BIOS/UEFI image and raw-USB hybrid.
-- **`kvantos-3.1.1.tar.gz`**: full distribution with both ISOs, floppy, kernels, EFI loader, ESP, empty KvFS disk, eleven SDK apps per architecture, docs and SHA256SUMS. The Workshop is built into the kernel, not shipped as a twelfth SDK app.
+- **`kvantos.iso`**: recommended BIOS/UEFI ISO and raw-USB hybrid.
 - **`kvantos-direct.iso`**: GRUB-free BIOS/UEFI CD/DVD fallback, not a raw-USB hybrid.
-- **`kvantos-3.1.1-source.tar.gz`**: matching sources; **`kvantos-3.1.1-SHA256SUMS.txt`**: download checksums.
+- **`kvantos-3.1.2.tar.gz`**: full distribution with both ISOs, floppy, kernels, EFI, ESP, empty KvFS disk, apps, docs and SHA256SUMS.
+- **`kvantos-3.1.2-source.tar.gz`**: matching sources; **`kvantos-3.1.2-SHA256SUMS.txt`**: download checksums.
 
 Extract the full distribution. BIOS example:
 
@@ -42,7 +58,7 @@ qemu-system-i386 -m 256 -boot d -cdrom kvantos.iso \
   -drive file=kvantos-disk.img,format=raw,if=ide
 ```
 
-UEFI example (Secure Boot disabled):
+UEFI example (OVMF, Secure Boot disabled):
 
 ```sh
 cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS.fd
@@ -55,12 +71,10 @@ qemu-system-x86_64 -machine q35 -m 256 \
   -device ide-hd,bus=kvide.0,drive=kvdata
 ```
 
-Use `lang ru` for Russian. Run `sha256sum -c SHA256SUMS` inside the extracted distribution to verify its files.
+Persistence requires supported **IDE/ATA PIO**, not AHCI/SATA/NVMe. q35's default `-drive if=ide` is unsupported AHCI; use the separate PIIX3 controller above. Diskless compilation and execution still work in RAM. Use `lang ru` for Russian. Inside the full distribution run `sha256sum -c SHA256SUMS`; for release downloads use `sha256sum -c kvantos-3.1.2-SHA256SUMS.txt`.
 
 ## Limitations
 
-Not full ISO C or GCC: no preprocessing, structures, typedefs, floating point, standard library, array declarations or complete type checking. Existing `sys->...` SDK examples need adaptation. Source is portable between the two backends; generated `.kapp` binaries are architecture-specific.
+Experimental OS: apps run in **ring 0 without full isolation** and can corrupt memory or hang the machine. Workshop implements a limited C subset, not GCC/full ISO C: no preprocessing, structures, typedefs, floating point, libc, array declarations or complete type checking. Source can be moved between architectures and rebuilt; generated binaries are architecture-specific. Clipboard is internal, not shared with the host OS; undo is one-step. A Russian keyboard layout and direct editor writes to FAT32/NTFS were not added in this release.
 
-This is an experimental OS. Applications run in **ring 0 without full isolation**: invalid pointers or infinite loops can corrupt memory or hang the system. Read INSTALL.md and back up data before real-disk installation.
-
-License: MIT.
+Back up data and read INSTALL.md before installing to a real disk. License: MIT.

@@ -1,4 +1,4 @@
-# KvantOS 3.1.1
+# KvantOS 3.1.2
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -30,14 +30,14 @@ freestanding headers.
 
 ## C Workshop — build applications inside the OS
 
-Press **B** or open the **C Workshop** desktop icon for the built-in `hello.c`.
-**F5** builds a native `.kapp`; **F6** rebuilds and runs it. Both **32-bit BIOS**
+Click **C Workshop** on the desktop or in the **KVANT** menu for `hello.c`.
+The **Build** button creates a native `.kapp`; **Run** rebuilds and starts it. Both **32-bit BIOS**
 and **64-bit UEFI** kernels are supported without a host GCC or network inside
-the guest. This is a limited C subset, not full GCC. **Ctrl+S** saves source,
-**F2** opens it. KvFS persists files; RAM-only files disappear on reboot.
+the guest. This is a limited C subset, not full GCC. **Save** writes source;
+**Open** shows a RAM/disk file picker. KvFS persists files; RAM-only files disappear on reboot.
 The Workshop and Notepad have independent documents.
 
-[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.1](RELEASE.md)
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.2](RELEASE.md)
 
 ## Quick start
 
@@ -190,10 +190,26 @@ A graphical counterpart of the `vidmode`/`refresh` commands, with three tabs:
 Internally there is a system of *hit areas*: widgets register their rectangles
 when the scene is redrawn, and a mouse click looks for a hit in reverse drawing order.
 
-Keys: `T` terminal, `M` monitor, `F` files, `A` about, `P` paint, `S` settings,
-`G` programs, `E` notepad, `W` close the active window, `L` cycles the frame cap
-(60 / 30 fps / uncapped), arrows + Enter pick an icon, and `Esc`/`Q` returns
-to the text console.
+Mouse navigation: single-click a desktop icon or use **KVANT → application**;
+the taskbar switches windows, title bars drag them, and the cross closes them.
+Use **KVANT → Exit to console** to leave. Single-letter G/B/E/T/Q/W and other
+desktop launch/close shortcuts are gone. In-game keyboard controls are unchanged.
+
+Both editors support click-to-position, drag selection with edge auto-scroll,
+shared Copy/Cut/Paste, independent one-step Undo/Redo, Select all, draggable
+vertical/horizontal scrollbars and the mouse wheel. Open / Save as provide
+RAM/disk file lists, an editable name field and clickable confirmation/cancel.
+New/open/close/exit protect unsaved text; replacing another file and deletion
+require confirmation. Notepad now saves to RAM + mounted KvFS too. Without a
+disk RAM is temporary. Text input, arrows and optional Ctrl+C/V/X/A/Z/S,
+Ctrl+O/N/W and F5/F6 remain. Esc dismisses a dialog/selection, not the editor.
+
+Optional **KVANT → MouseKeys** (or NumLock): keypad 8/2/4/6 and 7/9/1/3 move,
+5 clicks, 0 holds, decimal releases; Shift is precise, Ctrl faster, +/- change
+speed. Off by default.
+
+![Mouse selection in Notepad](screenshots/63_notepad_mouse_uefi64.png)
+![Mouse-first C Workshop](screenshots/64_workshop_mouse_uefi64.png)
 
 ### Video adapter, resolution and refresh rate
 
@@ -457,7 +473,7 @@ The resulting `release/kvantos.iso` can be attached to VMware/VirtualBox or
 burned to a disc: the applications will be in the system straight away, **with no
 hard disk at all**. A disk is only needed so that programs can save their files.
 
-Inside the system: the **Programs** icon (key **G**) lists, launches and removes
+Inside the system: the **Programs** icon or **KVANT → Programs** lists, launches and removes
 them. From the shell: `disk`, `format`, `install`, `apps`, `dls`.
 
 Eleven applications are bundled — three richly commented samples plus eight

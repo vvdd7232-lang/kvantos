@@ -5,6 +5,8 @@
 static volatile char buf[BUF_SIZE];
 static volatile u32 head = 0, tail = 0;
 static int shift = 0, ctrl = 0, caps = 0, extended = 0;
+static int mousekeys, mk_speed=1;
+static u64 mk_release;
 static void kbd_sync_leds(void);   /* defined below */
 
 static const char map_lower[128] = {
@@ -75,7 +77,48 @@ static void kbd_cb(registers_t *r) {
         return;
     }
 
+    /* ---------- MouseKeys ----------
+       With NumLock on, the keypad drives the pointer instead of typing
+       digits: 8/2/4/6 move it, 7/9/1/3 move it diagonally, 5 clicks,
+       0 holds the button down (for dragging), . releases it, + and -
+       change the step. Holding Shift moves by a single pixel for
+       precise aiming, Ctrl moves in large jumps.
+
+       The keypad digits were not reachable at all before this (they are
+       absent from map_lower), so nothing that used to work changes. */
+    if (mousekeys) {
+        i32 step = 8;
+        if (shift) step = 1;            /* precise */
+        else if (ctrl) step = 48;       /* fast */
+        step *= mk_speed;
+
+        switch (sc) {
+            case 0x48: mouse_move_rel(0, -step); return;   /* 8 */
+            case 0x50: mouse_move_rel(0,  step); return;   /* 2 */
+            case 0x4B: mouse_move_rel(-step, 0); return;   /* 4 */
+            case 0x4D: mouse_move_rel( step, 0); return;   /* 6 */
+            case 0x47: mouse_move_rel(-step, -step); return; /* 7 */
+            case 0x49: mouse_move_rel( step, -step); return; /* 9 */
+            case 0x4F: mouse_move_rel(-step,  step); return; /* 1 */
+            case 0x51: mouse_move_rel( step,  step); return; /* 3 */
+            case 0x4C:                                     /* 5 - click */
+                mouse_set_button(0, 1);
+                mk_release = timer_ticks()+timer_hz()*60/1000+1;
+                return;
+            case 0x52: mk_release=0; mouse_set_button(0, 1); return;     /* 0 - hold */
+            case 0x53: mk_release=0; mouse_set_button(0, 0); return;     /* . - release */
+            case 0x4E:                                     /* + faster */
+                if (mk_speed < 8) mk_speed++;
+                return;
+            case 0x4A:                                     /* - slower */
+                if (mk_speed > 1) mk_speed--;
+                return;
+        }
+    }
+
     switch (sc) {
+        case 0x45:
+            kbd_mousekeys_set(!mousekeys); return;
         case 0x2A: case 0x36: shift = 1; return;
         case 0x1D: ctrl = 1; return;
         /* the grey navigation block, and the same keys on the numeric
@@ -139,7 +182,15 @@ static void kbd_wait_ack(void) {
 
 /* Mirror the CapsLock state on the keyboard indicator. */
 static void kbd_sync_leds(void) {
-    kbd_set_leds((u8)(caps ? 0x04 : 0x00));
+    kbd_set_leds((u8)((caps?4:0)|(mousekeys?2:0)));
+}
+
+int kbd_shift(void) { return shift; }
+int kbd_mousekeys(void) { return mousekeys; }
+void kbd_mousekeys_set(int on) {
+    mousekeys=on?1:0; mk_release=0;
+    if(!mousekeys) mouse_set_button(0,0);
+    kbd_sync_leds();
 }
 
 /* A fallback poll. On some laptops IRQ1 never reaches the PIC
@@ -160,6 +211,7 @@ void kbd_poll(void) {
         if (st & 0x20) break;          /* a mouse byte, not ours */
         kbd_cb(0);
     }
+    if(mk_release && timer_ticks()>=mk_release) { mk_release=0; mouse_set_button(0,0); }
     irq_restore(fl);
 }
 

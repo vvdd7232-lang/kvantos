@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.1.2 — mouse-first editors
+
+* Removed single-letter desktop launch/close/quit shortcuts; added single-click
+  icons and a KVANT applications/exit menu. In-game keys are unchanged.
+* Added mouse caret positioning, UTF-8 drag selection with edge auto-scroll,
+  shared clipboard, independent one-step undo/redo and clickable editing tools.
+* Added RAM/KvFS open/save-as pickers, editable filename caret, overwrite/delete
+  confirmation and unsaved-change guards for new/open/close/both exit paths.
+* Added working draggable vertical/horizontal scrollbars, IntelliMouse wheel
+  negotiation with plain PS/2 fallback, and optional NumPad MouseKeys.
+* Notepad now saves to mounted KvFS as well as RAM. Bounded text-model edits and
+  loads are atomic: limits or binary input never silently truncate the document.
+* Kept dirty rendering and both native compiler backends. Added sanitizer/model
+  tests (25000 edits) and full measured mouse workflows on BIOS/i386 and UEFI/x64,
+  including real disk persistence, Russian UI and small-screen layouts.
+* Published separately as v3.1.2; older release tags and assets remain unchanged.
+
 ## 3.1.1
 
 * Added the in-system C Workshop: desktop icon/B, independent source editor,

@@ -22,7 +22,11 @@ for line in subprocess.check_output(['nm','-n','build/kvant64.bin' if IS64 else 
     parts=line.split()
     if len(parts)==3:symbols[parts[2]]=int(parts[0],16)
 
-class Guest:
+sys.path.insert(0,str(ROOT/'tests/boot'))
+from gui_driver import MouseGUI
+
+class Guest(MouseGUI):
+    symbols=symbols
     def __init__(self, disk=True): self.disk = disk
     def __enter__(self):
         self.log=WORK/'workshop.serial.log'
@@ -72,8 +76,13 @@ class Guest:
     def key(self,name):
         self.cmd('sendkey '+name+' 40');time.sleep(0.1)
     def text(self,text):
-        names={' ':'spc','\n':'ret','.':'dot','*':'shift-8','=':'equal'}
-        for c in text:self.key(names.get(c,c))
+        names={' ':'spc','\n':'ret','.':'dot','*':'shift-8','=':'equal',
+               '!':'shift-1','_':'shift-minus','-':'minus','/':'slash',
+               ':':'shift-semicolon',';':'semicolon',',':'comma',
+               '(':'shift-9',')':'shift-0','{':'shift-bracket_left','}':'shift-bracket_right',
+               '[':'bracket_left',']':'bracket_right','+':'shift-equal','<':'shift-comma','>':'shift-dot',
+               '\"':'shift-apostrophe',"'":'apostrophe','#':'shift-3','%':'shift-5','&':'shift-7'}
+        for c in text:self.key('shift-'+c.lower() if 'A'<=c<='Z' else names.get(c,c))
     def mem(self,name,size):
         at=symbols[name] if isinstance(name,str) else name
         path=WORK/'memory.bin';path.unlink(missing_ok=True)
@@ -88,14 +97,6 @@ class Guest:
             name,ptr,size,used=struct.unpack_from('<24sQII' if IS64 else '<24sIII',table,off)
             if used:result[name.split(b'\0')[0].decode()]=self.mem(ptr,size)
         return result
-    def move(self,x,y):
-        # Feedback from actual guest coordinates, bounded PS/2 movement.
-        for _ in range(12):
-            dx=x-self.num('mx');dy=y-self.num('my')
-            if abs(dx)<5 and abs(dy)<5:return
-            self.cmd(f'mouse_move {max(-80,min(80,dx))} {max(-80,min(80,dy))}')
-            time.sleep(.1)
-        raise RuntimeError('Cannot reach measured target')
     def __exit__(self,*exc):
         self.sock.close();self.proc.terminate()
         try:self.proc.wait(timeout=5)
@@ -120,9 +121,9 @@ void close(void){release(values);release(buffer);}
     KvFS(str(DISK)).add('verify.c',proof_source,False)
     with Guest() as q:
         q.text('guimenu\n');time.sleep(1)
-        q.key('e');q.text('private notes');q.key('esc')
-        q.key('b');time.sleep(0.3)
-        q.key('f5');time.sleep(0.5)
+        q.open_app(7);q.text('private notes')
+        q.open_app(9);time.sleep(0.3)
+        q.widget(90,9);time.sleep(0.5)
         q.cmd(f'screendump "{WORK / "workshop.ppm"}"')
         files=q.files()
         assert 'hello.c' in files and 'hello.kapp' in files,files.keys()
@@ -133,9 +134,9 @@ void close(void){release(values);release(buffer);}
         (WORK/'guest-hello.c').write_bytes(files['hello.c'])
         assert b'void draw(void)' in files['hello.c']
         # Editing contexts are independent even with two app types in one GUI.
-        q.key('esc');q.key('e')
-        assert q.mem(symbols['note_editor']+4,32).split(b'\0')[0]==b'private notes'
-        q.key('esc');q.key('b');q.key('f6');time.sleep(1)
+        q.open_app(7)
+        assert q.document(7)['text']==b'private notes'
+        q.open_app(9);q.widget(91,9);time.sleep(1)
         assert q.num('loaded')==1
         assert q.mem('app_file',44).split(b'\0')[0]==b'hello.kapp'
         # Generated entry stores API in the first data word. The template's global
@@ -144,38 +145,38 @@ void close(void){release(values);release(buffer);}
         count_address=data_base+(72 if IS64 else 40)+len('hello.c')+1
         assert q.num(count_address)==0
         # About, Workshop, generated application: third window starts at 258,116.
-        q.move(310,220)
+        w=q.window(10);q.move(w['x']+50,w['y']+100)
         q.cmd('mouse_button 1');time.sleep(0.3)
         q.cmd('mouse_button 0');time.sleep(0.2)
         q.cmd(f'screendump "{WORK / "running.ppm"}"')
         assert q.num(count_address)==1, ('count',q.num(count_address),'pointer',q.num('mx'),q.num('my'))
         # Return to Workshop, introduce an error and ensure F6 cannot run stale code.
-        # Esc leaves GUI; re-entry retains the workshop source state.
-        q.key('esc');time.sleep(0.3);q.text('guimenu\n');time.sleep(1);q.key('b')
-        q.key('home');q.text('bad syntax ');q.key('f6');time.sleep(0.3)
+        # Close the program with its cross and return through the mouse launcher.
+        q.close_app(10);q.open_app(9)
+        q.key('home');q.text('bad syntax ');q.widget(91,9);time.sleep(0.3)
         assert q.mem('error_text',8 if IS64 else 4)!=b'\0'*(8 if IS64 else 4)
-        assert q.num('win_count')==2,'failed build unexpectedly opened an app window'
+        assert q.num('win_count')==3,'failed build unexpectedly opened an app window'
         q.cmd(f'screendump "{WORK / "error.ppm"}"')
         print('Guest: build + .kapp load + native C draw/click + independent editors + error path OK')
     
     saved={e['name'] for e in KvFS(str(DISK)).listing()}
     assert {'hello.c','hello.kapp','verify.c'}.issubset(saved),saved
 
-    # Fresh machine: RAM files are gone. F2 must reopen source from KvFS.
+    # Fresh machine: RAM files are gone. The mouse file dialog reopens from KvFS.
     with Guest() as q:
         assert 'hello.c' not in q.files()
-        q.text('guimenu\n');time.sleep(1);q.key('b')
-        q.key('f2');q.key('ret');time.sleep(0.3)
-        assert q.mem('dev_editor',4)==b'\0'*4
-        assert q.mem(symbols['dev_editor']+4,32).startswith(b'// F5 builds')
-        assert q.mem('editor_text',32).startswith(b'// F5 builds')
-        q.key('f6');time.sleep(1)
+        q.text('guimenu\n');time.sleep(1);q.open_app(9)
+        q.widget(41,9);q.widget(84,9);q.choose_name('hello.c');q.widget(82,9);time.sleep(0.3)
+        assert q.mode(9)==0
+        assert q.document(9)['text'].startswith(b'// Click Build')
+        assert q.mem('editor_text',32).startswith(b'// Click Build')
+        q.widget(91,9);time.sleep(1)
         assert q.num('loaded')==1
         assert q.mem('app_file',44).split(b'\0')[0]==b'hello.kapp'
         q.cmd(f'screendump "{WORK / "rebooted.ppm"}"')
         print('Guest: source reopened from disk and rebuilt after a full reboot OK')
-        q.key('esc');time.sleep(.2);q.text('guimenu\n');time.sleep(.7);q.key('b')
-        q.key('f2');q.key('ctrl-u');q.text('verify.c');q.key('ret');q.key('f6');time.sleep(1)
+        q.close_app(10);q.open_app(9)
+        q.widget(41,9);q.choose_name('verify.c');q.widget(82,9);q.widget(91,9);time.sleep(1)
         assert q.num('loaded')==1 and q.num('app_faulted')==0
         assert q.mem('app_file',40).split(b'\0')[0]==b'verify.kapp'
         assert q.mem('app_status',96).split(b'\0')[0]==b'41:2:3:4:5'
@@ -185,9 +186,9 @@ void close(void){release(values);release(buffer);}
     
     # No hard disk attached: the compiler still creates and runs a RAM .kapp.
     with Guest(disk=False) as q:
-        q.text('lang ru\n');q.text('guimenu\n');time.sleep(1);q.key('b');q.key('f5');time.sleep(.3)
+        q.text('lang ru\n');q.text('guimenu\n');time.sleep(1);q.open_app(9);q.widget(90,9);time.sleep(.3)
         q.cmd(f'screendump "{WORK / "workshop-ru.ppm"}"')
-        q.key('f6');time.sleep(1)
+        q.widget(91,9);time.sleep(1)
         assert 'hello.kapp' in q.files() and q.num('loaded') == 1
         q.cmd(f'screendump "{WORK / "running-ru.ppm"}"')
         print('Guest: Russian UI + diskless RAM-only build and native .kapp execution OK')

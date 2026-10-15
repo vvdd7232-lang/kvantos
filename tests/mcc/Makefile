@@ -33,3 +33,11 @@ build/libmcc64.so: ../../kernel/mcc.c ../../include/mcc.h ../../include/kvapp.h
 build/fuzz_mcc64: fuzz_mcc.c ../../kernel/mcc.c ../../include/mcc.h
 	@mkdir -p build
 	$(CC) $(FLAGS) -DMCC_TARGET64=1 -fsanitize=address,undefined -fno-omit-frame-pointer fuzz_mcc.c ../../kernel/mcc.c -o $@
+
+.PHONY: editors
+editors: build/test_textedit
+	./build/test_textedit
+
+build/test_textedit: test_textedit.c ../../kernel/textedit.c ../../include/textedit.h
+	@mkdir -p build
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra -Werror -I../../include -fsanitize=address,undefined -fno-omit-frame-pointer test_textedit.c ../../kernel/textedit.c -o $@

@@ -7,6 +7,7 @@ import socket
 import struct
 import subprocess
 import time
+from gui_driver import MouseGUI
 
 ROOT = Path(__file__).resolve().parents[2]
 os.chdir(ROOT)
@@ -54,7 +55,7 @@ def run(arch):
         else:
             raise RuntimeError(log.read_text(errors='replace'))
         text = log.read_text(errors='replace')
-        assert 'KvantOS 3.1.1' in text, text
+        assert 'KvantOS 3.1.2' in text, text
         sock = socket.socket(socket.AF_UNIX)
         sock.settimeout(5)
         sock.connect(str(monitor))
@@ -95,7 +96,11 @@ def run(arch):
         assert num('running') == 1
         assert num('scr_w') == 1024 and num('scr_h') == 768
         cmd(f'screendump "{folder / "desktop.ppm"}"')
-        key('g')
+        class Driver(MouseGUI):
+            symbols=syms
+        q=Driver()
+        q.cmd=cmd; q.mem=mem; q.num=num; q.key=key
+        q.open_app(8)
         time.sleep(.5)
         stride = 40 if firmware else 36
         table = mem('files', 32 * stride)
@@ -139,8 +144,7 @@ def run(arch):
         assert num('loaded') == 1 and num('app_faulted') == 0
         assert struct.unpack('<Q', mem('ticks', 8))[0] > t0
         cmd(f'screendump "{folder / "maze3d.ppm"}"')
-        for _ in range(4):
-            key('esc')
+        q.exit_gui()
         time.sleep(.5)
         assert num('running') == 0
         assert 'Back in the kvsh text console.' in log.read_text(errors='replace')

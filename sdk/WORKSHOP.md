@@ -1,6 +1,6 @@
 # In-system C Workshop
 
-Open **C Workshop** from its desktop icon or press **B**. The built-in editor
+Open **C Workshop** by single-clicking its desktop icon or using **KVANT → C Workshop**. The built-in editor
 and compiler produce native i386 or x86-64 `.kapp` files (format 1, ABI 3) inside KvantOS.
 No host GCC, network, assembler or interpreter is involved in that build.
 This is a small, explicitly limited C implementation, **not full ISO C**.
@@ -12,27 +12,36 @@ are architecture-specific and cannot run under the other kernel.
 
 ## Use
 
-* **F5 / Build**: compile the current source and save a `.kapp`.
-* **F6 / Run**: rebuild the current source and run it. A failed build never
-  launches an old output as though it were the new program.
-* **Ctrl+S**: save source under the entered name; **F2**: open a source by name.
-* In name input, **Ctrl+U** clears the name, Enter accepts, Esc cancels.
-* **Ctrl+N / New**: replace the current text with the demo template.
-* **F1**: short help. Arrows, Home/End, Delete, Backspace, Enter and Tab edit
-  text. The view scrolls horizontally with the cursor.
-* **Esc** closes the workshop window; source stays in memory. In a running
-  `.kapp` window, Esc leaves the GUI for the console.
+* **Build** compiles and saves a native `.kapp`; **Run** rebuilds and starts it.
+  A failed build never runs stale output. Errors show a line number and move the cursor.
+* **Open** opens a RAM/disk picker: choose a file, then click Open. Use the wheel
+  or arrow buttons to scroll the file list. No typed path or Enter is required.
+* **Save** writes the current file, asking for a name for new documents.
+  **Save as** changes the name. Replacing another existing file needs confirmation.
+* **New**, open, close and desktop exit protect unsaved text with Save / Don't save /
+  Cancel. **Help** has a clickable Close help button. Use window crosses to close,
+  the taskbar/menu to switch, and KVANT → Exit to console to leave the desktop.
+* Click text to place the caret; drag to select; dragging beyond an edge auto-scrolls.
+  Copy / Cut / Paste / Undo / Select all are clickable. Clipboard is shared with
+  Notepad; document state and one-step undo/redo are independent. Click Undo again
+  to redo. UTF-8 cursor/selection/deletion respects character boundaries.
+* Both scrollbars are draggable; wheel scrolls vertically, Shift+wheel horizontally.
+  Scrolling does not move or chase the caret.
+* Keyboard remains for text and **optional** Ctrl+C/V/X/A/Z/S, Ctrl+O/N/W, F5/F6,
+  F1 help, F2 open. Arrows, Home/End, Delete, Backspace, Enter, Tab and Shift+arrows
+  edit text. Ctrl+U clears a filename; Enter accepts, Esc cancels. Esc in the text
+  only clears selection. Letters B/G/E no longer launch desktop windows; games
+  retain their keyboard controls.
 
-The workshop and Notepad have independent editor states. A compilation error
-shows its line number and moves the source cursor to that line.
+Limits: 128 lines, 120 **bytes** per line. Overflow, binary/oversize loads and
+failed line joins never silently truncate or discard the current document.
 
 Use a flat filename with at most 18 characters before `.c`: `hello.c` becomes
-`hello.kapp`. Without a mounted **KvFS**, both files exist only in RAM and
-**are lost on reboot**; the status says so. With KvFS mounted, both files are
-saved to RAM and disk. After reboot use F2 to reopen the source by name from
-KvFS. The side list only shows `.c` files already present in RAM. Program
-Manager lists generated `.kapp` files. Direct save to FAT32/NTFS or arbitrary
-VFS paths is not part of this first workshop version.
+`hello.kapp`. Without mounted **KvFS**, both files are in RAM and **lost on reboot**;
+the status says so. With KvFS both are saved to RAM and disk. After reboot choose
+**Open → Disk / KvFS**, select the source and click Open. The picker shows `.c`
+files on the chosen medium; Program Manager shows `.kapp`. Direct save to FAT32/NTFS
+or arbitrary VFS paths is not implemented. Notepad now also saves to mounted KvFS.
 
 Disk persistence requires a supported **IDE/ATA PIO** disk, not AHCI/SATA
 or NVMe. Under QEMU q35, attach a separate `piix3-ide` controller as shown
