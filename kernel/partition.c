@@ -1,7 +1,7 @@
 /* ============================================================
  *  KvantOS - MBR partition table and volume autodetection
  *
- *  Reads sector 0 of every ATA disk, walks the four primary entries
+ *  Reads sector 0 of every ATA/USB disk, walks the four primary entries
  *  and the extended chain, then asks each filesystem driver whether it
  *  recognises the partition. Whatever is recognised gets mounted under
  *  /mnt/hdaN.
@@ -44,6 +44,8 @@ static int is_extended(u8 t) { return t == 0x05 || t == 0x0F || t == 0x85; }
 
 /* Try every driver we have on one partition. */
 static int try_mount(const char *name, int disk, u32 lba, u32 count) {
+    u32 sectors = blk_sectors(disk);
+    if (!count || lba >= sectors || count > sectors - lba) return 0;
     char label[VFS_LABEL_MAX];
     fs_kind_t kind = FS_NONE;
 
@@ -58,6 +60,15 @@ static int try_mount(const char *name, int disk, u32 lba, u32 count) {
     return 0;
 }
 
+static void volume_name(char *nm, int disk, int seq) {
+    if (blk_is_usb(disk)) {
+        if (seq) ksnprintf(nm,16,"usb%dp%d",disk-4,seq);
+        else ksnprintf(nm,16,"usb%d",disk-4);
+    } else {
+        if (seq) ksnprintf(nm,16,"hd%c%d",'a'+disk,seq);
+        else ksnprintf(nm,16,"hd%c",'a'+disk);
+    }
+}
 static int scan_disk(int disk, int *seq) {
     static u8 sec[512];      /* BSS, not stack: see the FAT driver */
     int mounted = 0;
@@ -88,7 +99,7 @@ static int scan_disk(int disk, int *seq) {
 
                     if (lp[0].sectors) {
                         char nm[16];
-                        ksnprintf(nm, sizeof(nm), "hd%c%d", 'a' + disk, ++(*seq));
+                        volume_name(nm, disk, ++(*seq));
                         if (try_mount(nm, disk, next + lp[0].lba_start, lp[0].sectors))
                             mounted++;
                     }
@@ -98,7 +109,7 @@ static int scan_disk(int disk, int *seq) {
             }
 
             char nm[16];
-            ksnprintf(nm, sizeof(nm), "hd%c%d", 'a' + disk, ++(*seq));
+            volume_name(nm, disk, ++(*seq));
             if (try_mount(nm, disk, parts[i].lba_start, parts[i].sectors))
                 mounted++;
         }
@@ -107,8 +118,8 @@ static int scan_disk(int disk, int *seq) {
     /* No table, or a table nobody claimed: probe the raw device. */
     if (!mounted) {
         char nm[16];
-        ksnprintf(nm, sizeof(nm), "hd%c", 'a' + disk);
-        if (try_mount(nm, disk, 0, ata_sectors(disk))) mounted++;
+        volume_name(nm, disk, 0);
+        if (try_mount(nm, disk, 0, blk_sectors(disk))) mounted++;
     }
 
     return mounted;
@@ -116,13 +127,14 @@ static int scan_disk(int disk, int *seq) {
 
 int vfs_autoscan(void) {
     int total = 0;
+    usb_rescan();
 
     /* RAM disk and our own KvFS keep their historical names. */
     ramfs_vfs_register();
     kvfs_vfs_register();
 
-    for (int d = 0; d < ata_count(); d++) {
-        if (!ata_sectors(d)) continue;
+    for (int d = 0; d < blk_count(); d++) {
+        if (!blk_sectors(d)) continue;
         int seq = 0;
         total += scan_disk(d, &seq);
     }

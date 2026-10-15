@@ -52,6 +52,7 @@ static int ed_file(int index,char *name,u32 *size) {
     }
     return 0;
 }
+#include "gui_editor_import.h"
 static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
                          int value,int maximum,int visible) {
     i32 w=vertical?16:length,h=vertical?length:16;
@@ -68,6 +69,7 @@ static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
     hit_add(win,widget,x,y,w,h);
 }
 static void ed_dialog(window_t *v,i32 cy) {
+    if(ed_name_mode==ED_IMPORT_DIALOG) { ed_import_view(v,cy); return; }
     int win=(int)(v-wins), file_mode=ed_name_mode<=ED_OPEN_DIALOG;
     i32 x=v->x+25,w=v->w-50,y=cy+(file_mode?8:65);
     i32 h=file_mode?v->h-TITLE_H-18:190;
@@ -77,17 +79,17 @@ static void ed_dialog(window_t *v,i32 cy) {
     const char *title=ed_name_mode==ED_OPEN_DIALOG?T("Open a file", "Открыть файл"):
                       ed_name_mode==ED_SAVE_DIALOG?T("Save as", "Сохранить как"):
                       ed_name_mode==ED_DIRTY_DIALOG?T("Save changes?", "Сохранить изменения?"):
-                      ed_name_mode==ED_OVERWRITE_DIALOG?T("Replace existing file?", "Заменить существующий файл?"):
+                      (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?T("Replace existing file?", "Заменить существующий файл?"):
                       T("Delete file from RAM and disk?", "Удалить файл из RAM и с диска?");
     ed_label(x+12,y+12,w-24,title,C_TEXT);
     if(!file_mode) {
-        ed_label(x+12,y+46,w-24,ed_name_mode==ED_OVERWRITE_DIALOG?ed_name_in:ed_name,C_ACCENT);
+        ed_label(x+12,y+46,w-24,(ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?ed_name_in:ed_name,C_ACCENT);
         ed_label(x+12,y+74,w-24,T("Your document is kept if you cancel.", "При отмене документ останется нетронутым."),C_TEXT_DIM);
         if(ed_status[0]) ed_label(x+12,y+100,w-24,ed_status,C_TEXT_DIM);
         int bw=(w-40)/3;
         widget_chip(win,W_ED_ACCEPT,x+10,y+h-40,bw,28,
                     ed_name_mode==ED_DIRTY_DIALOG?T("Save", "Сохранить"):
-                    ed_name_mode==ED_OVERWRITE_DIALOG?T("Replace", "Заменить"):T("Delete", "Удалить"),1);
+                    (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?T("Replace", "Заменить"):T("Delete", "Удалить"),1);
         if(ed_name_mode==ED_DIRTY_DIALOG)
             widget_chip(win,W_ED_DISCARD,x+20+bw,y+h-40,bw,28,T("Don't save", "Не сохранять"),0);
         widget_chip(win,W_ED_CANCEL,x+w-bw-10,y+h-40,bw,28,T("Cancel", "Отмена"),0);
@@ -136,15 +138,15 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
     editor=workshop?&dev_editor:&note_editor;
     struct { int id; const char *label; } file[]={
         {W_ED_NEW,T("New", "Создать")},{W_ED_OPEN,T("Open", "Открыть")},
-        {W_ED_SAVE,T("Save", "Сохранить")},{W_ED_SAVEAS,T("Save as", "Сохранить как")},
-        {workshop?W_DEV_HELP:W_ED_DEL,workshop?T("Help", "Справка"):T("Delete file", "Удалить файл")}
+        {W_ED_IMPORT,T("Import", "Импорт")},{W_ED_SAVE,T("Save", "Сохранить")},{W_ED_SAVEAS,T("Save as", "Сохр. как")},
+        {workshop?W_DEV_HELP:W_ED_DEL,workshop?T("Help", "Справка"):T("Delete", "Удалить")}
     }, edit[]={
         {W_ED_UNDO,T("Undo/redo", "Отмена/повтор")},{W_ED_COPY,T("Copy", "Копия")},
         {W_ED_CUT,T("Cut", "Вырезать")},{W_ED_PASTE,T("Paste", "Вставить")},
         {W_ED_ALL,T("Select all", "Всё")},{W_DEV_BUILD,T("Build", "Собрать")},{W_DEV_RUN,T("Run", "Запуск")}
     };
-    int bw=(cw-20)/5;
-    for(int i=0;i<5;i++) widget_chip(win,file[i].id,cx+10+i*bw,cy+7,bw-4,25,file[i].label,0);
+    int bw=(cw-20)/6;
+    for(int i=0;i<6;i++) widget_chip(win,file[i].id,cx+10+i*bw,cy+7,bw-4,25,file[i].label,0);
     int count=workshop?7:5; bw=(cw-20)/count;
     /* A short label also fits a 640x480 desktop. */
     edit[0].label=T("Undo", "Отмена");

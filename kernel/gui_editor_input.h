@@ -16,6 +16,7 @@ static void ed_do_pending(int win) {
             ed_name_in[0]=0; editor->name_caret=0;
             ed_msg(T("Select a file, then click Open", "Выберите файл и нажмите Открыть"));
             break;
+        case ED_IMPORT: ed_import_begin(); break;
         case ED_LOAD:
             if(ed_load(name)) ed_msg(T("File opened", "Файл открыт"));
             else { ed_name_mode=ED_OPEN_DIALOG; ed_msg(T("Cannot open: missing, binary or too large", "Не открыть: нет файла, двоичный или превышен лимит")); }
@@ -50,6 +51,7 @@ static void ed_continue_quit(void) {
 }
 static void ed_request_quit(void) { ed_quit_mask=0; ed_continue_quit(); }
 static void ed_cancel(void) {
+    if(ed_name_mode==ED_IMPORT_REPLACE) { ed_name_mode=ED_IMPORT_DIALOG; return; }
     if(ed_name_mode==ED_OVERWRITE_DIALOG) { ed_name_mode=ED_SAVE_DIALOG; return; }
     ed_name_mode=editor->pending=0; ed_quit_mask=0;
     ed_msg(T("Cancelled; document unchanged", "Отменено; документ не изменён"));
@@ -73,6 +75,7 @@ static void ed_commit_save(int win) {
     ed_name_mode=0; ed_do_pending(win);
 }
 static void ed_accept(int win) {
+    if(ed_name_mode==ED_IMPORT_DIALOG || ed_name_mode==ED_IMPORT_REPLACE) { ed_import_accept(ed_name_mode==ED_IMPORT_REPLACE); return; }
     if(ed_name_mode==ED_DIRTY_DIALOG) {
         if(editor->named) {
             if(ed_save()) ed_do_pending(win);
@@ -124,6 +127,7 @@ static void ed_action(int win,int widget) {
     switch(widget) {
         case W_ED_NEW: ed_request(win,ED_NEW); break;
         case W_ED_OPEN: ed_request(win,ED_OPEN); break;
+        case W_ED_IMPORT: ed_request(win,ED_IMPORT); break;
         case W_ED_SAVE:
             if(editor->named) ed_save();
             else ed_prompt_save(T("Choose a name and click Save", "Выберите имя и нажмите Сохранить"));
@@ -150,7 +154,7 @@ static void ed_action(int win,int widget) {
 static void ed_name_key(int win,int c) {
     if(c==27) { ed_cancel(); return; }
     if(c=='\n') { ed_accept(win); return; }
-    if(ed_name_mode>ED_OPEN_DIALOG) return;
+    if(ed_name_mode>ED_OPEN_DIALOG && ed_name_mode!=ED_IMPORT_DIALOG) return;
     int len=(int)strlen(ed_name_in),at=editor->name_caret;
     if(c==21 || c==1) { ed_name_in[0]=0; editor->name_caret=0; return; }
     if(c==KEY_LEFT) { if(at>0) editor->name_caret--; return; }
@@ -246,6 +250,16 @@ static void ed_click(int win,i32 mx,i32 my) {
         if(widget==W_ED_CANCEL) ed_cancel();
         else if(widget==W_ED_ACCEPT) ed_accept(win);
         else if(widget==W_ED_DISCARD && ed_name_mode==ED_DIRTY_DIALOG) ed_do_pending(win);
+        else if(ed_name_mode==ED_IMPORT_DIALOG) {
+            if(widget==W_ED_VOLUME) ed_import_volume(1);
+            else if(widget==W_ED_RESCAN) ed_import_refresh();
+            else if(widget==W_ED_PARENT && editor->import_dir[0] && !vfs_is_root(editor->import_dir)) {
+                vfs_parent(editor->import_dir,sizeof(editor->import_dir),editor->import_dir); ed_import_list();
+            } else if(widget==W_ED_FUP) { if(editor->file_top>0) editor->file_top--; }
+            else if(widget==W_ED_FDOWN) editor->file_top++;
+            else if(widget==W_ED_NAME) editor->name_caret=ed_clamp((mx-(wins[win].x+25+72)+4)/8,0,(int)strlen(ed_name_in));
+            else if(widget>=W_ED_IMPORT0 && widget<W_ED_IMPORT0+128) ed_import_select(widget-W_ED_IMPORT0);
+        }
         else if(ed_name_mode<=ED_OPEN_DIALOG) {
             if(widget==W_ED_RAM || widget==W_ED_DISK) { editor->file_disk=widget==W_ED_DISK; editor->file_top=0; }
             else if(widget==W_ED_FUP) { if(editor->file_top>0) editor->file_top--; }
@@ -305,7 +319,7 @@ static void ed_wheel(i32 mx,i32 my,int delta) {
         if(!v->used || !v->visible || v->minimized || mx<v->x || mx>=v->x+v->w || my<v->y || my>=v->y+v->h) continue;
         if(v->app!=APP_EDIT && v->app!=APP_DEV) return;
         editor=v->app==APP_DEV?&dev_editor:&note_editor;
-        if(ed_name_mode && ed_name_mode<=ED_OPEN_DIALOG) editor->file_top+=delta*3;
+        if(ed_name_mode && (ed_name_mode<=ED_OPEN_DIALOG || ed_name_mode==ED_IMPORT_DIALOG)) editor->file_top+=delta*3;
         else if(!ed_name_mode && !(v->app==APP_DEV && dev_help)) {
             ed_layout_t g=ed_layout(v);
             if(kbd_shift()) ed_left=ed_clamp(ed_left+delta*3,0,g.max_left);

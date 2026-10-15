@@ -25,6 +25,15 @@ int  ata_count(void);
 int  ata_boot_drive(void);
 u32  ata_sectors(int i);
 
+int blk_read(int disk, u32 lba, u8 count, void *buf);
+int blk_write(int disk, u32 lba, u8 count, const void *buf);
+int blk_count(void);
+u32 blk_sectors(int disk);
+int blk_is_usb(int disk);
+void usb_rescan(void);
+int usb_count(void);
+u32 usb_sectors(int disk);
+int usb_read(int disk, u32 lba, u8 count, void *buf);
 void ksnprintf(char *buf, size_t size, const char *fmt, ...);
 void *kmalloc(size_t s);
 void kfree(void *p);

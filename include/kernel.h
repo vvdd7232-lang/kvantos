@@ -394,6 +394,18 @@ int  mouse_wheel_delta(void);
 void mouse_move_rel(i32 dx, i32 dy);
 void mouse_set_button(int btn, int down);
 
+/* Read-only USB mass storage and shared ATA/USB sector routing. */
+void usb_rescan(void);
+int usb_count(void);
+u32 usb_sectors(int disk);
+int usb_read(int disk, u32 lba, u8 count, void *buf);
+const char *usb_status(void);
+int blk_count(void);
+u32 blk_sectors(int disk);
+int blk_read(int disk, u32 lba, u8 count, void *buf);
+int blk_write(int disk, u32 lba, u8 count, const void *buf);
+int blk_is_usb(int disk);
+
 /* ---------- PCI bus ---------- */
 #define PCI_MAX_DEV 48
 typedef struct {

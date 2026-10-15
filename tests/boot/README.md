@@ -65,3 +65,29 @@ RAM/disk file pickers and paging, filename caret, empty/binary/oversize files,
 new/close/quit/overwrite guards, wheel, both draggable scrollbars, optional
 MouseKeys, 640x480 bounds, Russian UI and actual Notepad KvFS persistence.
 Generated screenshots and private disks live under `build/editor-smoke/`.
+
+## Read-only FAT32 / USB import (development after 3.1.2)
+
+```sh
+make CC=gcc-12 iso
+python3 tests/boot/usb-import-smoke.py
+python3 tests/boot/mkusb.py build/usb-fixtures
+make -C tests/fs
+tests/fs/build/harness build/usb-fixtures/flash-raw.img --usb
+tests/fs/build/harness build/usb-fixtures/flash-mbr.img --usb
+```
+
+Needs dosfstools and mtools in addition to QEMU, OVMF and Pillow. Tests only
+create private images, never format/mount a host device. Both real guest
+kernels enumerate a `piix3-usb-uhci` + `usb-storage` device, walk MBR/raw
+FAT32, navigate folders and import via actual mouse widgets. Covers BOM,
+CRLF, UTF-8, tabs, long FAT names/local rename, empty files, atomic rejection,
+replacement guards, independent editors, 12 refreshes, physical USB device
+removal/re-addition, Build/Run, KvFS persistence across reboot, diskless mode
+and Russian 640x480. Source-image hashes must remain unchanged despite
+writable QEMU backends. Host tests exercise block/VFS write refusal, bounds
+and 24 mount resets. Logs/screenshots: `build/usb-import/{bios32,uefi64}`.
+
+This does **not** validate arbitrary hardware. Driver supports UHCI root
+ports and BOT/SCSI/512-byte media only; no EHCI/xHCI/OHCI/hubs/UAS. See
+[USB-IMPORT.md](../../USB-IMPORT.md) before trying a physical machine.

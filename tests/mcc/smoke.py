@@ -27,7 +27,7 @@ from gui_driver import MouseGUI
 
 class Guest(MouseGUI):
     symbols=symbols
-    def __init__(self, disk=True): self.disk = disk
+    def __init__(self, disk=True, extra_args=()): self.disk = disk; self.extra_args = extra_args
     def __enter__(self):
         self.log=WORK/'workshop.serial.log'
         self.log.unlink(missing_ok=True)
@@ -49,7 +49,7 @@ class Guest(MouseGUI):
             else:disk_args=['-drive',f'file={DISK},format=raw,if=ide,index=0']
         self.proc=subprocess.Popen([
             'qemu-system-x86_64','-machine','q35,accel=tcg' if IS64 else 'pc,accel=tcg','-cpu','max' if IS64 else 'pentium','-m','512',*firmware,'-cdrom','release/kvantos.iso',
-            *disk_args,
+            *disk_args, *self.extra_args,
             '-boot','d','-display','none',
             '-serial','file:'+str(self.log),'-monitor','unix:'+str(monitor)+',server,nowait'
         ],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)

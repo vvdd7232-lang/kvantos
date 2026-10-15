@@ -39,6 +39,14 @@ The Workshop and Notepad have independent documents.
 
 [Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.2](RELEASE.md)
 
+## FAT32 / USB import (development after 3.1.2)
+
+The new preview adds **Import** to Notepad and C Workshop: mouse selection
+of a FAT volume/folder/file, separate local name, a safe RAM copy and later
+KvFS persistence. The source is not modified. **USB is currently UHCI only,
+not EHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
+[Instructions and limits](USB-IMPORT.md).
+
 ## Quick start
 
 ```bash

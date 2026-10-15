@@ -13,7 +13,7 @@
 CC     := gcc
 CFLAGS := -std=gnu11 -g -O1 -Wall -I. -Iinclude
 SRC    := harness.c ../../kernel/fat.c ../../kernel/ntfs.c \
-          ../../kernel/vfs.c ../../kernel/partition.c ../../kernel/vfs_native.c
+          ../../kernel/vfs.c ../../kernel/partition.c ../../kernel/vfs_native.c ../../kernel/blk.c
 IMAGE  := build/fsdisk.img
 
 all: build/harness

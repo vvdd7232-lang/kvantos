@@ -6,6 +6,7 @@
 
 static FILE *disk;
 static u32   disk_sectors;
+static int usb_mode;
 
 /* The real kernel driver returns 0 on success and -1 on failure. The
    harness must match that exactly: an earlier version returned 1 for
@@ -24,9 +25,13 @@ int ata_write(int idx, u32 lba, u8 count, const void *buf) {
     fflush(disk);
     return ok ? 0 : -1;
 }
-int ata_count(void) { return 1; }
+int ata_count(void) { return !usb_mode; }
 int ata_boot_drive(void) { return 0; }
-u32 ata_sectors(int i) { (void)i; return disk_sectors; }
+u32 ata_sectors(int i) { return i==0 && !usb_mode ? disk_sectors : 0; }
+void usb_rescan(void) {}
+int usb_count(void) { return usb_mode; }
+u32 usb_sectors(int i) { return i==0 && usb_mode ? disk_sectors : 0; }
+int usb_read(int i,u32 lba,u8 n,void *buf) { return i==0 ? ata_read(0,lba,n,buf) : -1; }
 
 void rtc_read(rtc_time_t *t) {
     t->sec = 30; t->min = 45; t->hour = 12;
@@ -95,7 +100,8 @@ static int count_entries(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: harness <disk.img>\n"); return 1; }
-    disk = fopen(argv[1], "r+b");
+    usb_mode = argc>2 && !strcmp(argv[2],"--usb");
+    disk = fopen(argv[1], usb_mode ? "rb" : "r+b");
     if (!disk) { perror("open"); return 1; }
     fseeko(disk, 0, SEEK_END);
     disk_sectors = (u32)(ftello(disk) / 512);
@@ -111,6 +117,30 @@ int main(int argc, char **argv) {
         printf("  /mnt/%-6s %-6s label=%-12s %6u MiB total, %6u MiB free %s\n",
                v->name, vfs_kind_name(v->kind), v->label,
                tk/1024, fk/1024, v->writable?"rw":"ro");
+    }
+
+    if (usb_mode) {
+        char path[256], root[64]; unsigned char data[512];
+        vfs_volume_t *v=vfs_find("usb0p1");
+        if(!v) v=vfs_find("usb0");
+        ok(v && v->kind==FS_FAT32 && !v->writable,"USB FAT32 mounted read-only");
+        ok(blk_count()==5 && blk_sectors(0)==0 && blk_sectors(3)==0 && blk_sectors(4)==disk_sectors,"stable USB block ID with absent ATA slots");
+        if (!v) return 1;
+        snprintf(root,sizeof(root),"/mnt/%s",v->name);
+        snprintf(path,sizeof(path),"%s/HELLO.C",root);
+        ok(vfs_read(path,0,data,sizeof(data))>0,"read FAT32 file through USB block routing");
+        ok(!vfs_writable(path) && vfs_write(path,"X",1)==-2,"VFS overwrite refused");
+        ok(vfs_remove(path)==-2 && vfs_mkdir(root)==-2,"VFS delete/mkdir refused");
+        ok(blk_write(4,0,1,data)<0,"USB block writes refused independently of VFS");
+        ok(blk_read(4,disk_sectors,1,data)<0 && blk_read(4,0xFFFFFFFFu,2,data)<0 && blk_read(4,0,0,data)<0,"out-of-bounds and zero-count reads refused");
+        int stable=1;
+        for(int i=0;i<24;i++) {
+            vfs_init();
+            if(vfs_autoscan()!=n || vfs_stat(path)!=1) stable=0;
+        }
+        ok(stable,"24 rescans do not leak filesystem mount slots");
+        printf("=== %d passed, %d failed ===\n",pass,fail);
+        return fail?1:0;
     }
 
     /* A second mode: probe an arbitrary image and just list it. */

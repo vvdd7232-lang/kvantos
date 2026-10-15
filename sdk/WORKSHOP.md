@@ -48,6 +48,15 @@ or NVMe. Under QEMU q35, attach a separate `piix3-ide` controller as shown
 in RELEASE.md: q35 defaults `-drive if=ide` to SATA/AHCI, which this OS
 does not detect.
 
+## FAT32 USB source import (new development preview)
+
+Click **Import**, **Refresh USB**, choose a folder and `.c`/`.C` file,
+optionally edit its local name, then **Import**. The validated copy opens in
+RAM; Save/Build/Run work normally. The flash drive is not modified. UTF-8 BOM
+and CRLF are supported; invalid/oversized text leaves the old document intact.
+**UHCI only for now**, no EHCI/xHCI/hubs; not in the published 3.1.2 ISO.
+[Full instructions](../USB-IMPORT.md).
+
 ## Example
 
 ```c

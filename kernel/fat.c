@@ -55,6 +55,7 @@ typedef struct {
 } fat_vol_t;
 
 static fat_vol_t fat_vols[FAT_MAX_VOLS];
+void fat_reset_mounts(void) { memset(fat_vols, 0, sizeof(fat_vols)); }
 
 /* Sector buffers live in BSS rather than on the stack. A 4 KiB array in
    every frame added up to about 14 KiB along the deepest call chain
@@ -592,6 +593,7 @@ static void fat_op_space(void *fs, u32 *total_kb, u32 *free_kb) {
     fat_vol_t *v = (fat_vol_t *)fs;
     if (total_kb) *total_kb = clusters_to_kb(v, v->total_clusters);
 
+    if (free_kb && blk_is_usb(v->disk)) { *free_kb = 0; return; } /* read-only; no slow free-space scan */
     if (free_kb) {
         /* Counting every FAT entry on a large volume would read many
            megabytes, so the scan samples every `step`-th cluster and

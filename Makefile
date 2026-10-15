@@ -79,8 +79,10 @@ apps:
 build/obj:
 	@mkdir -p build/obj
 
-build/obj/mcc.o build/obj/gui.o build/obj/textedit.o build/obj/mouse.o build/obj/keyboard.o: CFLAGS += -Os
-build/obj64/mcc.o build/obj64/gui.o build/obj64/textedit.o build/obj64/mouse.o build/obj64/keyboard.o: CFLAGS64 += -Os
+build/obj/mcc.o build/obj/gui.o build/obj/textedit.o build/obj/mouse.o build/obj/keyboard.o build/obj/usb.o build/obj/fat.o build/obj/ntfs.o: CFLAGS += -Os
+build/obj64/mcc.o build/obj64/gui.o build/obj64/textedit.o build/obj64/mouse.o build/obj64/keyboard.o build/obj64/usb.o build/obj64/fat.o build/obj64/ntfs.o: CFLAGS64 += -Os
+
+build/obj/gui.o build/obj64/gui.o: $(wildcard kernel/gui_editor_*.h) include/vfs.h include/textedit.h
 
 build/obj/%.o: kernel/%.c include/kernel.h | build/obj
 	@echo "  CC   $<"
@@ -147,13 +149,17 @@ $(KERNEL): $(OBJ) linker.ld
 # The bootloader used to install onto a hard disk: MBR + the GRUB body.
 # Built by the same grub-mkstandalone but with biosdisk, so that after
 # installation the system starts from the hard disk itself.
-build/hdboot.img: $(KERNEL) grub/grub.cfg | build/obj
+# Installed GRUB needs loadable segments, not the host/QEMU symbol table.
+build/kvant-boot.bin: $(KERNEL)
+	@$(OBJCOPY) --strip-all $< $@
+
+build/hdboot.img: build/kvant-boot.bin grub/grub.cfg | build/obj
 	@echo "  HD   bootloader for disk installation"
 	@grub-mkstandalone --format=i386-pc --output=build/hd_core.img \
 	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
 	    --modules="biosdisk multiboot normal configfile" \
 	    --locales="" --fonts="" --themes="" --compress=xz \
-	    "boot/grub/grub.cfg=grub/grub.cfg" "boot/kvant.bin=$(KERNEL)" \
+	    "boot/grub/grub.cfg=grub/grub.cfg" "boot/kvant.bin=build/kvant-boot.bin" \
 	    $(APP_GRAFT)
 	@cat /usr/lib/grub/i386-pc/boot.img build/hd_core.img > $@
 

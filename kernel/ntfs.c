@@ -77,6 +77,7 @@ typedef struct {
 } ntfs_vol_t;
 
 static ntfs_vol_t ntfs_vols[NTFS_MAX_VOLS];
+void ntfs_reset_mounts(void) { memset(ntfs_vols, 0, sizeof(ntfs_vols)); }
 
 /* One shared scratch record: the driver is single-threaded and these
    buffers are too large to put on the kernel stack. */

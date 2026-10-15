@@ -7,6 +7,10 @@ typedef struct {
     int view_rows, view_cols;
     char name[24], status[192], name_in[24], pending_name[24];
     u64 status_until;
+    char import_dir[VFS_MAX_PATH], import_file[VFS_MAX_PATH];
+    vfs_dirent_t import_items[128]; /* Cached only on navigation, not redraw. */
+    int import_count, import_selected, import_vol;
+
 } editor_t;
 static editor_t note_editor, dev_editor;
 static editor_t *editor = &note_editor;
@@ -37,9 +41,10 @@ enum { W_ED_NEW=40, W_ED_OPEN, W_ED_SAVE, W_ED_DEL,
        W_ED_ACCEPT, W_ED_CANCEL, W_ED_DISCARD, W_ED_FUP, W_ED_FDOWN,
        W_ED_VSCROLL, W_ED_HSCROLL, W_ED_TEXT,
        W_DEV_BUILD, W_DEV_RUN, W_DEV_HELP, W_ED_NAME, W_ED_RAM, W_ED_DISK,
-       W_ED_FILE0=1200 };
-enum { ED_NEW=1, ED_OPEN, ED_LOAD, ED_CLOSE, ED_QUIT, ED_BUILD, ED_RUN };
-enum { ED_SAVE_DIALOG=1, ED_OPEN_DIALOG, ED_DIRTY_DIALOG, ED_OVERWRITE_DIALOG, ED_DELETE_DIALOG };
+       W_ED_IMPORT=96, W_ED_RESCAN, W_ED_PARENT, W_ED_VOLUME,
+       W_ED_IMPORT0=2000, W_ED_FILE0=1200 };
+enum { ED_NEW=1, ED_OPEN, ED_LOAD, ED_CLOSE, ED_QUIT, ED_BUILD, ED_RUN, ED_IMPORT };
+enum { ED_SAVE_DIALOG=1, ED_OPEN_DIALOG, ED_DIRTY_DIALOG, ED_OVERWRITE_DIALOG, ED_DELETE_DIALOG, ED_IMPORT_DIALOG, ED_IMPORT_REPLACE };
 enum { W_ST_FORMAT = 200, W_ST_REFRESH = 201, W_ST_ITEM0 = 210, W_ST_DEL0 = 300,
        W_ST_RAM0 = 400, W_ST_SETUP = 500, W_ST_SETUP_KEEP = 501 };
 
@@ -104,3 +109,6 @@ static void ed_edit(const char *s,u32 n) {
         ed_msg(T("Limit: 128 lines, 120 bytes/line. Text unchanged.", "Предел: 128 строк, 120 байт/строка. Текст не изменён."));
     ed_scroll_to_cursor();
 }
+
+static int ed_valid_name(void);
+static int ed_exists(const char *name);

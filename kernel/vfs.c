@@ -8,6 +8,8 @@ static vfs_volume_t vols[VFS_MAX_VOLUMES];
 
 void vfs_init(void) {
     memset(vols, 0, sizeof(vols));
+    fat_reset_mounts();
+    ntfs_reset_mounts();
 }
 
 const char *vfs_kind_name(fs_kind_t k) {
@@ -36,7 +38,7 @@ int vfs_mount(const char *name, fs_kind_t kind, const vfs_ops_t *ops,
         vols[i].disk      = disk;
         vols[i].lba_start = lba_start;
         vols[i].lba_count = lba_count;
-        vols[i].writable  = (u8)(writable ? 1 : 0);
+        vols[i].writable  = (u8)(writable && !blk_is_usb(disk));
         vols[i].used      = 1;
         return i;
     }

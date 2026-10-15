@@ -70,7 +70,7 @@ typedef struct {
     fs_kind_t      kind;
     const vfs_ops_t *ops;
     void          *fs;              /* driver private data          */
-    int            disk;            /* ATA index, -1 for RAM        */
+    int            disk;            /* block ID, -1 for RAM        */
     u32            lba_start;       /* first sector of the partition */
     u32            lba_count;
     u8             writable;
@@ -87,7 +87,7 @@ vfs_volume_t *vfs_volume(int i);
 vfs_volume_t *vfs_find(const char *name);
 const char  *vfs_kind_name(fs_kind_t k);
 
-/* Scan every ATA disk, read its partition table and mount what we
+/* Scan ATA and USB disks, read its partition table and mount what we
    understand. Returns the number of volumes mounted. */
 int          vfs_autoscan(void);
 
@@ -107,17 +107,19 @@ void vfs_join(char *dst, u32 dstsz, const char *dir, const char *name);
 void vfs_parent(char *dst, u32 dstsz, const char *path);
 int  vfs_is_root(const char *path);
 
-/* ata_read/ata_write return 0 on success and -1 on failure, which reads
+/* blk_read/blk_write return 0 on success and -1 on failure, which reads
    backwards in the filesystem code. These wrappers return 1 on success
    so the drivers can say "if (!disk_read(...)) fail". */
 static inline int disk_read(int disk, u32 lba, u8 count, void *buf) {
-    return ata_read(disk, lba, count, buf) == 0;
+    return blk_read(disk, lba, count, buf) == 0;
 }
 static inline int disk_write(int disk, u32 lba, u8 count, const void *buf) {
-    return ata_write(disk, lba, count, buf) == 0;
+    return blk_write(disk, lba, count, buf) == 0;
 }
 
 /* ---- individual drivers ---- */
+void fat_reset_mounts(void);
+void ntfs_reset_mounts(void);
 void ramfs_vfs_register(void);
 void kvfs_vfs_register(void);
 int  fat_probe(int disk, u32 lba_start, u32 lba_count, char *label, fs_kind_t *kind);
