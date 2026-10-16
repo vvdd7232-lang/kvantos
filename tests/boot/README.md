@@ -88,6 +88,26 @@ and Russian 640x480. Source-image hashes must remain unchanged despite
 writable QEMU backends. Host tests exercise block/VFS write refusal, bounds
 and 24 mount resets. Logs/screenshots: `build/usb-import/{bios32,uefi64}`.
 
-This does **not** validate arbitrary hardware. Driver supports UHCI root
-ports and BOT/SCSI/512-byte media only; no EHCI/xHCI/OHCI/hubs/UAS. See
+This does **not** validate arbitrary hardware. Driver supports UHCI full-speed / EHCI high-speed root
+ports and BOT/SCSI/512-byte media only; no xHCI/OHCI/hubs/UAS. See
 [USB-IMPORT.md](../../USB-IMPORT.md) before trying a physical machine.
+
+### EHCI / VirtualBox USB 2.0 correction
+
+```sh
+USB_CONTROLLER=ehci python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=ehci-ohci python3 tests/boot/usb-import-smoke.py
+```
+
+The first case uses QEMU ICH4 EHCI. The second uses ICH9 EHCI, two OHCI
+companions, and root port 3. Tests assert 480 Mb/s and successful EHCI init;
+no UHCI fallback or IDE substitution. The full existing USB suite runs in
+both kernels, including a 6 KiB multi-cluster source. Generated evidence is
+under `build/usb-import/{uhci,ehci,ehci-ohci}/{bios32,uefi64}`.
+This is **not** a VirtualBox run and does not establish physical-drive
+compatibility. OHCI is a companion in the test topology, not a supported
+driver. VirtualBox users should use the new ISO and USB 2.0 (OHCI + EHCI),
+check Devices > USB capture, and Refresh. USB 1.1 OHCI and USB 3.0 xHCI remain
+unsupported. EHCI qTD/QH layout is checked at compile time; async DMA is
+quiesced before descriptor reuse, registers are mapped uncached, and BIOS
+ownership has a bounded handoff rather than blindly overwriting firmware.

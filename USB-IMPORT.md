@@ -13,14 +13,26 @@ confirmation; cancellation/read/validation/OOM failures preserve doc and undo.
 
 ## Deliberately limited hardware support
 
-Read-only **UHCI USB 1.1**, full-speed root ports, mass storage **BOT / SCSI
-transparent / LUN 0 / 512-byte sectors**. Up to four controllers, two root
-ports each. **No EHCI, xHCI, OHCI, hubs, UAS, or 4K logical sectors.** Most
-modern xHCI-only PCs will not detect a flash drive with this driver. A USB 2
-connector or firmware USB boot capability does not imply UHCI support.
-No physical hardware has been tested. Taking UHCI ownership disables its
-legacy SMI; USB keyboard/mouse BIOS emulation may cease working (no USB HID
-driver). PS/2 and existing NumLock/NumPad MouseKeys remain supported.
+Read-only **UHCI full-speed and EHCI high-speed** root ports, mass storage
+**BOT / SCSI transparent / LUN 0 / 512-byte sectors**. Up to four controllers
+and eight disks. **No OHCI, xHCI, hubs, split transactions, UAS, or 4K sectors.**
+EHCI MMIO must be below 4 GiB; failed firmware handoff is reported, not forced.
+No USB HID driver; keep PS/2 input or MouseKeys available.
+
+## VirtualBox USB 2.0 correction
+
+The old UHCI-only preview cannot work with VirtualBox's USB controllers.
+Use the new `kvantos-usb2-ehci-preview.iso`, select **USB 2.0 (OHCI + EHCI)**,
+and check actual device capture under **Devices > USB** after boot. A filter
+alone does not prove capture. Click Import > Refresh; the status reports EHCI
+controller and detected disk counts. Do not reformat a device just to diagnose
+an empty list. USB 1.1 (OHCI) and USB 3.0 (xHCI) remain unsupported.
+
+High-speed EHCI has been validated under **QEMU**, with ICH4 and ICH9 models,
+including OHCI companions and root port 3 at 480 Mb/s. **VirtualBox itself,
+the user's physical flash drive, and real hardware have not been tested.**
+OHCI companions do not imply an OHCI driver: full-/low-speed devices on them
+remain unsupported. Firmware USB boot is separate from OS USB data support.
 
 FAT16/FAT32 in **MBR** primary/extended partitions or raw/superfloppy form.
 No new GPT/exFAT/FAT12 support. ATA FAT volumes are also available in the
@@ -41,7 +53,9 @@ both pickers and the read-only sector cache and starts at the first FAT root.
 
 ```sh
 make CC=gcc-12 iso
-python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=ehci python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=ehci-ohci python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=uhci python3 tests/boot/usb-import-smoke.py
 python3 tests/boot/mkusb.py build/usb-fixtures
 make -C tests/fs
 tests/fs/build/harness build/usb-fixtures/flash-raw.img --usb
@@ -51,7 +65,7 @@ tests/fs/build/harness build/usb-fixtures/flash-mbr.img --usb
 Needs dosfstools, mtools, QEMU, OVMF and Pillow. Only private files under
 `build/` are created, no host mounts or host-device formatting. Guest tests
 cover BIOS/i386 and UEFI/x86-64, MBR/raw USB FAT32, folders/LFN, BOM/CRLF/tabs,
-Unicode text, naming and overwrite guards, empty files, atomic bad-input
+Unicode text, naming and overwrite guards, 6 KiB multi-cluster sources, empty files, atomic bad-input
 rejection, 12 refreshes, unplug/replug, native compilation and execution,
 KvFS persistence over a full reboot, diskless operation and Russian 640x480.
 The QEMU USB images are writable; their SHA-256 hashes must remain unchanged.
@@ -61,7 +75,7 @@ mount resets. This is emulated-device validation, not real-hardware coverage.
 Attach an existing FAT32 image with these extra QEMU options:
 
 ```sh
--device piix3-usb-uhci,id=usbtest \
+-device usb-ehci,id=usbtest \
 -drive if=none,id=flash,format=raw,file=flash.img \
 -device usb-storage,bus=usbtest.0,drive=flash,port=1
 ```

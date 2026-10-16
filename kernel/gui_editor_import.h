@@ -35,7 +35,7 @@ static void ed_import_volume(int next) {
     ed_import_list();
     ed_msg(editor->import_dir[0]?
            T("Select a folder/file. Source stays read-only.", "Выберите папку/файл. Запись на источник не производится."):
-           T("No FAT volume. USB: UHCI only, no hubs; click Refresh.", "Нет FAT-томов. USB: только UHCI, без хабов. Нажмите Обновить."));
+           T("No FAT volume: check USB capture, FAT32 and Refresh.", "Нет FAT-томов. Проверьте захват USB, FAT32 и Обновить."));
 }
 static void ed_import_begin(void) {
     ed_name_mode=ED_IMPORT_DIALOG;

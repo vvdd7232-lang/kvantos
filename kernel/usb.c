@@ -1,5 +1,5 @@
-/* USB 1.1 UHCI, root-port full-speed Bulk-Only/SCSI storage, read-only.
- * No hubs, OHCI/EHCI/xHCI, UAS or non-512-byte media. All DMA is static,
+/* UHCI (full speed) / EHCI (high speed), root-port BOT/SCSI storage, read-only.
+ * No hubs, OHCI/xHCI, UAS or non-512-byte media. All DMA is static,
  * below 4 GiB, packetised at endpoint MPS; no IRQ or timer dependency. */
 #include "kernel.h"
 
@@ -15,19 +15,24 @@
 
 typedef struct { volatile u32 link, status; u32 token, buffer; } td_t;
 typedef struct { volatile u32 link, element; u32 pad[2]; } qh_t;
-typedef struct { u16 io; } hc_t;
+typedef struct {
+    volatile u32 *op;
+    u16 io;
+    u8 kind, ports, dead, bus, slot, func; /* kind: 0 UHCI, 1 EHCI */
+} hc_t;
 typedef struct {
     hc_t *hc;
     u32 sectors;
-    u8 address, port, ep0, in, out, in_mps, out_mps, itoggle, otoggle, iface;
+    u16 in_mps, out_mps;
+    u8 address, port, ep0, in, out, itoggle, otoggle, iface;
 } usb_disk_t;
 static hc_t hcs[HC_MAX];
 static usb_disk_t disks[USB_MAX];
-static int hc_count, disk_count, initialised;
+static int hc_count, disk_count, initialised, ehci_count, uhci_count, ehci_seen;
 static u32 frames[HC_MAX][1024] __attribute__((aligned(4096)));
 static qh_t queues[HC_MAX] __attribute__((aligned(16)));
 static td_t tds[TD_MAX] __attribute__((aligned(16)));
-static u8 dma_buf[4096] __attribute__((aligned(16)));
+static u8 dma_buf[4096] __attribute__((aligned(4096)));
 static u8 setup_buf[8] __attribute__((aligned(16)));
 static u8 config[1024], reply[64];
 static u32 next_tag;
@@ -41,13 +46,20 @@ static u64 clock_now(void) {
     u32 lo, hi; __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
     return ((u64)hi << 32) | lo;
 }
-/* FRNUM wraps at 2048, not 65536. TSC is a final bound if a controller
- * stops making frames; the transfer deadline itself uses USB frames. */
+static int frames_wait(hc_t *h, unsigned n);
+#include "usb_ehci.h"
+static unsigned frame_number(hc_t *h) {
+    return h->kind ? (ehci_reg(h, 0x0C) >> 3) & 2047 : inw(h->io + 6) & 2047;
+}
+static u32 port_status(hc_t *h, int p) {
+    return h->kind ? ehci_reg(h, 0x44 + 4*p) : inw(h->io + 0x10 + 2*p);
+}
+/* Both frame counters wrap at 2048 milliseconds. TSC bounds a stopped HC. */
 static int frames_wait(hc_t *h, unsigned n) {
-    unsigned start = inw(h->io + 6) & 2047;
+    unsigned start = frame_number(h);
     u64 until = clock_now() + 1000000000ULL;
-    while (((inw(h->io + 6) - start) & 2047u) < n) {
-        if ((inw(h->io + 2) & 0x20) || clock_now() > until) return 0;
+    while (((frame_number(h) - start) & 2047u) < n) {
+        if (h->dead || (h->kind ? ehci_reg(h,4) & 0x1000 : inw(h->io+2) & 0x20) || clock_now() > until) return 0;
         __asm__ volatile("pause");
     }
     return 1;
@@ -58,9 +70,10 @@ static u32 token(u8 pid, usb_disk_t *d, u8 ep, int toggle, unsigned len) {
 }
 /* Execute a chain and return actual bytes. Short IN packets terminate the
  * transfer. Detach and let two frames pass before reusing descriptors. */
-static int transfer(usb_disk_t *d, u8 pid, u8 ep, u8 mps,
+static int transfer(usb_disk_t *d, u8 pid, u8 ep, u16 mps,
                     int *toggle, void *buf, unsigned len) {
-    if (!mps || len > sizeof(dma_buf)) return -1;
+    if (d->hc->dead || !mps || len > sizeof(dma_buf)) return -1;
+    if (d->hc->kind) return ehci_transfer(d,pid,ep,mps,toggle,buf,len);
     unsigned count = len ? (len + mps - 1) / mps : 1;
     if (count > TD_MAX) return -1;
     if (pid != IN && len) memcpy(dma_buf, buf, len);
@@ -153,15 +166,21 @@ bad:
     return -1;
 }
 static int enumerate(hc_t *h, int port, usb_disk_t *d) {
-    u16 reg = h->io + 0x10 + 2 * port;
-    if (!(inw(reg) & 1) || (inw(reg) & 0x100)) return 0; /* absent/low speed */
-    outw(reg, 0x200); if (!frames_wait(h, 50)) return 0;
-    outw(reg, 0); if (!frames_wait(h, 10)) return 0;
-    outw(reg, 4); if (!frames_wait(h, 25) || (inw(reg) & 5) != 5) return 0;
-    memset(d, 0, sizeof(*d)); d->hc = h; d->port = port; d->ep0 = 8;
+    if (h->dead) return 0;
+    if (h->kind) {
+        if (!ehci_reset_port(h,port)) return 0;
+    } else {
+        u16 reg = h->io + 0x10 + 2 * port;
+        if (!(inw(reg) & 1) || (inw(reg) & 0x100)) return 0;
+        outw(reg, 0x200); if (!frames_wait(h, 50)) return 0;
+        outw(reg, 0); if (!frames_wait(h, 10)) return 0;
+        outw(reg, 4); if (!frames_wait(h, 25) || (inw(reg) & 5) != 5) return 0;
+    }
+    memset(d, 0, sizeof(*d)); d->hc = h; d->port = port; d->ep0 = h->kind ? 64 : 8;
     if (control(d, 0x80, 6, 0x100, 0, reply, 8) != 8 || reply[1] != 1) return 0;
     u8 mps = reply[7];
     if (mps != 8 && mps != 16 && mps != 32 && mps != 64) return 0;
+    if (h->kind && mps != 64) return 0;
     d->ep0 = mps;
     if (control(d, 0, 5, port + 1, 0, 0, 0) < 0 || !frames_wait(h, 3)) return 0;
     d->address = port + 1;
@@ -181,7 +200,7 @@ static int enumerate(hc_t *h, int port, usb_disk_t *d) {
             if (matching) d->iface = p[2];
         } else if (matching && type == 5 && n >= 7 && (p[3] & 3) == 2) {
             unsigned packet = p[4] | ((unsigned)p[5] << 8);
-            if (packet != 8 && packet != 16 && packet != 32 && packet != 64) return 0;
+            if (h->kind ? packet != 512 : (packet != 8 && packet != 16 && packet != 32 && packet != 64)) return 0;
             if (!(p[2] & 15)) return 0;
             if (p[2] & 0x80) { d->in = p[2] & 15; d->in_mps = packet; }
             else { d->out = p[2] & 15; d->out_mps = packet; }
@@ -206,15 +225,22 @@ static int enumerate(hc_t *h, int port, usb_disk_t *d) {
     return d->sectors != 0;
 }
 static void init_controllers(void) {
+    /* Claim high-speed port routing before starting companion UHCI hosts. */
+    for (int pass = 0; pass < 2; pass++)
     for (u32 i = 0; i < pci_count() && hc_count < HC_MAX; i++) {
         pci_dev_t *p = pci_get(i);
-        if (p->class_code != 0x0C || p->subclass != 3 || p->prog_if != 0) continue;
+        if (p->class_code != 0x0C || p->subclass != 3 || p->prog_if != (pass ? 0 : 0x20)) continue;
+        if (!pass) {
+            ehci_seen++;
+            if (ehci_init(p,&hcs[hc_count])) { hc_count++; ehci_count++; }
+            continue;
+        }
         u32 bar = pci_read32(p->bus, p->slot, p->func, 0x20);
         if (!(bar & 1) || !(bar & 0xFFE0)) continue;
         u32 cmd = pci_read32(p->bus, p->slot, p->func, 4);
         pci_write32(p->bus, p->slot, p->func, 4, (cmd & 0xFFFF) | 5);
         pci_write32(p->bus, p->slot, p->func, 0xC0, 0x2000); /* disable legacy SMI */
-        hc_t *h = &hcs[hc_count]; h->io = bar & 0xFFE0;
+        hc_t *h = &hcs[hc_count]; memset(h,0,sizeof(*h)); h->io = bar & 0xFFE0; h->ports = 2;
         outw(h->io, 0); outw(h->io + 4, 0); outw(h->io, 2);
         int limit = 100000;
         while ((inw(h->io) & 2) && --limit) __asm__ volatile("pause");
@@ -224,7 +250,7 @@ static void init_controllers(void) {
         outl(h->io + 8, physical(frames[hc_count]));
         outw(h->io + 6, 0); outb(h->io + 12, 64); outw(h->io + 2, 0x3F);
         outw(h->io, 0xC1); /* Run, configured, 64-byte max packets */
-        if (frames_wait(h, 20)) hc_count++;
+        if (frames_wait(h, 20)) { hc_count++; uhci_count++; }
         else outw(h->io, 0);
     }
 }
@@ -232,7 +258,7 @@ void usb_rescan(void) {
     if (!initialised) { init_controllers(); initialised = 1; }
     disk_count = 0; memset(disks, 0, sizeof(disks));
     memset(cache, 0, sizeof(cache)); cache_next = 0;
-    for (int i = 0; i < hc_count; i++) for (int p = 0; p < 2 && disk_count < USB_MAX; p++) {
+    for (int i = 0; i < hc_count; i++) for (int p = 0; p < hcs[i].ports && disk_count < USB_MAX; p++) {
         if (enumerate(&hcs[i], p, &disks[disk_count])) disk_count++;
     }
 }
@@ -240,9 +266,15 @@ int usb_count(void) { return disk_count; }
 u32 usb_sectors(int disk) {
     if (disk < 0 || disk >= disk_count) return 0;
     usb_disk_t *d = &disks[disk];
-    return (inw(d->hc->io + 0x10 + 2 * d->port) & 5) == 5 ? d->sectors : 0;
+    return !d->hc->dead && (port_status(d->hc,d->port) & 5) == 5 ? d->sectors : 0;
 }
-const char *usb_status(void) { return hc_count ? "USB: UHCI, root ports, FAT32 / 512 B" : "USB: no UHCI (EHCI/xHCI not supported)"; }
+const char *usb_status(void) {
+    static char info[80];
+    if (ehci_seen && !ehci_count && !disk_count) return ehci_error;
+    if (!hc_count) return ehci_seen ? ehci_error : "USB: no UHCI/EHCI (OHCI/xHCI unsupported)";
+    ksnprintf(info,sizeof(info),"USB: EHCI %d, UHCI %d; disks %d",ehci_count,uhci_count,disk_count);
+    return info;
+}
 int usb_read(int disk, u32 lba, u8 count, void *buf) {
     u32 sectors = usb_sectors(disk);
     if (!count || lba >= sectors || count > sectors - lba) return -1;

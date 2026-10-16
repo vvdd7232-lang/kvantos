@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real USB BOT/UHCI + FAT32 + mouse import + native build/run, both kernels.
+"""Real USB BOT/UHCI/EHCI + FAT32 + mouse import + native build/run, both kernels.
 Only private fixture images are used. QEMU attaches them writable so the final
 SHA-256 check can actually detect an accidental write by firmware or the OS.
 """
@@ -15,7 +15,11 @@ if 'MCC_ARCH64' not in os.environ:
 sys.path.insert(0,str(ROOT/'tests/mcc'))
 import smoke
 from mkusb import make
-smoke.WORK=ROOT/'build/usb-import'/('uefi64' if smoke.IS64 else 'bios32')
+CONTROLLER=os.environ.get('USB_CONTROLLER','uhci')
+assert CONTROLLER in ('uhci','ehci','ehci-ohci')
+EHCI=CONTROLLER.startswith('ehci')
+PORT='3' if CONTROLLER=='ehci-ohci' else '1'
+smoke.WORK=ROOT/'build/usb-import'/CONTROLLER/('uefi64' if smoke.IS64 else 'bios32')
 smoke.WORK.mkdir(parents=True,exist_ok=True)
 smoke.DISK=smoke.WORK/'local.img'
 raw,mbr,proof=make(smoke.WORK)
@@ -61,9 +65,14 @@ def refresh(q, present=True, app=9):
             if not present or s.path:return
         time.sleep(.05)
     raise AssertionError(('refresh did not finish',q.num('disk_count'),state(q,app).count,state(q,app).status))
-def usb_args(image):return ['-device','piix3-usb-uhci,id=usbtest',
-    '-drive',f'file={image},format=raw,if=none,id=flash',
-    '-device','usb-storage,bus=usbtest.0,drive=flash,id=stick,port=1']
+def usb_args(image):
+    model='ich9-usb-ehci1' if CONTROLLER=='ehci-ohci' else 'usb-ehci' if EHCI else 'piix3-usb-uhci'
+    args=['-device',model+',id=usbtest']
+    if CONTROLLER=='ehci-ohci':
+        args+=['-device','pci-ohci,id=companion0,masterbus=usbtest.0,firstport=0,num-ports=3',
+               '-device','pci-ohci,id=companion1,masterbus=usbtest.0,firstport=3,num-ports=3']
+    return args+['-drive',f'file={image},format=raw,if=none,id=flash',
+                 '-device',f'usb-storage,bus=usbtest.0,drive=flash,id=stick,port={PORT}']
 def local_read(name):
     entry=next(e for e in KvFS(str(smoke.DISK)).listing() if e['name']==name)
     with smoke.DISK.open('rb') as f:
@@ -74,10 +83,12 @@ def imported(q,expected,name,app=9):
     assert q.document(app)['text']==expected,q.document(app)
     assert q.files()[name]==expected,(name,q.files().keys())
 
-print('USB import:', 'UEFI x86-64' if smoke.IS64 else 'BIOS i386',flush=True)
+print('USB import:',CONTROLLER, 'UEFI x86-64' if smoke.IS64 else 'BIOS i386',flush=True)
 original={p:digest(p) for p in (raw,mbr)}
 with smoke.Guest(extra_args=usb_args(mbr)) as q:
     assert q.num('hc_count')==1 and q.num('disk_count')==1
+    assert q.num('ehci_count' if EHCI else 'uhci_count')==1
+    if EHCI:assert b'Speed 480 Mb/s' in q.cmd('info usb')
     assert '/mnt/usb0p1' in q.log.read_text(errors='replace')
     q.text('lang ru\n');q.text('guimenu\n');time.sleep(1)
     q.open_app(9);before=snap(q)
@@ -102,6 +113,11 @@ with smoke.Guest(extra_args=usb_args(mbr)) as q:
         assert q.mode(9)==6 and snap(q)==before and q.files()==files,(name,state(q).status)
         q.widget(83,9)
     print('  Binary, oversized, long line, too many lines, UTF-16: atomic rejection PASS',flush=True)
+    open_import(q);choose(q,'MULTI.C');q.choose_name('multi.c');q.widget(82,9)
+    multi=(b'// '+b'x'*70+b'\n')*80+proof
+    imported(q,multi,'multi.c');q.widget(90,9)
+    assert q.files()['multi.kapp'][:4]==b'KAPP'
+    print('  Multi-cluster 6 KiB source import + native Build PASS',flush=True)
     # Empty file is valid. Long FAT name has a separate editable local name.
     open_import(q);choose(q,'EMPTY.C');q.widget(82,9);imported(q,b'','EMPTY.c')
     open_import(q);choose(q,'Sources');choose(q,'A long source name.C')
@@ -134,7 +150,7 @@ with smoke.Guest(extra_args=usb_args(mbr)) as q:
     assert time.monotonic()-started<4 and q.mode(9)==6 and snap(q)==before and q.files()==files
     refresh(q,False);assert state(q).count==0 and q.num('disk_count')==0
     assert b'Error:' not in q.cmd(f'drive_add 0 if=none,id=flash,file={mbr},format=raw')
-    assert b'Error:' not in q.cmd('device_add usb-storage,bus=usbtest.0,drive=flash,id=stick,port=1');time.sleep(.25)
+    assert b'Error:' not in q.cmd(f'device_add usb-storage,bus=usbtest.0,drive=flash,id=stick,port={PORT}');time.sleep(.25)
     refresh(q);assert state(q).count and q.num('disk_count')==1
     choose(q,'HELLO.C');q.choose_name('hot.c');q.widget(82,9);imported(q,proof,'hot.c')
     print('  Independent Notepad, UTF-8, tabs, 12 rescans, unplug/replug+Refresh PASS',flush=True)

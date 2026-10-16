@@ -15,6 +15,7 @@ def make(out):
     proof=(b'int counter=0;\r\nvoid open(void){counter=42;}\r\n'
            b'void draw(void){clear(0);text(16,16,"USB import OK",-1,-1);status("USB import OK");}\r\n')
     copy('HELLO.C',proof)
+    copy('MULTI.C',(b'// '+b'x'*70+b'\r\n')*80+proof)
     subprocess.run(['mmd','-i',str(raw),'::Sources','::Sources/Nested'],check=True)
     copy('Sources/A long source name.C',proof)
     copy('Sources/Nested/BOM.C',b'\xef\xbb\xbf'+proof)

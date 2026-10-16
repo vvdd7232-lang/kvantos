@@ -82,6 +82,8 @@ build/obj:
 build/obj/mcc.o build/obj/gui.o build/obj/textedit.o build/obj/mouse.o build/obj/keyboard.o build/obj/usb.o build/obj/fat.o build/obj/ntfs.o: CFLAGS += -Os
 build/obj64/mcc.o build/obj64/gui.o build/obj64/textedit.o build/obj64/mouse.o build/obj64/keyboard.o build/obj64/usb.o build/obj64/fat.o build/obj64/ntfs.o: CFLAGS64 += -Os
 
+build/obj/usb.o build/obj64/usb.o: kernel/usb_ehci.h
+
 build/obj/gui.o build/obj64/gui.o: $(wildcard kernel/gui_editor_*.h) include/vfs.h include/textedit.h
 
 build/obj/%.o: kernel/%.c include/kernel.h | build/obj

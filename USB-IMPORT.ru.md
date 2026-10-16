@@ -38,23 +38,47 @@
 
 ![Диалог импорта в UEFI x86-64, реальный кадр QEMU](screenshots/65_fat32_usb_import_uefi64.png)
 
-## Важное ограничение USB
+## USB 2.0 в VirtualBox — исправление EHCI
 
-**Сейчас реализован только UHCI / USB 1.1, а не универсальный USB-стек.**
-Поддерживаются full-speed устройства Mass Storage с Bulk-Only Transport,
-SCSI transparent, LUN 0, логическим сектором 512 байт, подключённые к корневому
-порту UHCI. До четырёх UHCI-контроллеров, по два корневых порта.
+Предыдущая preview-сборка поддерживала только UHCI и **не подходила для
+VirtualBox**: там USB 1.1 — OHCI, USB 2.0 — OHCI + EHCI, USB 3.0 — xHCI.
+Новая сборка добавляет **EHCI для high-speed USB 2.0 Mass Storage**.
+Старую `kvantos-fat32-import-preview.iso` замените на новую
+`kvantos-usb2-ehci-preview.iso`: одной смены настройки старому ISO недостаточно.
 
-**EHCI, xHCI, OHCI, USB-хабы, UAS и диски с логическим сектором 4096 байт
-пока не поддерживаются. На современном компьютере только с xHCI флешка
-не появится.** Даже разъём USB 2.0 сам по себе не гарантирует наличие UHCI.
-Наличие BIOS/UEFI-загрузки с USB тоже не означает, что ОС умеет читать этот
-контроллер после загрузки: загрузчик и драйвер ОС — разные вещи.
+1. Выключите VM и замените ISO в её виртуальном оптическом приводе.
+2. Оставьте **USB 2.0 (OHCI + EHCI) Controller** и фильтр своей флешки.
+3. Запустите VM. В **Устройства → USB** проверьте галочку напротив флешки.
+   Фильтр лишь задаёт правило захвата, а не доказывает, что захват состоялся.
+4. Откройте **Импорт → Обновить**. Строка `EHCI 1` означает, что контроллер
+   запущен; `disks 1` — что найден накопитель. Дальше выберите FAT-том и файл.
+5. Если показано `EHCI 1`, но `disks 0`, проверьте захват USB и пришлите скрин.
+   Если `disks 1`, но FAT-томов нет, нужно уточнить файловую систему и разметку.
+   **Не переформатируйте флешку ради диагностики.** Наличие `.c` в Windows
+   само по себе не доказывает ни FAT32, ни передачу устройства гостевой ОС.
 
-Реальное оборудование не проверялось. На машинах с USB-клавиатурой/мышью
-нужна отдельная проверка: передача UHCI от BIOS отключает его legacy SMI,
-а собственного USB HID-драйвера здесь нет. PS/2 и существующие MouseKeys
-сохраняются; NumLock включает управление указателем с NumPad.
+![EHCI USB 2.0, настоящий кадр QEMU](screenshots/66_ehci_usb2_import_uefi64.png)
+
+## Ограничения драйвера
+
+Поддерживаются **UHCI / full-speed** и **EHCI / high-speed**, только корневые
+порты, Mass Storage **Bulk-Only Transport / SCSI transparent / LUN 0**,
+логический сектор **512 байт**. До четырёх контроллеров суммарно, до восьми
+накопителей; число портов EHCI берётся из аппаратных возможностей.
+
+**OHCI, xHCI, хабы, split-транзакции, UAS, секторы 4096 байт и READ CAPACITY(16)
+пока не поддерживаются.** Поэтому режим VirtualBox USB 1.1 (OHCI) или USB 3.0
+(xHCI) выбирать не нужно. В конфигурации OHCI + EHCI читаются именно high-speed
+накопители через EHCI; отдельного OHCI-драйвера не добавлено. Full-/low-speed
+устройство за OHCI этой реализацией не обслуживается.
+
+Проверено в **QEMU**, отдельно с Intel ICH4 EHCI и с ICH9 EHCI + OHCI-companions,
+на третьем корневом порту и с устройством 480 Мбит/с. Это **не испытание
+самого VirtualBox или вашей физической General UDisk**: его выполнить здесь
+не удалось. На реальном оборудовании также нужна проверка. MMIO EHCI
+поддерживается ниже 4 ГиБ; при отказе передачи управления от BIOS контроллер
+не захватывается силой. USB HID-драйвера нет; для клавиатуры/мыши остаются
+PS/2 и существующие MouseKeys (NumLock/NumPad).
 
 FAT16/FAT32 распознаются на дисках с **MBR** (включая extended-разделы) и
 на FAT без таблицы разделов. **GPT, exFAT и FAT12 не добавлены.** Диалог
@@ -91,7 +115,7 @@ FAT16/FAT32 распознаются на дисках с **MBR** (включа�
 make CC=gcc-12 iso
 qemu-system-x86_64 -machine pc,accel=tcg -cpu pentium -m 256 \
   -cdrom release/kvantos.iso -boot d \
-  -device piix3-usb-uhci,id=usbtest \
+  -device usb-ehci,id=usbtest \
   -drive if=none,id=flash,format=raw,file=flash.img \
   -device usb-storage,bus=usbtest.0,drive=flash,port=1
 ```
@@ -100,7 +124,9 @@ qemu-system-x86_64 -machine pc,accel=tcg -cpu pentium -m 256 \
 
 ```sh
 # dosfstools, mtools, QEMU, OVMF, Pillow
-python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=ehci python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=ehci-ohci python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=uhci python3 tests/boot/usb-import-smoke.py
 # Секторная маршрутизация, защита от записи и 24 повторных монтирования
 python3 tests/boot/mkusb.py build/usb-fixtures
 make -C tests/fs
@@ -110,7 +136,7 @@ tests/fs/build/harness build/usb-fixtures/flash-mbr.img --usb
 
 Проверено в **реальных гостевых ядрах QEMU**, BIOS/i386 и UEFI/x86-64:
 MBR и FAT без таблицы разделов; вход в папки; длинные имена; UTF-8 BOM,
-кириллический текст, CRLF/Tab; переименование локальной копии; пустой файл;
+кириллический текст, CRLF/Tab; переименование локальной копии; много-кластерный исходник около 6 КиБ; пустой файл;
 отмена/подтверждение замены; отказ для binary/UTF-16/переполнений; 12 обновлений
 подряд; отключение и повторное подключение; импорт → нативная сборка/запуск;
 запись на KvFS и повторный запуск после полной перезагрузки без флешки;

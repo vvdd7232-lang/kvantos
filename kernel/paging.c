@@ -186,3 +186,23 @@ u32 paging_phys(u32 virt) {
 }
 
 #endif /* __x86_64__ */
+
+/* Uncached, write-through identity mapping for device registers. Unlike a
+ * framebuffer mapping, EHCI register reads must never hit the CPU cache. */
+int paging_map_mmio(u32 base, u32 size) {
+    if (!size || base >= 0xFFFFF000u || size > 0xFFFFF000u - base) return -1;
+    if (paging_map_range(base, size, 1) < 0) return -1;
+    u32 start = base & ~0xFFFu, end = (base + size + 4095) & ~0xFFFu;
+    for (u32 a = start; a < end; a += 4096) {
+#ifdef __x86_64__
+        u64 *pte = walk(a, 0);
+        if (!pte) return -1;
+        *pte |= 0x18; /* PCD | PWT */
+#else
+        u32 *pt = (u32 *)(page_directory[a >> 22] & ~0xFFFu);
+        pt[(a >> 12) & 1023] |= 0x18;
+#endif
+        __asm__ volatile("invlpg (%0)" :: "r"((kv_addr_t)a) : "memory");
+    }
+    return 0;
+}

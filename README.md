@@ -43,8 +43,8 @@ The Workshop and Notepad have independent documents.
 
 The new preview adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later
-KvFS persistence. The source is not modified. **USB is currently UHCI only,
-not EHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
+KvFS persistence. The source is not modified. **USB now supports UHCI and high-speed EHCI,
+not OHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
 [Instructions and limits](USB-IMPORT.md).
 
 ## Quick start

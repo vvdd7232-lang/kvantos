@@ -211,6 +211,7 @@ u32    pmm_total_bytes(void);
 void   paging_init(void);
 int    paging_map(u32 virt, u32 phys, int rw);
 int    paging_map_range(u32 base, u32 size, int rw);
+int    paging_map_mmio(u32 base, u32 size);
 u32    paging_phys(u32 virt);
 
 /* ---------- heap ---------- */
