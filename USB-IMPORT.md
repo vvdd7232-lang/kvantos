@@ -34,12 +34,28 @@ the user's physical flash drive, and real hardware have not been tested.**
 OHCI companions do not imply an OHCI driver: full-/low-speed devices on them
 remain unsupported. Firmware USB boot is separate from OS USB data support.
 
-FAT16/FAT32 in **MBR** primary/extended partitions or raw/superfloppy form.
-No new GPT/exFAT/FAT12 support. ATA FAT volumes are also available in the
-picker; USB tests use a real emulated USB controller, never an IDE substitute.
-USB writes are independently rejected by both the block layer and VFS.
-The existing file manager can copy other file types to local storage (4 MiB
-limit), subject to destination filesystem name/capacity limits.
+## GPT + FAT32 correction
+
+The EHCI-only preview detected the USB disk but could not discover FAT32
+inside **GPT**. Use **kvantos-gpt-fat32-preview.iso**, not the previous ISO.
+No GPT-to-MBR conversion, reformatting or changes to the user's drive.
+Keep VirtualBox USB 2.0 (OHCI + EHCI), capture the device and Import > Refresh.
+With an MSR in slot 1 and FAT32 Basic Data in slot 2, the volume is
+`/mnt/usb0p2`. Slot numbers are preserved; non-filesystem MSR is not a volume.
+
+FAT16/FAT32: **MBR** primary/extended, **GPT 1.0**, or raw/superfloppy.
+GPT header and full entry-array CRCs are validated before any mount. If
+primary metadata is invalid/unreadable, the backup header/array at the end
+of the disk is tried. Protective GPT never falls back to hybrid aliases or
+raw FAT. No partition-table repair or writes. All GPT mounts are read-only,
+including ATA. USB writes remain blocked independently in the block layer.
+
+Bounds: 512-byte logical sectors, 32-bit LBAs (below 2 TiB), <=1024 entries,
+128..4096-byte power-of-two entry size, <=128 KiB total entry metadata.
+Windows' usual 128 x 128-byte table is supported. exFAT/FAT12 and GPT writes
+are not added. The picker reports invalid/unreadable GPT metadata versus
+valid GPT without a recognized FAT filesystem. Real hardware and VirtualBox
+itself have not been tested; the guest suites run in QEMU.
 
 UTF-8 (optional BOM), CRLF normalization, tabs to four spaces. Empty files
 work; binary, UTF-16 and overflow are rejected. Editor: 128 lines, 120 bytes
@@ -53,6 +69,8 @@ both pickers and the read-only sector cache and starts at the first FAT root.
 
 ```sh
 make CC=gcc-12 iso
+USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=uhci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
 USB_CONTROLLER=ehci python3 tests/boot/usb-import-smoke.py
 USB_CONTROLLER=ehci-ohci python3 tests/boot/usb-import-smoke.py
 USB_CONTROLLER=uhci python3 tests/boot/usb-import-smoke.py
@@ -60,11 +78,13 @@ python3 tests/boot/mkusb.py build/usb-fixtures
 make -C tests/fs
 tests/fs/build/harness build/usb-fixtures/flash-raw.img --usb
 tests/fs/build/harness build/usb-fixtures/flash-mbr.img --usb
+tests/fs/build/harness build/usb-fixtures/flash-gpt.img --usb
+python3 tests/fs/test_gpt.py
 ```
 
 Needs dosfstools, mtools, QEMU, OVMF and Pillow. Only private files under
 `build/` are created, no host mounts or host-device formatting. Guest tests
-cover BIOS/i386 and UEFI/x86-64, MBR/raw USB FAT32, folders/LFN, BOM/CRLF/tabs,
+cover BIOS/i386 and UEFI/x86-64, MBR/GPT/raw USB FAT32, folders/LFN, BOM/CRLF/tabs,
 Unicode text, naming and overwrite guards, 6 KiB multi-cluster sources, empty files, atomic bad-input
 rejection, 12 refreshes, unplug/replug, native compilation and execution,
 KvFS persistence over a full reboot, diskless operation and Russian 640x480.
@@ -79,3 +99,7 @@ Attach an existing FAT32 image with these extra QEMU options:
 -drive if=none,id=flash,format=raw,file=flash.img \
 -device usb-storage,bus=usbtest.0,drive=flash,port=1
 ```
+
+23 host parser cases include independent sgdisk verification, backup fallback,
+CRC corruption, bounded count/stride/address handling, 256/512/1024/4096-byte
+entries, FAT slot 1024 and repeated mounts. Source-image hashes stay unchanged.

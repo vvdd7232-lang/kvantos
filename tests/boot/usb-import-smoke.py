@@ -14,15 +14,19 @@ if 'MCC_ARCH64' not in os.environ:
     raise SystemExit
 sys.path.insert(0,str(ROOT/'tests/mcc'))
 import smoke
-from mkusb import make
+from mkusb import make, make_gpt
 CONTROLLER=os.environ.get('USB_CONTROLLER','uhci')
 assert CONTROLLER in ('uhci','ehci','ehci-ohci')
 EHCI=CONTROLLER.startswith('ehci')
 PORT='3' if CONTROLLER=='ehci-ohci' else '1'
-smoke.WORK=ROOT/'build/usb-import'/CONTROLLER/('uefi64' if smoke.IS64 else 'bios32')
+LAYOUT=os.environ.get('USB_LAYOUT','mbr')
+assert LAYOUT in ('mbr','gpt')
+SOURCE_ROOT=b'/mnt/usb0p2' if LAYOUT=='gpt' else b'/mnt/usb0p1'
+smoke.WORK=ROOT/'build/usb-import'/CONTROLLER/LAYOUT/('uefi64' if smoke.IS64 else 'bios32')
 smoke.WORK.mkdir(parents=True,exist_ok=True)
 smoke.DISK=smoke.WORK/'local.img'
 raw,mbr,proof=make(smoke.WORK)
+source=make_gpt(raw,smoke.WORK/'flash-gpt.img') if LAYOUT=='gpt' else mbr
 subprocess.run([sys.executable,'sdk/mkdisk.py',str(smoke.DISK),'16'],check=True,stdout=subprocess.DEVNULL)
 sys.path.insert(0,str(ROOT/'sdk'))
 from mkdisk import KvFS
@@ -83,18 +87,18 @@ def imported(q,expected,name,app=9):
     assert q.document(app)['text']==expected,q.document(app)
     assert q.files()[name]==expected,(name,q.files().keys())
 
-print('USB import:',CONTROLLER, 'UEFI x86-64' if smoke.IS64 else 'BIOS i386',flush=True)
-original={p:digest(p) for p in (raw,mbr)}
-with smoke.Guest(extra_args=usb_args(mbr)) as q:
+print('USB import:',CONTROLLER,LAYOUT, 'UEFI x86-64' if smoke.IS64 else 'BIOS i386',flush=True)
+original={p:digest(p) for p in {raw,mbr,source}}
+with smoke.Guest(extra_args=usb_args(source)) as q:
     assert q.num('hc_count')==1 and q.num('disk_count')==1
     assert q.num('ehci_count' if EHCI else 'uhci_count')==1
     if EHCI:assert b'Speed 480 Mb/s' in q.cmd('info usb')
-    assert '/mnt/usb0p1' in q.log.read_text(errors='replace')
+    assert SOURCE_ROOT.decode() in q.log.read_text(errors='replace')
     q.text('lang ru\n');q.text('guimenu\n');time.sleep(1)
     q.open_app(9);before=snap(q)
     # Dirty guard and cancel leave the entire document + undo unchanged.
     q.widget(96,9);assert q.mode(9)==3;q.widget(83,9);assert snap(q)==before
-    open_import(q);assert state(q).path==b'/mnt/usb0p1'
+    open_import(q);assert state(q).path==SOURCE_ROOT
     choose(q,'Sources');assert state(q).path.endswith(b'/Sources')
     choose(q,'Nested');choose(q,'BOM.C');q.choose_name('proof.c')
     q.screenshot(smoke.WORK/'import-dialog-ru.png')
@@ -106,7 +110,7 @@ with smoke.Guest(extra_args=usb_args(mbr)) as q:
     q.screenshot(smoke.WORK/'imported-running.png')
     q.close_app(10);q.open_app(9)
     saved=local_read('proof.c');assert saved==proof
-    print('  MBR FAT32, folders, BOM/CRLF, rename, native Build/Run + KvFS save PASS',flush=True)
+    print(f'  {LAYOUT.upper()} FAT32, folders, BOM/CRLF, rename, native Build/Run + KvFS save PASS',flush=True)
     # Every malformed input must preserve document AND undo AND RAM files.
     for name in ('BINARY.C','LARGE.C','WIDE.C','LINES.C','UTF16.C'):
         before=snap(q);files=q.files();open_import(q);choose(q,name);q.widget(82,9)
@@ -149,7 +153,7 @@ with smoke.Guest(extra_args=usb_args(mbr)) as q:
     started=time.monotonic();q.widget(82,9)
     assert time.monotonic()-started<4 and q.mode(9)==6 and snap(q)==before and q.files()==files
     refresh(q,False);assert state(q).count==0 and q.num('disk_count')==0
-    assert b'Error:' not in q.cmd(f'drive_add 0 if=none,id=flash,file={mbr},format=raw')
+    assert b'Error:' not in q.cmd(f'drive_add 0 if=none,id=flash,file={source},format=raw')
     assert b'Error:' not in q.cmd(f'device_add usb-storage,bus=usbtest.0,drive=flash,id=stick,port={PORT}');time.sleep(.25)
     refresh(q);assert state(q).count and q.num('disk_count')==1
     choose(q,'HELLO.C');q.choose_name('hot.c');q.widget(82,9);imported(q,proof,'hot.c')
@@ -175,4 +179,4 @@ with smoke.Guest(False,extra_args=usb_args(raw)) as q:
     q.screenshot(smoke.WORK/'diskless-640x480.png')
     print('  Raw FAT32 USB, diskless RAM Build/Run, Russian 640x480 PASS',flush=True)
 assert all(digest(p)==h for p,h in original.items()),'USB SOURCE IMAGE WAS MODIFIED'
-print('  Both USB images SHA-256 unchanged PASS',flush=True)
+print('  All source USB images SHA-256 unchanged PASS',flush=True)

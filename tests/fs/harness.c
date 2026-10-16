@@ -100,7 +100,8 @@ static int count_entries(const char *path) {
 
 int main(int argc, char **argv) {
     if (argc < 2) { printf("usage: harness <disk.img>\n"); return 1; }
-    usb_mode = argc>2 && !strcmp(argv[2],"--usb");
+    int usb_empty=argc>2 && !strcmp(argv[2],"--usb-empty");
+    usb_mode = usb_empty || (argc>2 && !strcmp(argv[2],"--usb"));
     disk = fopen(argv[1], usb_mode ? "rb" : "r+b");
     if (!disk) { perror("open"); return 1; }
     fseeko(disk, 0, SEEK_END);
@@ -119,10 +120,17 @@ int main(int argc, char **argv) {
                tk/1024, fk/1024, v->writable?"rw":"ro");
     }
 
+    if (usb_empty) {
+        ok(n==0 && vfs_volume_count()==1,"invalid GPT never mounts a partition or raw/hybrid alias");
+        return fail?1:0;
+    }
     if (usb_mode) {
         char path[256], root[64]; unsigned char data[512];
-        vfs_volume_t *v=vfs_find("usb0p1");
-        if(!v) v=vfs_find("usb0");
+        vfs_volume_t *v=NULL;
+        for (int i=0;i<vfs_volume_count();i++) {
+            vfs_volume_t *candidate=vfs_volume(i);
+            if(candidate->disk==4 && candidate->kind==FS_FAT32) { v=candidate; break; }
+        }
         ok(v && v->kind==FS_FAT32 && !v->writable,"USB FAT32 mounted read-only");
         ok(blk_count()==5 && blk_sectors(0)==0 && blk_sectors(3)==0 && blk_sectors(4)==disk_sectors,"stable USB block ID with absent ATA slots");
         if (!v) return 1;

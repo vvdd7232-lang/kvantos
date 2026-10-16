@@ -45,6 +45,8 @@ The new preview adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later
 KvFS persistence. The source is not modified. **USB now supports UHCI and high-speed EHCI,
 not OHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
+**GPT + FAT32** now works too, including an MSR before the data partition,
+CRC validation and backup metadata; read-only, no repartitioning/reformatting.
 [Instructions and limits](USB-IMPORT.md).
 
 ## Quick start

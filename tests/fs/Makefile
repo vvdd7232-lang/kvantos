@@ -38,3 +38,8 @@ clean:
 	rm -rf build include
 
 .PHONY: all image check clean
+
+# Does not mount or format a host device; private regular-file images only.
+.PHONY: gpt
+gpt: build/harness
+	python3 test_gpt.py

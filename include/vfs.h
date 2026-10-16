@@ -90,6 +90,7 @@ const char  *vfs_kind_name(fs_kind_t k);
 /* Scan ATA and USB disks, read its partition table and mount what we
    understand. Returns the number of volumes mounted. */
 int          vfs_autoscan(void);
+const char  *vfs_scan_status(void);
 
 /* ---- path operations (the same for every filesystem) ---- */
 int  vfs_readdir(const char *path, int index, vfs_dirent_t *out);

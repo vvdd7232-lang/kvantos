@@ -111,3 +111,27 @@ check Devices > USB capture, and Refresh. USB 1.1 OHCI and USB 3.0 xHCI remain
 unsupported. EHCI qTD/QH layout is checked at compile time; async DMA is
 quiesced before descriptor reuse, registers are mapped uncached, and BIOS
 ownership has a bounded handoff rather than blindly overwriting firmware.
+
+### GPT + FAT32 (read-only)
+
+```sh
+USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
+USB_CONTROLLER=uhci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
+make -C tests/fs gpt
+```
+
+The GPT fixture has a Microsoft Reserved partition in slot 1 and a FAT32
+Basic Data partition in slot 2, primary/backup headers and arrays with CRCs.
+The full mouse import/6 KiB source/build/run/persistence/hotplug suite uses
+`/mnt/usb0p2`, real emulated USB, and both kernel builds. Original source
+hashes must remain unchanged. Evidence is now separated by controller,
+layout and architecture under `build/usb-import/`.
+
+The 23 host checks use the actual block/partition/FAT/VFS drivers and a USB
+file stub. They cover MBR/raw regressions, both CRCs and backup fallback,
+64-bit address bounds, malformed metadata, partition ranges, supported
+entry strides, slot 1024, 24 repeated rescans, and independent `sgdisk -v`
+validation when installed. No host mounts/devices. GPT is never repaired;
+invalid protective GPT cannot fall back to raw/hybrid aliases. GPT mounts
+are read-only, even on ATA. Parser limits: 512-byte sectors, 32-bit LBAs,
+1024 entries, 128..4096-byte power-of-two stride, 128 KiB table maximum.

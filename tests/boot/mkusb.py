@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Private FAT32 fixtures via dosfstools/mtools; never formats a host device."""
 from pathlib import Path
-import os, struct, subprocess, sys
+import os, struct, subprocess, sys, uuid, zlib
 
 def make(out):
     out=Path(out); out.mkdir(parents=True,exist_ok=True)
@@ -33,5 +33,40 @@ def make(out):
         f.write(table);f.seek(2048*512)
         while chunk:=src.read(1024*1024):f.write(chunk)
     return raw,mbr,proof.replace(b'\r',b'')
+def make_gpt(raw, out, stride=128, count=128, fat_slot=1):
+    """Windows-like GPT: MSR in slot 1, FAT32 Basic Data in slot 2.
+    Includes independent primary/backup arrays + header CRCs. Files only."""
+    raw=Path(raw); out=Path(out)
+    fat_start=34816 # 1 MiB alignment + 16 MiB Microsoft reserved partition
+    fat_size=raw.stat().st_size//512
+    total=fat_start+fat_size+2048
+    assert stride>=128 and count>fat_slot>=1
+    entries=bytearray(count*stride)
+    array_sectors=(len(entries)+511)//512
+    def entry(index,kind,start,end,label):
+        off=index*stride
+        entries[off:off+16]=uuid.UUID(kind).bytes_le
+        entries[off+16:off+32]=uuid.UUID(int=index+12345).bytes_le
+        struct.pack_into('<QQQ',entries,off+32,start,end,0)
+        data=label.encode('utf-16le')[:72];entries[off+56:off+56+len(data)]=data
+    entry(0,'e3c9e316-0b5c-4db8-817d-f92df00215ae',2048,fat_start-1,'Microsoft reserved')
+    entry(fat_slot,'ebd0a0a2-b9e5-4433-87c0-68b6b72699c7',fat_start,fat_start+fat_size-1,'KVANTIMPORT')
+    table_crc=zlib.crc32(entries)
+    def header(at,other,array):
+        h=bytearray(512)
+        struct.pack_into('<8sIIIIQQQQ16sQIII',h,0,b'EFI PART',0x10000,92,0,0,
+                         at,other,2+array_sectors,total-array_sectors-2,uuid.UUID(int=54321).bytes_le,array,count,stride,table_crc)
+        struct.pack_into('<I',h,16,zlib.crc32(h[:92]))
+        return h
+    mbr=bytearray(512)
+    struct.pack_into('<B3sB3sII',mbr,446,0,b'\0'*3,0xEE,b'\xff'*3,1,total-1)
+    mbr[510:512]=b'\x55\xaa'
+    with out.open('wb') as f,raw.open('rb') as src:
+        f.truncate(total*512);f.seek(0);f.write(mbr)
+        f.seek(512);f.write(header(1,total-1,2));f.write(entries)
+        f.seek(fat_start*512)
+        while chunk:=src.read(1024*1024):f.write(chunk)
+        f.seek((total-1-array_sectors)*512);f.write(entries);f.write(header(total-1,1,total-1-array_sectors))
+    return out
 if __name__=='__main__':
-    raw,mbr,_=make(sys.argv[1]);print(raw);print(mbr)
+    raw,mbr,_=make(sys.argv[1]);print(raw);print(mbr);print(make_gpt(raw,Path(sys.argv[1])/'flash-gpt.img'))

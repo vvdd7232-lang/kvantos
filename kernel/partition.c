@@ -1,5 +1,5 @@
 /* ============================================================
- *  KvantOS - MBR partition table and volume autodetection
+ *  KvantOS - MBR/GPT partition tables and volume autodetection
  *
  *  Reads sector 0 of every ATA/USB disk, walks the four primary entries
  *  and the extended chain, then asks each filesystem driver whether it
@@ -69,6 +69,86 @@ static void volume_name(char *nm, int disk, int seq) {
         else ksnprintf(nm,16,"hd%c",'a'+disk);
     }
 }
+/* GPT 1.0, 512-byte logical sectors, read-only mounts. The block layer is
+ * 32-bit LBA, so validate every 64-bit value before narrowing. Header and
+ * entire entry-array CRCs are checked BEFORE mounting anything. */
+static const char *scan_status;
+const char *vfs_scan_status(void) { return scan_status?scan_status:""; }
+typedef struct { u32 first,last,entries,count,size; } gpt_table_t;
+static u32 gpt_u32(const u8 *p) {
+    return (u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
+}
+static u64 gpt_u64(const u8 *p) { return gpt_u32(p) | ((u64)gpt_u32(p+4)<<32); }
+static u32 gpt_crc(u32 crc, const u8 *p, u32 size) {
+    while (size--) {
+        crc ^= *p++;
+        for (int bit=0;bit<8;bit++) crc=(crc>>1)^((crc&1)?0xEDB88320u:0);
+    }
+    return crc;
+}
+static int gpt_table(int disk, u32 at, gpt_table_t *t) {
+    static u8 h[512], sector[512];
+    u32 total=blk_sectors(disk);
+    if (total<68 || !disk_read(disk,at,1,h) || memcmp(h,"EFI PART",8)) return 0;
+    u32 size=gpt_u32(h+12), expected=gpt_u32(h+16);
+    if (gpt_u32(h+8)!=0x10000 || size<92 || size>512 || gpt_u32(h+20)) return 0;
+    memset(h+16,0,4);
+    if ((gpt_crc(0xFFFFFFFFu,h,size)^0xFFFFFFFFu)!=expected) return 0;
+    if (gpt_u64(h+24)!=at || gpt_u64(h+32)!=(at==1?total-1:1)) return 0;
+    u64 first=gpt_u64(h+40), last=gpt_u64(h+48), entries=gpt_u64(h+72);
+    u32 count=gpt_u32(h+80), stride=gpt_u32(h+84);
+    if (first<2 || first>last || last>=total-1 || entries<2 || entries>=total-1) return 0;
+    /* Bounded scan: Windows uses 128 x 128 B. Larger standard strides are
+     * accepted up to 4096 B, 1024 slots and 128 KiB total metadata. */
+    if (!count || count>1024 || stride<128 || stride>4096 || (stride&(stride-1))) return 0;
+    u32 bytes=count*stride;
+    if (bytes>128*1024) return 0;
+    u32 sectors=(bytes+511)/512;
+    if (first<2+(u64)sectors || last+sectors+2>total) return 0;
+    if (sectors>total-1-entries) return 0;
+    if (at==1 ? entries+sectors>first : entries<=last) return 0;
+    u32 crc=0xFFFFFFFFu;
+    for (u32 done=0;done<bytes;) {
+        if (!disk_read(disk,(u32)entries+done/512,1,sector)) return 0;
+        u32 n=bytes-done; if (n>512) n=512;
+        crc=gpt_crc(crc,sector,n); done+=n;
+    }
+    if ((crc^0xFFFFFFFFu)!=gpt_u32(h+88)) return 0;
+    t->first=(u32)first; t->last=(u32)last; t->entries=(u32)entries;
+    t->count=count; t->size=stride;
+    return 1;
+}
+static int scan_gpt(int disk) {
+    scan_status=T("GPT: unreadable/invalid header or partition-table CRC", "GPT: ошибка чтения или CRC заголовка/таблицы разделов");
+    gpt_table_t t;
+    u32 total=blk_sectors(disk);
+    if (total<68 || (!gpt_table(disk,1,&t) && !gpt_table(disk,total-1,&t))) return 0;
+    scan_status=T("GPT valid; no supported FAT volume found", "GPT прочитана, но поддерживаемый FAT-том не найден");
+    static u8 sector[512];
+    u32 loaded=0xFFFFFFFFu;
+    int mounted=0;
+    for (u32 i=0;i<t.count;i++) {
+        u32 off=i*t.size, lba=t.entries+off/512;
+        if (loaded!=lba) {
+            if (!disk_read(disk,lba,1,sector)) return mounted;
+            loaded=lba;
+        }
+        const u8 *p=sector+off%512;
+        unsigned type=0;
+        for (int n=0;n<16;n++) type|=p[n];
+        if (!type) continue; /* unused slot, not an MSR/ESP/data partition */
+        u64 start=gpt_u64(p+32), end=gpt_u64(p+40);
+        if (start<t.first || start>end || end>t.last) continue;
+        char name[16]; volume_name(name,disk,(int)i+1); /* preserve GPT slot number */
+        if (try_mount(name,disk,(u32)start,(u32)(end-start+1))) {
+            vfs_volume_t *v=vfs_find(name);
+            if (v) v->writable=0; /* GPT is read-only, including on ATA */
+            mounted++;
+            scan_status=T("GPT volume mounted read-only", "GPT-том подключён только для чтения");
+        }
+    }
+    return mounted;
+}
 static int scan_disk(int disk, int *seq) {
     static u8 sec[512];      /* BSS, not stack: see the FAT driver */
     int mounted = 0;
@@ -80,6 +160,11 @@ static int scan_disk(int disk, int *seq) {
     if (has_table) {
         mbr_part_t parts[4];
         memcpy(parts, sec + PART_TABLE_OFF, sizeof(parts));
+        /* A protective/hybrid MBR declares GPT. Never reinterpret broken GPT
+         * metadata as raw FAT or mount the hybrid aliases a second time. */
+        for (int i=0;i<4;i++)
+            if (parts[i].type==0xEE && parts[i].lba_start==1 && parts[i].sectors) return scan_gpt(disk);
+
 
         for (int i = 0; i < 4; i++) {
             if (!parts[i].sectors || !type_interesting(parts[i].type)) continue;
@@ -126,6 +211,7 @@ static int scan_disk(int disk, int *seq) {
 }
 
 int vfs_autoscan(void) {
+    scan_status=NULL;
     int total = 0;
     usb_rescan();
 

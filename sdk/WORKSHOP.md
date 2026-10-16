@@ -55,6 +55,7 @@ optionally edit its local name, then **Import**. The validated copy opens in
 RAM; Save/Build/Run work normally. The flash drive is not modified. UTF-8 BOM
 and CRLF are supported; invalid/oversized text leaves the old document intact.
 **UHCI + high-speed EHCI**, no OHCI/xHCI/hubs; not in the published 3.1.2 ISO.
+Read-only **GPT + FAT32** is supported; no conversion/reformatting required.
 [Full instructions](../USB-IMPORT.md).
 
 ## Example
