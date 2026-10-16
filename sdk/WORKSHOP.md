@@ -33,8 +33,14 @@ are architecture-specific and cannot run under the other kernel.
   only clears selection. Letters B/G/E no longer launch desktop windows; games
   retain their keyboard controls.
 
-Limits: 128 lines, 120 **bytes** per line. Overflow, binary/oversize loads and
-failed line joins never silently truncate or discard the current document.
+**128 lines is a warning only**, not a row-count ceiling. Import, editing,
+undo/redo, Save and Build/Run keep working above it. The amber file header
+shows the warning independently of save/build errors. Text is stored in a
+packed byte pool: input and normalized text must be **less than 64 KiB**,
+and each line remains limited to 120 **bytes**, not characters. Overflow,
+binary loads and failed line joins never silently truncate/discard text.
+The compiler's separate 16000-byte source limit does not block editing or
+saving larger documents; Build explains that limit without changing text.
 
 Use a flat filename with at most 18 characters before `.c`: `hello.c` becomes
 `hello.kapp`. Without mounted **KvFS**, both files are in RAM and **lost on reboot**;
@@ -107,7 +113,8 @@ external libraries, object files or full C type checking. Use `0` rather than
 a `NULL` macro. Existing SDK examples with `sys->...` still require the
 external GCC SDK; they do not compile unchanged in the workshop.
 
-Limits: 16000-byte source; editor 128 lines of 120 bytes; 24000-byte code and
+Limits: compiler source 16000 bytes; editor <64 KiB, 120 bytes/line,
+warning only above 128 lines (no independent row limit); 24000-byte code and
 8000-byte data sections; output fits 32 KiB. Up to 8 arguments, 256 symbols
 (including API), 128 local records and 512 (i386) / 1024 (x86-64) bytes of local stack per function,
 8 nested loops, 24 parser nesting levels and 511 bytes per string literal.
@@ -132,3 +139,12 @@ locals, double pointers, heap allocations, eight-argument functions and
 variadic API calls inside the OS. The 64-bit Unicorn tests place the stack
 above 4 GiB and verify SysV alignment and callee-saved registers.
 See [the Russian guide](WORKSHOP.ru.md) for the same workflow and examples.
+
+### Warning instead of the 128-line ceiling (preview)
+
+![517 lines: successful build, non-blocking warning](../screenshots/68_workshop_lines_warning_uefi64.png)
+
+Actual QEMU/UEFI capture: 512 comment lines plus a working application.
+Checks cover GPT/FAT32 over EHCI, import/edit/undo/redo/build/run, KvFS save,
+and reopen/run after reboot. Independent UTF-8 Notepad tests use 2049 and
+10001 lines, including the five-digit gutter.

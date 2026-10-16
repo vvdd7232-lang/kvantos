@@ -3,6 +3,7 @@ Mixin expects cmd/key/mem/num methods and a symbols dict on the guest object.
 """
 import struct
 import time
+from text_model import STATE_OFFSET, MODE_OFFSET
 
 class MouseGUI:
     def move(self, x, y):
@@ -97,14 +98,14 @@ class MouseGUI:
 
     def document(self, app=7):
         symbol = 'dev_editor' if app == 9 else 'note_editor'
-        raw = self.mem(symbol, 128*121+9*4)
-        lines,cy,cx,top,left,dirty,ay,ax,selecting = struct.unpack_from('<9i', raw, 128*121)
-        text = b'\n'.join(raw[r*121:(r+1)*121].split(b'\0')[0] for r in range(lines))
+        metadata=self.mem(self.symbols[symbol]+STATE_OFFSET,44)
+        lines,cy,cx,top,left,dirty,ay,ax,selecting,used,width=struct.unpack('<11i',metadata)
+        text=self.mem(symbol,used).replace(b'\0',b'\n') if used else b''
         return dict(text=text,lines=lines,cy=cy,cx=cx,top=top,left=left,dirty=dirty,ay=ay,ax=ax,selecting=selecting)
 
     def mode(self, app=7):
         symbol = 'dev_editor' if app == 9 else 'note_editor'
-        return struct.unpack('<i', self.mem(self.symbols[symbol]+2*(128*121+9*4)+8, 4))[0]
+        return struct.unpack('<i', self.mem(self.symbols[symbol]+MODE_OFFSET, 4))[0]
 
     def choose_name(self, text):
         # Text entry only. Navigation and confirmation use actual clickable widgets.

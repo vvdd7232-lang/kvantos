@@ -31,10 +31,7 @@ subprocess.run([sys.executable,'sdk/mkdisk.py',str(smoke.DISK),'16'],check=True,
 sys.path.insert(0,str(ROOT/'sdk'))
 from mkdisk import KvFS
 
-class Doc(C.Structure):
-    _fields_=[('buf',C.c_char*(128*121)),('ints',C.c_int*9)]
-class Undo(C.Structure):
-    _fields_=[('doc',Doc),('valid',C.c_int)]
+from text_model import Doc, Undo
 class Entry(C.Structure):
     _fields_=[('name',C.c_char*128),('size',C.c_uint),('flags',C.c_ubyte*4),('year',C.c_ushort),('date',C.c_ubyte*4)]
 class Editor(C.Structure):
@@ -112,16 +109,44 @@ with smoke.Guest(extra_args=usb_args(source)) as q:
     saved=local_read('proof.c');assert saved==proof
     print(f'  {LAYOUT.upper()} FAT32, folders, BOM/CRLF, rename, native Build/Run + KvFS save PASS',flush=True)
     # Every malformed input must preserve document AND undo AND RAM files.
-    for name in ('BINARY.C','LARGE.C','WIDE.C','LINES.C','UTF16.C'):
+    for name in ('BINARY.C','LARGE.C','WIDE.C','UTF16.C'):
         before=snap(q);files=q.files();open_import(q);choose(q,name);q.widget(82,9)
         assert q.mode(9)==6 and snap(q)==before and q.files()==files,(name,state(q).status)
         q.widget(83,9)
-    print('  Binary, oversized, long line, too many lines, UTF-16: atomic rejection PASS',flush=True)
+    print('  Binary, oversized, long line, UTF-16: atomic rejection PASS',flush=True)
     open_import(q);choose(q,'MULTI.C');q.choose_name('multi.c');q.widget(82,9)
     multi=(b'// '+b'x'*70+b'\n')*80+proof
     imported(q,multi,'multi.c');q.widget(90,9)
     assert q.files()['multi.kapp'][:4]==b'KAPP'
     print('  Multi-cluster 6 KiB source import + native Build PASS',flush=True)
+    # 128 is now a warning threshold, not an import/edit/build ceiling.
+    open_import(q);choose(q,'LINES.C');q.choose_name('lines.c');q.widget(82,9)
+    imported(q,b'\n'*128,'lines.c');assert q.document(9)['lines']==129
+    open_import(q);choose(q,'MANY.C');q.choose_name('many.c');q.widget(82,9)
+    many=b'// line\n'*512+proof
+    imported(q,many,'many.c');assert q.document(9)['lines']>512
+    q.key('ctrl-a');q.key('right');q.key('ret')
+    assert q.document(9)['text']==many+b'\n'
+    q.widget(77,9);assert q.document(9)['text']==many
+    q.widget(77,9);assert q.document(9)['text']==many+b'\n',q.document(9)
+    q.widget(90,9);assert local_read('many.c')==many+b'\n'
+    q.screenshot(smoke.WORK/'many-lines-warning.png')
+    q.widget(91,9);time.sleep(.3)
+    assert q.num('loaded')==1 and q.num('app_faulted')==0
+    assert q.mem('app_status',96).split(b'\0')[0]==b'USB import OK'
+    q.close_app(10);q.open_app(9)
+    # A byte-limited compiler must not impose its limit on editing/saving.
+    open_import(q);choose(q,'HUGE.C');q.choose_name('huge.c');q.widget(82,9)
+    huge=(b'// '+b'x'*70+b'\n')*250+proof
+    imported(q,huge,'huge.c')
+    q.key('ctrl-a');q.key('right');q.key('ret')
+    huge+=b'\n';assert q.document(9)['text']==huge
+    before=snap(q)
+    q.widget(90,9)
+    assert snap(q)==before and b'16000' in state(q).status
+    assert 'huge.kapp' not in q.files()
+    q.widget(42,9);assert local_read('huge.c')==huge
+    print('  129/517+ lines: import/edit/undo/redo/save/native Build+Run; >16000 B edit/save, clear compiler error PASS',flush=True)
     # Empty file is valid. Long FAT name has a separate editable local name.
     open_import(q);choose(q,'EMPTY.C');q.widget(82,9);imported(q,b'','EMPTY.c')
     open_import(q);choose(q,'Sources');choose(q,'A long source name.C')
@@ -141,6 +166,17 @@ with smoke.Guest(extra_args=usb_args(source)) as q:
     imported(q,'Привет с флешки!\nUTF-8 и CRLF.\n'.encode(),'note.txt',7)
     open_import(q,7);choose(q,'TABS.TXT',7);q.widget(82,7)
     imported(q,b'one\n    two','TABS.TXT',7)
+    open_import(q,7);choose(q,'LONG.TXT',7);q.choose_name('long.txt');q.widget(82,7)
+    long_note=('строка\n'*2048).encode()
+    imported(q,long_note,'long.txt',7);q.widget(42,7)
+    assert local_read('long.txt')==long_note and q.document(7)['lines']==2049
+    open_import(q,7);choose(q,'TENK.TXT',7);q.choose_name('rows.txt');q.widget(82,7)
+    tenk=b'\n'*10000+'конец'.encode();imported(q,tenk,'rows.txt',7)
+    q.key('ctrl-a');q.key('right');q.key('ret')
+    assert q.document(7)['text']==tenk+b'\n' and q.document(7)['lines']==10002
+    q.widget(77,7);assert q.document(7)['text']==tenk
+    q.widget(42,7);assert local_read('rows.txt')==tenk
+    q.screenshot(smoke.WORK/'10001-line-gutter.png')
     q.open_app(9);assert q.document(9)['text']==proof.replace(b'42',b'77')
     open_import(q)
     before=snap(q)
@@ -167,7 +203,16 @@ with smoke.Guest() as q:
     q.widget(91,9);time.sleep(.3)
     assert q.num('loaded')==1 and q.num('app_faulted')==0
     assert q.mem('app_status',96).split(b'\0')[0]==b'USB import OK'
-    print('  Full reboot: reopen imported source from KvFS and run PASS',flush=True)
+    q.close_app(10);q.open_app(9)
+    q.widget(41,9);q.choose_name('many.c');q.widget(82,9)
+    assert q.document(9)['text']==b'// line\n'*512+proof+b'\n'
+    q.widget(91,9);time.sleep(.3)
+    assert q.num('loaded')==1 and q.num('app_faulted')==0
+    assert q.mem('app_status',96).split(b'\0')[0]==b'USB import OK'
+    q.close_app(10);q.open_app(7)
+    q.widget(41,7);q.choose_name('long.txt');q.widget(82,7)
+    assert q.document(7)['text']==('строка\n'*2048).encode()
+    print('  Full reboot: reopen >512-line C + 2049-line UTF-8 note from KvFS; native Run PASS',flush=True)
 # Raw/superfloppy FAT32 and no ATA disk; import + execution still work.
 with smoke.Guest(False,extra_args=usb_args(raw)) as q:
     assert '/mnt/usb0 ' in q.log.read_text(errors='replace')

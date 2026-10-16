@@ -135,3 +135,21 @@ validation when installed. No host mounts/devices. GPT is never repaired;
 invalid protective GPT cannot fall back to raw/hybrid aliases. GPT mounts
 are read-only, even on ATA. Parser limits: 512-byte sectors, 32-bit LBAs,
 1024 entries, 128..4096-byte power-of-two stride, 128 KiB table maximum.
+
+
+### 128-line warning (not a ceiling)
+
+The USB suite now accepts the old 129-line rejection fixture, imports a
+512-comment-line C application, edits beyond row 128, uses mouse undo/redo,
+builds/runs natively, saves to KvFS and reopens/runs after a full reboot.
+A 2049-line UTF-8 Notepad document is also saved/reopened independently.
+A 10001-line document exercises editing/undo/save and five-digit gutters.
+An >16000-byte C document imports/edits/saves, but Build reports the separate
+compiler limit without modifying text/undo. Invalid binary/UTF-16, 121-byte
+lines and >=64-KiB input still fail atomically; USB hashes stay unchanged.
+The host ASan/UBSan model test additionally covers the full 65535-byte pool,
+65536 empty rows, offset round-trips, byte/Tab expansion overflow, undo/redo
+across 128 rows, and 25000 randomized edits. The maximum empty-row case is
+not an extra line cap: it follows from the byte pool and one byte per newline.
+`text_model.py` shares the guest layout with both Python GUI helpers.
+Historical RELEASE/AUDIT descriptions refer to their original tagged builds.

@@ -58,8 +58,11 @@ valid GPT without a recognized FAT filesystem. Real hardware and VirtualBox
 itself have not been tested; the guest suites run in QEMU.
 
 UTF-8 (optional BOM), CRLF normalization, tabs to four spaces. Empty files
-work; binary, UTF-16 and overflow are rejected. Editor: 128 lines, 120 bytes
-per line, input <15488 bytes; local name <=23 ASCII characters (Workshop:
+work; binary, UTF-16 and overflow are rejected. **More than 128 lines shows
+an amber warning, without blocking import/edit/save/build.** There is no
+independent row-count limit: input and normalized text <64 KiB, 120 bytes
+per line. The compiler still accepts at most 16000 source bytes, independently
+of the editor; larger text can be saved and edited. Local name <=23 ASCII characters (Workshop:
 18-character stem + `.c`). Picker: 128 matching items from the first 512
 entries, with a truncation warning; VFS paths <=255 bytes, names <=127.
 Directory entries are cached, not reread each frame. Refresh invalidates

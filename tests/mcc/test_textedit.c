@@ -25,7 +25,7 @@ int main(void) {
     set("a\nb"); d.cy=1; assert(text_delete(&d,&undo,1)); same("ab");
     assert(d.cx==1 && d.cy==0);
     set("a\nb"); d.cx=1; assert(text_delete(&d,&undo,0)); same("ab");
-    set("Привет\nмир"); assert(text_byte(d.buf[0],3)==6 && text_column(d.buf[0],6)==3);
+    set("Привет\nмир"); assert(text_byte(text_line(&d,0),3)==6 && text_column(text_line(&d,0),6)==3);
     d.cx=6; assert(text_delete(&d,&undo,1)); same("Првет\nмир");
     assert(text_undo(&d,&undo)); same("Привет\nмир");
     set("a\r\nb\tc"); same("a\nb    c");
@@ -38,16 +38,44 @@ int main(void) {
     assert(!text_replace(&d,&undo,"a",1));
     assert(!memcmp(&saved,&d,sizeof(d)) && !memcmp(&undo,&saved_undo,sizeof(undo)));
     assert(text_replace(&d,&undo,"\n",1)); assert(d.lines==2);
-    set("x\ny"); memset(d.buf[0],'x',120); d.buf[0][120]=0; d.cx=120;
+    memset(input,'x',120); memcpy(input+120,"\ny",3); set(input); d.cx=120;
     saved=d; assert(!text_delete(&d,&undo,0)); same("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ny");
     assert(d.cy==saved.cy && d.cx==saved.cx && d.lines==2);
+    /* Crossing the old threshold is an ordinary successful edit. */
     memset(input,'\n',127); input[127]=0; set(input); d.cy=127;
-    saved=d; assert(!text_replace(&d,&undo,"\n",1)); assert(!memcmp(&d,&saved,sizeof(d)));
-    /* Fill every row to the byte limit, then replace the entire document. */
-    unsigned n=0;
-    for(int r=0;r<ED_ROWS;r++) { for(int c=0;c<ED_COLS;c++) input[n++]='x'; if(r+1<ED_ROWS) input[n++]='\n'; }
-    input[n]=0; set(input); assert(text_export(&d,out)==ED_CAP-1);
-    selection(0,0,127,120); assert(text_replace(&d,&undo,"short",5)); same("short");
+    assert(text_replace(&d,&undo,"\n",1)); assert(d.lines==129);
+    assert(text_undo(&d,&undo) && d.lines==128);
+    assert(text_undo(&d,&undo) && d.lines==129);
+    /* No separate row ceiling: one index exists for each possible byte. */
+    memset(input,'\n',ED_CAP-1); input[ED_CAP-1]=0; set(input);
+    assert(d.lines==ED_CAP && d.used==ED_CAP-1 && d.width==0);
+    assert(text_export(&d,out)==ED_CAP-1 && !strcmp(out,input));
+    text_position(&d,ED_CAP-1); assert(d.cy==ED_CAP-1 && d.cx==0);
+    saved=d; saved_undo=undo;
+    assert(!text_replace(&d,&undo,"\n",1));
+    assert(!memcmp(&d,&saved,sizeof(d)) && !memcmp(&undo,&saved_undo,sizeof(undo)));
+    assert(!text_set(&d,input,ED_CAP) && !memcmp(&d,&saved,sizeof(d)));
+    for(unsigned i=0;i<ED_CAP;i++) {
+        text_position(&d,i); assert(text_offset(&d,d.cy,d.cx)==i);
+    }
+    selection(0,0,ED_CAP-1,0); assert(text_replace(&d,&undo,"short",5)); same("short");
+    assert(d.width==5); assert(text_undo(&d,&undo) && d.lines==ED_CAP);
+    d.selecting=0; text_position(&d,ED_CAP-1);
+    assert(text_delete(&d,&undo,1)); assert(d.lines==ED_CAP-1);
+    /* Full byte pool with nonempty 120-byte lines; replace it transactionally. */
+    for(unsigned i=0;i<ED_CAP-1;i++) input[i]=i%121==120?'\n':'x';
+    input[ED_CAP-1]=0; set(input); assert(d.width==120);
+    assert(text_export(&d,out)==ED_CAP-1 && !strcmp(out,input));
+    selection(0,0,d.lines-1,(int)strlen(text_line(&d,d.lines-1)));
+    assert(text_replace(&d,&undo,"short",5)); same("short");
+    assert(text_undo(&d,&undo)); same(input);
+    assert(text_undo(&d,&undo)); same("short");
+    /* Tabs can overflow the byte pool without exceeding any line width. */
+    set("keep"); saved=d; saved_undo=undo;
+    for(unsigned i=0;i<40000;i++) input[i]=i%2?'\n':'\t';
+    assert(!text_set(&d,input,40000) && !memcmp(&d,&saved,sizeof(d)));
+    assert(!text_replace(&d,&undo,input,40000));
+    assert(!memcmp(&d,&saved,sizeof(d)) && !memcmp(&undo,&saved_undo,sizeof(undo)));
     set("");
     for(int trial=0;trial<25000;trial++) {
         saved=d; saved_undo=undo;
@@ -60,11 +88,18 @@ int main(void) {
         for(unsigned i=0;i<count;i++) input[i]=(random32()%15==0)?'\n':(char)('a'+random32()%26);
         int ok=text_replace(&d,&undo,input,count);
         if(!ok) { assert(!memcmp(&d,&saved,sizeof(d))); assert(!memcmp(&undo,&saved_undo,sizeof(undo))); }
-        assert(d.lines>=1 && d.lines<=ED_ROWS && d.cy>=0 && d.cy<d.lines);
-        assert(d.cx>=0 && d.cx<=(int)strlen(d.buf[d.cy]));
-        for(int r=0;r<d.lines;r++) assert(strlen(d.buf[r])<=ED_COLS);
-        length=text_export(&d,out); assert(length<ED_CAP);
+        assert(d.lines>=1 && d.lines<=ED_CAP && d.cy>=0 && d.cy<d.lines);
+        assert(d.cx>=0 && d.cx<=(int)strlen(text_line(&d,d.cy)));
+        for(int r=0;r<d.lines;r++) assert(strlen(text_line(&d,r))<=ED_COLS);
+        length=text_export(&d,out); assert(length<ED_CAP && length==d.used);
+        int width=0;
+        for(int r=0;r<d.lines;r++) {
+            assert(text_offset(&d,r,0)==(unsigned)(text_line(&d,r)-d.data));
+            int w=text_column(text_line(&d,r),(int)strlen(text_line(&d,r)));
+            if(w>width) width=w;
+        }
+        assert(width==d.width);
         if(trial%101==0) { text_reset(&d); undo.valid=0; }
     }
-    puts("Text editors: selection, clipboard replacement, UTF-8, undo/redo, limits, atomic failure + 25000 edits PASS");
+    puts("Text editors: selection, clipboard replacement, UTF-8, undo/redo, 129/65536 lines, byte limits, atomic failure + 25000 edits PASS");
 }

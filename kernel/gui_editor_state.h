@@ -14,7 +14,7 @@ typedef struct {
 } editor_t;
 static editor_t note_editor, dev_editor;
 static editor_t *editor = &note_editor;
-#define ed_buf          (editor->doc.buf)
+#define ed_line(r)      text_line(&editor->doc,(r))
 #define ed_lines        (editor->doc.lines)
 #define ed_cy           (editor->doc.cy)
 #define ed_cx           (editor->doc.cx)
@@ -98,7 +98,7 @@ static int ed_save(void) {
 static void ed_scroll_to_cursor(void) {
     int rows=editor->view_rows?editor->view_rows:16;
     int cols=editor->view_cols?editor->view_cols:60;
-    int col=text_column(ed_buf[ed_cy],ed_cx);
+    int col=text_column(ed_line(ed_cy),ed_cx);
     if(ed_cy<ed_top) ed_top=ed_cy;
     if(ed_cy>=ed_top+rows) ed_top=ed_cy-rows+1;
     if(col<ed_left) ed_left=col;
@@ -106,7 +106,7 @@ static void ed_scroll_to_cursor(void) {
 }
 static void ed_edit(const char *s,u32 n) {
     if(!text_replace(&editor->doc,&editor->undo,s,n))
-        ed_msg(T("Limit: 128 lines, 120 bytes/line. Text unchanged.", "Предел: 128 строк, 120 байт/строка. Текст не изменён."));
+        ed_msg(T("Limit: 64 KiB or 120 bytes/line. Text unchanged.", "Предел: 64 КиБ или 120 байт/строка. Текст не изменён."));
     ed_scroll_to_cursor();
 }
 

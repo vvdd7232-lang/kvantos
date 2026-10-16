@@ -45,6 +45,11 @@ The new preview adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later
 KvFS persistence. The source is not modified. **USB now supports UHCI and high-speed EHCI,
 not OHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
+The **128-line editor limit is removed**: above it, an amber warning appears
+without blocking import/edit/save/build. There is no independent row limit;
+the editor byte pool is <64 KiB with 120 bytes/line. The compiler's separate
+16000-byte source limit remains. See [Workshop](sdk/WORKSHOP.md).
+
 **GPT + FAT32** now works too, including an MSR before the data partition,
 CRC validation and backup metadata; read-only, no repartitioning/reformatting.
 [Instructions and limits](USB-IMPORT.md).

@@ -6,14 +6,10 @@ static ed_layout_t ed_layout(window_t *v) {
     g.x=v->x+11; g.y=v->y+TITLE_H+1+96; g.w=v->w-22;
     g.rows=(v->y+v->h-g.y-62)/16;
     if(g.rows<1) g.rows=1;
-    g.h=g.rows*16+8; g.tx=g.x+36;
-    g.cols=(g.w-56)/8; if(g.cols<1) g.cols=1;
+    g.h=g.rows*16+8; g.tx=g.x+(ed_lines>9999?52:36);
+    g.cols=(g.w-(g.tx-g.x)-20)/8; if(g.cols<1) g.cols=1;
     g.max_top=ed_lines>g.rows?ed_lines-g.rows:0;
-    int longest=0;
-    for(int r=0;r<ed_lines;r++) {
-        int n=text_column(ed_buf[r],(int)strlen(ed_buf[r]));
-        if(n>longest) longest=n;
-    }
+    int longest=editor->doc.width;
     g.max_left=longest>=g.cols?longest-g.cols+1:0;
     editor->view_rows=g.rows; editor->view_cols=g.cols;
     ed_top=ed_clamp(ed_top,0,g.max_top); ed_left=ed_clamp(ed_left,0,g.max_left);
@@ -151,13 +147,15 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
     /* A short label also fits a 640x480 desktop. */
     edit[0].label=T("Undo", "Отмена");
     for(int i=0;i<count;i++) widget_chip(win,edit[i].id,cx+10+i*bw,cy+38,bw-4,25,edit[i].label,i>=5);
-    char name[96];
-    ksnprintf(name,sizeof(name),"%s%s  |  %s",ed_name,ed_dirty?" *":"",
-              kvfs_mounted()?T("RAM + disk", "RAM и диск"):T("RAM: temporary", "RAM: временно"));
-    ed_label(cx+12,cy+73,cw-24,name,ed_dirty?C_RED:C_TEXT_DIM);
+    char name[192];
+    const char *store=kvfs_mounted()?T("RAM + disk", "RAM и диск"):T("RAM: temporary", "RAM: временно");
+    ksnprintf(name,sizeof(name),"%s%s  |  %s",ed_name,ed_dirty?" *":"",store);
+    if(ed_lines>ED_WARN_LINES)
+        ksnprintf(name,sizeof(name),T("%s%s | %d lines (>128): warning only | %s", "%s%s | %d строк (>128): только предупреждение | %s"),ed_name,ed_dirty?" *":"",ed_lines,store);
+    ed_label(cx+12,cy+73,cw-24,name,ed_lines>ED_WARN_LINES?fb_rgb(160,100,0):ed_dirty?C_RED:C_TEXT_DIM);
     ed_layout_t g=ed_layout(v);
     fb_fill(g.x,g.y,g.w,g.h,C_WHITE); fb_rect(g.x,g.y,g.w,g.h,fb_rgb(190,201,219));
-    fb_fill(g.x+1,g.y+1,32,g.h-2,fb_rgb(244,247,252));
+    fb_fill(g.x+1,g.y+1,g.tx-g.x-4,g.h-2,fb_rgb(244,247,252));
     unsigned a,b; text_range(&editor->doc,&a,&b);
     int caret_on=((u32)timer_ticks()/(timer_hz()/2+1))%2==0;
     for(int i=0;i<g.rows && ed_top+i<ed_lines;i++) {
@@ -166,9 +164,9 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
         fb_text(g.x+4,y,num,C_TEXT_DIM,0xFFFFFFFF);
         if(row==ed_cy) fb_fill(g.tx,y-1,g.cols*8,16,fb_rgb(242,247,255));
         unsigned off=text_offset(&editor->doc,row,0);
-        int start=text_byte(ed_buf[row],ed_left),len=(int)strlen(ed_buf[row]);
+        int start=text_byte(ed_line(row),ed_left),len=(int)strlen(ed_line(row));
         for(int col=0,pos=start;col<g.cols;col++) {
-            int next=text_next(ed_buf[row],pos);
+            int next=text_next(ed_line(row),pos);
             unsigned at=off+(unsigned)pos;
             int selected=a<b && at>=a && at<b && (pos<len || row<ed_lines-1);
             i32 x=g.tx+col*8;
@@ -176,18 +174,18 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
             if(pos<len) {
                 char ch[5]; int n=next-pos;
                 if(n>4) { ch[0]='?'; ch[1]=0; }
-                else { memcpy(ch,ed_buf[row]+pos,(u32)n); ch[n]=0; }
+                else { memcpy(ch,ed_line(row)+pos,(u32)n); ch[n]=0; }
                 fb_text(x,y,ch,selected?C_WHITE:C_TEXT,0xFFFFFFFF);
                 pos=next;
             } else break;
         }
-        int col=text_column(ed_buf[row],ed_cx)-ed_left;
+        int col=text_column(ed_line(row),ed_cx)-ed_left;
         if(row==ed_cy && col>=0 && col<g.cols && !ed_name_mode && win==top_window() && caret_on)
             fb_fill(g.tx+col*8,y-1,2,16,C_ACCENT);
     }
     hit_add(win,W_ED_TEXT,g.x,g.y,g.w-18,g.h);
     ed_scrollbar(win,W_ED_VSCROLL,g.x+g.w-17,g.y,g.h,1,ed_top,g.max_top,g.rows);
-    ed_scrollbar(win,W_ED_HSCROLL,g.tx,g.y+g.h+2,g.w-54,0,ed_left,g.max_left,g.cols);
+    ed_scrollbar(win,W_ED_HSCROLL,g.tx,g.y+g.h+2,g.w-(g.tx-g.x)-18,0,ed_left,g.max_left,g.cols);
     i32 sy=v->y+v->h-38;
     if(ed_status[0] && timer_ticks()<ed_status_until) {
         const char *p=ed_status; char part[192]; int n=0,cols=(cw-24)/8;
@@ -201,7 +199,7 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
         }
     } else {
         ksnprintf(name,sizeof(name),T("Line %d/%d, column %d  |  %s", "Строка %d/%d, столбец %d  |  %s"),
-                  ed_cy+1,ed_lines,text_column(ed_buf[ed_cy],ed_cx)+1,
+                  ed_cy+1,ed_lines,text_column(ed_line(ed_cy),ed_cx)+1,
                   text_selected(&editor->doc)?T("selection", "выделение"):T("click and drag to select", "выделение мышью"));
         ed_label(cx+12,sy,cw-24,name,C_TEXT_DIM);
         ed_label(cx+12,sy+16,cw-24,T("Click: cursor. Drag: select. Wheel or scrollbars: scroll.",

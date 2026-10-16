@@ -19,8 +19,9 @@ def make(out):
     subprocess.run(['mmd','-i',str(raw),'::Sources','::Sources/Nested'],check=True)
     copy('Sources/A long source name.C',proof)
     copy('Sources/Nested/BOM.C',b'\xef\xbb\xbf'+proof)
-    for name,data in [('OTHER.C',proof.replace(b'42',b'77')),('BINARY.C',b'int x=1;\0hidden'),('LARGE.C',b'x'*16000),
-                      ('WIDE.C',b'x'*121),('LINES.C',b'\n'*128),('EMPTY.C',b''),
+    for name,data in [('OTHER.C',proof.replace(b'42',b'77')),('BINARY.C',b'int x=1;\0hidden'),('LARGE.C',b'\n'*65536),
+                      ('MANY.C',b'// line\r\n'*512+proof),('HUGE.C',(b'// '+b'x'*70+b'\r\n')*250+proof),
+                      ('TENK.TXT',b'\r\n'*10000+'конец'.encode()),('LONG.TXT',('строка\r\n'*2048).encode()),('WIDE.C',b'x'*121),('LINES.C',b'\n'*128),('EMPTY.C',b''),
                       ('UTF16.C',b'\xff\xfei\0n\0t\0'),('NOTE.TXT','Привет с флешки!\r\nUTF-8 и CRLF.\r\n'.encode()),
                       ('TABS.TXT',b'one\r\n\ttwo')]:
         copy(name,data)

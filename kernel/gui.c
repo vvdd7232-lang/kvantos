@@ -1824,7 +1824,13 @@ static int dev_build(void) {
     if (len < 3 || len > 20 || strcmp(ed_name + len - 2, ".c")) {
         ed_msg(T("Name: up to 18 characters + .c", "Имя: до 18 символов и расширение .c")); return 0;
     }
-    ed_export();
+    u32 source_size=ed_export();
+    if(source_size>MCC_SOURCE_MAX) {
+        char message[192];
+        ksnprintf(message,sizeof(message),T("Source: %u bytes; compiler max %u. Text kept; editing/saving allowed.",
+                   "Исходник: %u байт; компилятор до %u. Текст оставлен, редактирование и сохранение доступны."),source_size,MCC_SOURCE_MAX);
+        ed_msg(message); return 0;
+    }
     if (mcc_compile(editor_text, ed_name, binary, sizeof(binary), &size) < 0) {
         char message[96];
         int row = mcc_error_line() - 1;

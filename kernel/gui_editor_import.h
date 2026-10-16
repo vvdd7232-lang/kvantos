@@ -105,13 +105,13 @@ static void ed_import_accept(int confirmed) {
     if((size>=2 && (((u8)editor_text[0]==0xFF && (u8)editor_text[1]==0xFE) ||
                    ((u8)editor_text[0]==0xFE && (u8)editor_text[1]==0xFF))) ||
        !text_set(&import_doc,editor_text+skip,size-skip)) {
-        ed_msg(T("Binary or >128 lines / 120 bytes per line; unchanged", "Двоичный файл или >128 строк / 120 байт в строке; без изменений")); ed_name_mode=ED_IMPORT_DIALOG; return;
+        ed_msg(T("Binary/UTF-16, line >120 B or normalized text >64 KiB; unchanged", "Двоичный/UTF-16, строка >120 байт или текст >64 КиБ; без изменений")); ed_name_mode=ED_IMPORT_DIALOG; return;
     }
     u32 n=text_export(&import_doc,editor_text);
     if(ramfs_write(ed_name_in,editor_text,n)<0) {
         ed_msg(T("RAM full; document unchanged", "RAM заполнена; документ не изменён")); ed_name_mode=ED_IMPORT_DIALOG; return;
     }
-    editor->doc=import_doc; editor->undo.valid=0;
+    text_copy(&editor->doc,&import_doc); editor->undo.valid=0;
     strncpy(ed_name,ed_name_in,sizeof(ed_name));
     editor->named=1; ed_dirty=1; ed_name_mode=editor->pending=0;
     ed_msg(T("Imported into RAM. Save to keep on KvFS. USB unchanged.", "Импортировано в RAM. Сохраните на KvFS. Флешка не изменена."));

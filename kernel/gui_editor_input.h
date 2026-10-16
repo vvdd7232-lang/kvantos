@@ -145,7 +145,7 @@ static void ed_action(int win,int widget) {
             break;
         case W_ED_ALL:
             editor->doc.ax=editor->doc.ay=0; editor->doc.selecting=1;
-            ed_cy=ed_lines-1; ed_cx=(int)strlen(ed_buf[ed_cy]); ed_scroll_to_cursor(); break;
+            ed_cy=ed_lines-1; ed_cx=(int)strlen(ed_line(ed_cy)); ed_scroll_to_cursor(); break;
         case W_DEV_BUILD: ed_build_action(0); break;
         case W_DEV_RUN: ed_build_action(1); break;
         case W_DEV_HELP: dev_help=!dev_help; break;
@@ -199,24 +199,24 @@ static void ed_key(int win,int c) {
         textdoc_t *d=&editor->doc;
         int shifted=kbd_shift();
         if(shifted && !d->selecting) { d->ay=ed_cy; d->ax=ed_cx; d->selecting=1; }
-        int col=text_column(ed_buf[ed_cy],ed_cx);
+        int col=text_column(ed_line(ed_cy),ed_cx);
         if(!shifted && text_selected(d) && (c==KEY_LEFT || c==KEY_RIGHT)) {
             unsigned a,b; text_range(d,&a,&b); text_position(d,c==KEY_LEFT?a:b);
         } else switch(c) {
             case KEY_LEFT:
-                if(ed_cx>0) ed_cx=text_prev(ed_buf[ed_cy],ed_cx);
-                else if(ed_cy>0) ed_cx=(int)strlen(ed_buf[--ed_cy]);
+                if(ed_cx>0) ed_cx=text_prev(ed_line(ed_cy),ed_cx);
+                else if(ed_cy>0) ed_cx=(int)strlen(ed_line(--ed_cy));
                 break;
             case KEY_RIGHT:
-                if(ed_buf[ed_cy][ed_cx]) ed_cx=text_next(ed_buf[ed_cy],ed_cx);
+                if(ed_line(ed_cy)[ed_cx]) ed_cx=text_next(ed_line(ed_cy),ed_cx);
                 else if(ed_cy+1<ed_lines) { ed_cy++; ed_cx=0; }
                 break;
             case KEY_HOME: ed_cx=0; break;
-            case KEY_END: ed_cx=(int)strlen(ed_buf[ed_cy]); break;
+            case KEY_END: ed_cx=(int)strlen(ed_line(ed_cy)); break;
             case KEY_UP: case KEY_DOWN: case KEY_PGUP: case KEY_PGDN: {
                 int step=(c==KEY_PGUP || c==KEY_PGDN)?editor->view_rows:1;
                 if(c==KEY_UP || c==KEY_PGUP) step=-step;
-                ed_cy=ed_clamp(ed_cy+step,0,ed_lines-1); ed_cx=text_byte(ed_buf[ed_cy],col); break;
+                ed_cy=ed_clamp(ed_cy+step,0,ed_lines-1); ed_cx=text_byte(ed_line(ed_cy),col); break;
             }
         }
         if(!shifted) d->selecting=0;
@@ -228,10 +228,10 @@ static void ed_caret_at(ed_layout_t g,i32 mx,i32 my) {
     int row=ed_clamp((my-g.y-4)/16,0,g.rows-1)+ed_top;
     ed_cy=ed_clamp(row,0,ed_lines-1);
     int col=ed_clamp((mx-g.tx+4)/8,0,g.cols-1)+ed_left;
-    ed_cx=text_byte(ed_buf[ed_cy],col);
+    ed_cx=text_byte(ed_line(ed_cy),col);
 }
 static void ed_scroll_press(int win,ed_layout_t g,int vertical,i32 mx,i32 my) {
-    int length=vertical?g.h:g.w-54,pos=vertical?my-g.y:mx-g.tx;
+    int length=vertical?g.h:g.w-(g.tx-g.x)-18,pos=vertical?my-g.y:mx-g.tx;
     int maximum=vertical?g.max_top:g.max_left,view=vertical?g.rows:g.cols;
     int *value=vertical?&ed_top:&ed_left;
     if(!maximum) return;
@@ -304,7 +304,7 @@ static void ed_drag(i32 mx,i32 my) {
         }
         ed_caret_at(g,mx,my);
     } else {
-        int v=ed_drag_kind==2,length=v?g.h:g.w-54,view=v?g.rows:g.cols;
+        int v=ed_drag_kind==2,length=v?g.h:g.w-(g.tx-g.x)-18,view=v?g.rows:g.cols;
         int maximum=v?g.max_top:g.max_left;
         int track=length-32,knob=ed_clamp(track*view/(maximum+view),16,track);
         int pos=(v?my-g.y:mx-g.tx)-16-ed_drag_grab;
