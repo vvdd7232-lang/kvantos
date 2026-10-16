@@ -1,6 +1,6 @@
-# FAT32 / USB import — development preview after 3.1.2
+# FAT32 / USB import — KvantOS 3.1.3
 
-This feature belongs to `feature/fat32-import`, **not the published 3.1.2 ISO**.
+This feature is included in **3.1.3**, not in the older 3.1.2 ISO.
 Existing release files and tags are unchanged. [Russian instructions](USB-IMPORT.ru.md).
 
 Click **Import** in C Workshop or Notepad, **Refresh USB** after plugging in,
@@ -22,7 +22,7 @@ No USB HID driver; keep PS/2 input or MouseKeys available.
 ## VirtualBox USB 2.0 correction
 
 The old UHCI-only preview cannot work with VirtualBox's USB controllers.
-Use the new `kvantos-usb2-ehci-preview.iso`, select **USB 2.0 (OHCI + EHCI)**,
+Use the new `kvantos.iso` (3.1.3), select **USB 2.0 (OHCI + EHCI)**,
 and check actual device capture under **Devices > USB** after boot. A filter
 alone does not prove capture. Click Import > Refresh; the status reports EHCI
 controller and detected disk counts. Do not reformat a device just to diagnose
@@ -37,7 +37,7 @@ remain unsupported. Firmware USB boot is separate from OS USB data support.
 ## GPT + FAT32 correction
 
 The EHCI-only preview detected the USB disk but could not discover FAT32
-inside **GPT**. Use **kvantos-gpt-fat32-preview.iso**, not the previous ISO.
+inside **GPT**. Use **kvantos.iso (3.1.3)**, not the previous ISO.
 No GPT-to-MBR conversion, reformatting or changes to the user's drive.
 Keep VirtualBox USB 2.0 (OHCI + EHCI), capture the device and Import > Refresh.
 With an MSR in slot 1 and FAT32 Basic Data in slot 2, the volume is

@@ -54,13 +54,13 @@ or NVMe. Under QEMU q35, attach a separate `piix3-ide` controller as shown
 in RELEASE.md: q35 defaults `-drive if=ide` to SATA/AHCI, which this OS
 does not detect.
 
-## FAT32 USB source import (new development preview)
+## FAT32 USB source import (3.1.3)
 
 Click **Import**, **Refresh USB**, choose a folder and `.c`/`.C` file,
 optionally edit its local name, then **Import**. The validated copy opens in
 RAM; Save/Build/Run work normally. The flash drive is not modified. UTF-8 BOM
 and CRLF are supported; invalid/oversized text leaves the old document intact.
-**UHCI + high-speed EHCI**, no OHCI/xHCI/hubs; not in the published 3.1.2 ISO.
+**UHCI + high-speed EHCI**, no OHCI/xHCI/hubs; included in 3.1.3, not in the older 3.1.2 ISO.
 Read-only **GPT + FAT32** is supported; no conversion/reformatting required.
 [Full instructions](../USB-IMPORT.md).
 
@@ -140,7 +140,7 @@ variadic API calls inside the OS. The 64-bit Unicorn tests place the stack
 above 4 GiB and verify SysV alignment and callee-saved registers.
 See [the Russian guide](WORKSHOP.ru.md) for the same workflow and examples.
 
-### Warning instead of the 128-line ceiling (preview)
+### Warning instead of the 128-line ceiling (3.1.3)
 
 ![517 lines: successful build, non-blocking warning](../screenshots/68_workshop_lines_warning_uefi64.png)
 

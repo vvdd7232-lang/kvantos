@@ -1,4 +1,4 @@
-# KvantOS 3.1.2
+# KvantOS 3.1.3
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -37,11 +37,11 @@ the guest. This is a limited C subset, not full GCC. **Save** writes source;
 **Open** shows a RAM/disk file picker. KvFS persists files; RAM-only files disappear on reboot.
 The Workshop and Notepad have independent documents.
 
-[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.2](RELEASE.md)
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.3](RELEASE.md)
 
-## FAT32 / USB import (development after 3.1.2)
+## FAT32 / USB import (3.1.3)
 
-The new preview adds **Import** to Notepad and C Workshop: mouse selection
+Version 3.1.3 adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later
 KvFS persistence. The source is not modified. **USB now supports UHCI and high-speed EHCI,
 not OHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.

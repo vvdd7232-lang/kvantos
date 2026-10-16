@@ -1,55 +1,81 @@
-# KvantOS 3.1.2 — mouse-first editors
+# KvantOS 3.1.3 — USB import, GPT and non-blocking line warnings
 
-October 15, 2026. A separate update to Notepad, C Workshop and desktop navigation for **BIOS/i386 and UEFI/x86-64**. Older releases and assets are not replaced.
-
-## Getting started
-
-1. Boot **v3.1.2 `kvantos.iso`** and enter `guimenu` in the text shell.
-2. Single-click **Notepad** or **C Workshop**, or choose it from the bottom-left **KVANT** menu.
-3. Click text to position the caret; drag to select. **Copy / Cut / Paste / Undo / Select all** have clickable buttons.
-4. In Workshop, click **Build** or **Run** to compile the built-in `hello.c` into a native application. **Help** has its own Close help button.
-5. Close windows with the cross, switch with the taskbar/menu, and use **KVANT → Exit to console** to leave.
-
-Single-letter desktop launch/close/quit commands such as **G/B/E/T/Q/W** are gone. The keyboard remains for text and optional editor shortcuts; **in-game keyboard controls are preserved**. Esc in an editor dismisses a dialog/selection, not the window or desktop.
+October 16, 2026. Separate **BIOS/i386 and UEFI/x86-64** release;
+previous release tags and assets are not overwritten.
 
 ## Changes
 
-- Mouse caret positioning, multiline selection and edge auto-scroll. UTF-8 caret, selection and deletion respect character boundaries.
-- Shared clipboard between editors; independent documents and one-step undo/redo. Click Undo again to redo.
-- **Open / Save as** dialogs with RAM/Disk (KvFS) file lists, paging, a clickable filename caret, confirmation and cancel buttons. Selecting a file no longer requires typing a path or pressing Enter.
-- Working draggable vertical/horizontal scrollbars with arrow/page controls; mouse wheel and Shift+wheel. Scrolling does not chase an unchanged caret during repaint.
-- Unsaved-change guards on new/open/close and both desktop exit paths. Replacing another existing file or deleting requires confirmation.
-- **Notepad now saves to RAM + mounted KvFS**, like Workshop. Without a supported disk RAM is temporary and the status warns about it.
-- Atomic bounded editing: 128 lines, 120 bytes/line. Overflowing paste, line joins or loads never silently truncate or discard the current document. Binary input is rejected.
-- Optional **MouseKeys**, enabled through KVANT or NumLock: keypad 8/2/4/6 and diagonals move, 5 clicks, 0 holds, decimal releases, Shift is precise, Ctrl faster and +/- adjust speed. Off by default.
+* Read-only USB mass-storage import in Notepad and C Workshop: mouse folder/file
+  picker, Refresh, editable local name and overwrite/unsaved-change guards.
+  No PC-side KvFS image is needed for source transfer.
+* UHCI and high-speed EHCI, FAT16/FAT32 on MBR/raw media and **GPT + FAT32**,
+  including an MSR before the data partition. Bounded GPT header/array CRC
+  verification and backup fallback; no format, conversion, repair or writes.
+* **128 lines is a warning only**, not an editor ceiling. Import/edit/clipboard,
+  undo/redo/save and native Build/Run continue within their separate byte limits.
+  Packed text, live-prefix copies, cached width and five-digit line gutters.
+* Kept mouse-first editors, optional NumPad MouseKeys, independent documents,
+  RAM/KvFS persistence, both native compiler backends and all 11 apps/backend.
 
-Dirty-rectangle rendering, desktop caching, both native compiler backends, `.c/.kapp`, RAM/KvFS, eleven SDK apps per architecture and both boot paths remain intact. Editor layouts also fit **640×480**.
+## Getting started
 
-[Workshop guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.2/sdk/WORKSHOP.md) · [README](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.2/README.md).
+Boot the new `kvantos.iso`, enter `guimenu`, open C Workshop or Notepad.
+In VirtualBox select **USB 2.0 (OHCI + EHCI)** and capture the drive.
+Use **Import → Refresh → folder → file → Import**, then Save/Build/Run.
+There is no need to reformat or convert GPT to MBR. Boot the new ISO explicitly;
+changing the ISO does not update an older installed kernel automatically.
 
-![Mouse selection in Notepad](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.2/screenshots/63_notepad_mouse_uefi64.png)
+Import copies into RAM; only Save/Build persists to mounted KvFS. RAM is lost
+on reboot without KvFS. FAT32 remains read-only.
 
-![Mouse-first Workshop](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.2/screenshots/64_workshop_mouse_uefi64.png)
+## Limits
+
+Editor input and normalized text **<64 KiB**, **120 bytes/line**, no independent
+row-count ceiling. Native compiler source remains **<=16000 bytes**; larger
+text can be imported, edited and saved, while Build reports the limit without
+changing text/undo. This is still a limited C subset, not GCC/C99.
+UTF-8/BOM and CRLF work; tabs become four spaces; binary/UTF-16/overflow is
+rejected atomically. Picker: 128 matches from the first 512 directory entries.
+
+EHCI high-speed root-port BOT and UHCI only; no standalone OHCI driver,
+xHCI/USB 3, hubs, split transactions or UAS. VirtualBox USB 1.1 is OHCI, not
+UHCI. Current block layer uses 512-byte sectors and 32-bit sector addresses;
+GPT is bounded to 1024 entries and is never repaired or written.
+
+[USB guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.3/USB-IMPORT.md)
+· [Workshop guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.3/sdk/WORKSHOP.md).
+
+![517 lines: successful build, non-blocking warning](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.3/screenshots/68_workshop_lines_warning_uefi64.png)
 
 ## Validation
 
-Built with GCC 12. The release workflow runs these checks before publishing:
+Release workflow runs GCC 12 builds; 73 code-generation checks/backend;
+40000 sanitizer mutations/backend; RAMFS/OOM; ASan/UBSan text model with
+25000 edits, full byte pool, 65536 empty rows, undo/redo and atomic Tab overflow.
+The empty-row maximum follows from the byte budget, not a new separate row cap.
 
-- 73 generated-code checks/backend, 40,000 compiler mutations/backend under ASan/UBSan, atomic RAMFS/OOM tests.
-- Text model: selection, UTF-8, undo/redo, limits and atomic failures, plus 25,000 edits under ASan/UBSan.
-- Both QEMU kernels: actual mouse editing, clipboard, file dialogs, save/cancel/overwrite, empty/binary/oversize files, wheel and both thumbs, edge auto-scroll, file paging, MouseKeys, Russian UI, exit guards and 640×480 bounds.
-- Actual Notepad KvFS persistence, inspecting disk content after the guest exits.
-- In-guest C compilation/execution, independent editors, native draw/click, no stale run after errors, source reopening after a full reboot, ABI/heap/eight arguments/variadic format and Russian diskless build/run.
-- BIOS/UEFI CD and USB, GRUB-free direct ISO and native Maze 3D keyboard/timer regressions.
+23 GPT/MBR/raw checks cover CRCs, backup fallback and bounds. On both kernels,
+USB 2.0/EHCI with OHCI companions is tested on GPT and MBR: folders, BOM/CRLF,
+rename, import/edit/build/run, 12 rescans, unplug/replug, KvFS persistence and
+full reboot. Source USB SHA-256 hashes must remain unchanged.
 
-Pointer tests use measured guest coordinates and bounded movement, not blind mouse retries. Physical hardware is not separately certified.
+A 517-line source (512 comment lines plus a working app) is edited beyond row
+128, undone/redone with the mouse, built/run and reopened/run after reboot.
+An >16000-byte source may be edited/saved but is refused clearly by Build,
+without changing text/undo. Notepad uses independent 2049- and 10001-line
+UTF-8 documents, persistence and five-digit gutters.
+
+Mouse/clipboard/dialog/scroll/wheel/MouseKeys/Russian/640x480 regressions,
+desktop/Maze 3D, native ABI/heap, BIOS/UEFI CD, firmware USB and direct ISO
+checks are retained. Tests run in **QEMU**, with measured pointer coordinates;
+physical hardware and VirtualBox itself have not been independently tested.
 
 ## Downloads and running
 
 - **`kvantos.iso`**: recommended BIOS/UEFI ISO and raw-USB hybrid.
 - **`kvantos-direct.iso`**: GRUB-free BIOS/UEFI CD/DVD fallback, not a raw-USB hybrid.
-- **`kvantos-3.1.2.tar.gz`**: full distribution with both ISOs, floppy, kernels, EFI, ESP, empty KvFS disk, apps, docs and SHA256SUMS.
-- **`kvantos-3.1.2-source.tar.gz`**: matching sources; **`kvantos-3.1.2-SHA256SUMS.txt`**: download checksums.
+- **`kvantos-3.1.3.tar.gz`**: full distribution with both ISOs, floppy, kernels, EFI, ESP, empty KvFS disk, apps, docs and SHA256SUMS.
+- **`kvantos-3.1.3-source.tar.gz`**: matching sources; **`kvantos-3.1.3-SHA256SUMS.txt`**: download checksums.
 
 Extract the full distribution. BIOS example:
 
@@ -71,7 +97,7 @@ qemu-system-x86_64 -machine q35 -m 256 \
   -device ide-hd,bus=kvide.0,drive=kvdata
 ```
 
-Persistence requires supported **IDE/ATA PIO**, not AHCI/SATA/NVMe. q35's default `-drive if=ide` is unsupported AHCI; use the separate PIIX3 controller above. Diskless compilation and execution still work in RAM. Use `lang ru` for Russian. Inside the full distribution run `sha256sum -c SHA256SUMS`; for release downloads use `sha256sum -c kvantos-3.1.2-SHA256SUMS.txt`.
+Persistence requires supported **IDE/ATA PIO**, not AHCI/SATA/NVMe. q35's default `-drive if=ide` is unsupported AHCI; use the separate PIIX3 controller above. Diskless compilation and execution still work in RAM. Use `lang ru` for Russian. Inside the full distribution run `sha256sum -c SHA256SUMS`; for release downloads use `sha256sum -c kvantos-3.1.3-SHA256SUMS.txt`.
 
 ## Limitations
 

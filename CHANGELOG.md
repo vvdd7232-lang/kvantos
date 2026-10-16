@@ -1,5 +1,25 @@
 # Changelog
 
+## 3.1.3 — USB import, GPT and non-blocking line warning
+
+* Added read-only USB bulk storage (UHCI and high-speed EHCI), FAT16/FAT32
+  discovery and mouse-first Import in Notepad and C Workshop. UTF-8 BOM,
+  CRLF, tabs, editable local names and overwrite/unsaved-change guards.
+* Added bounded GPT parsing with header/array CRCs, backup fallback and
+  preserved partition-slot names; no formatting, repair or source-drive writes.
+* Removed the 128-line editor ceiling. Above 128 rows an amber warning is
+  non-blocking. Packed text has a <64-KiB byte budget, with the existing
+  120-byte line width. Native compiler source remains limited to 16000 bytes;
+  larger documents may still be edited/saved, with explicit Build diagnostics.
+* Cached longest-line width and copied only live text/indexes; widened the
+  gutter for five-digit line numbers. Kept independent documents, UTF-8,
+  clipboard, undo/redo, KvFS persistence, BIOS/i386 and UEFI/x86-64.
+* Added 23 partition checks and full USB 2.0 GPT/MBR import/edit/build/run,
+  hotplug, reboot/persistence and long-document tests on both architectures.
+  Source-image SHA-256 hashes stay unchanged. Physical hardware/VirtualBox
+  have not been independently tested; OHCI/xHCI/hubs remain unsupported.
+
+
 ## 3.1.2 — mouse-first editors
 
 * Removed single-letter desktop launch/close/quit shortcuts; added single-click

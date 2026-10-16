@@ -66,7 +66,7 @@ new/close/quit/overwrite guards, wheel, both draggable scrollbars, optional
 MouseKeys, 640x480 bounds, Russian UI and actual Notepad KvFS persistence.
 Generated screenshots and private disks live under `build/editor-smoke/`.
 
-## Read-only FAT32 / USB import (development after 3.1.2)
+## Read-only FAT32 / USB import (3.1.3)
 
 ```sh
 make CC=gcc-12 iso
