@@ -102,6 +102,18 @@ jobs:
             build/fat-*-validation.log
             build/gui-save-*-validation.log
             build/save-as/lab/**/*.log
+      - name: guest log tails on failure (step summary)
+        if: failure()
+        run: |
+          {
+            echo '## Guest/test log tails (storage-lab)'
+            find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
+              echo "### $f"
+              echo '```'
+              tail -c 3000 "$f" | tr -d '\r' | tail -60
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
   fat-host:
     runs-on: ubuntu-24.04
@@ -204,6 +216,18 @@ jobs:
             build/ahci-smoke/**/*.serial.log
             build/ahci-smoke/**/sata-gui.png
             build/ahci-usb/**/*.serial.log
+      - name: guest log tails on failure (step summary)
+        if: failure()
+        run: |
+          {
+            echo '## Guest/test log tails (storage-ahci)'
+            find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
+              echo "### $f"
+              echo '```'
+              tail -c 3000 "$f" | tr -d '\r' | tail -60
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
   storage-ahci-wal:
     runs-on: ubuntu-24.04
@@ -292,6 +316,18 @@ jobs:
             build/fat-owned-guest/ohci/**/case-*.log
             build/save-as/owned/ohci/**/*.png
             build/usb-import/ohci/**/*.png
+      - name: guest log tails on failure (step summary)
+        if: failure()
+        run: |
+          {
+            echo '## Guest/test log tails (storage-ohci)'
+            find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
+              echo "### $f"
+              echo '```'
+              tail -c 3000 "$f" | tr -d '\r' | tail -60
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
   storage-fs-hubs:
     runs-on: ubuntu-24.04
@@ -398,3 +434,15 @@ jobs:
             build/isolated-workshop/**/result.json
             build/isolated-app/**/*.log
             build/isolated-app/**/result.json
+      - name: guest log tails on failure (step summary)
+        if: failure()
+        run: |
+          {
+            echo '## Guest/test log tails (compiler-isolation)'
+            find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
+              echo "### $f"
+              echo '```'
+              tail -c 3000 "$f" | tr -d '\r' | tail -60
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY" || true
