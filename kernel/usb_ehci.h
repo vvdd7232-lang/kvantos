@@ -113,6 +113,14 @@ static int ehci_failed(usb_disk_t *d,ehci_fault_t *f,unsigned reason) {
         f->command,f->status,f->port,f->start_frame,f->stop_frame);
     return ehci_fence(h);
 }
+/* Completion poll bounds. All three stay finite so a hung controller is
+ * fenced, but the window must cover emulator completion latency: QEMU's
+ * usb-storage finishes WRITE via async block I/O, and on a loaded TCG
+ * host the CSW can legitimately take far longer than 250 frames. The
+ * old 250-frame/2M-iteration window fenced healthy controllers in CI. */
+#define EHCI_POLL_FRAMES 2000u
+#define EHCI_POLL_TSC    8000000000ULL
+#define EHCI_POLL_ITERS  16000000u
 static int ehci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,unsigned len) {
     hc_t *h=d->hc;u32 caps=1u<<30;
     if((d->speed!=0 && d->speed!=2) || (d->speed==0 && !usb_tt_route(d,&caps))) return -1;
@@ -141,15 +149,15 @@ static int ehci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,uns
     if(!ehci_wait(h,4,0x8000,0x8000)) return ehci_failed(d,&f,EHCI_START);
     u32 start=(ehci_reg(h,0xC)>>3)&2047;
     f.start_tsc=clock_now();f.start_frame=start;
-    u64 end=f.start_tsc+1000000000ULL;int done=0;unsigned left=2000000;
+    u64 end=f.start_tsc+EHCI_POLL_TSC;int done=0;unsigned left=EHCI_POLL_ITERS;
     for(;left && clock_now()<end;left--) {
         if(!ehci_link(d)) { f.reason=EHCI_LINK;break; }
         if(!(s->td.token&0x80)) { done=1;break; }
-        if((((ehci_reg(h,0xC)>>3)-start)&2047u)>=250) { f.reason=EHCI_FRAMES;break; }
+        if((((ehci_reg(h,0xC)>>3)-start)&2047u)>=EHCI_POLL_FRAMES) { f.reason=EHCI_FRAMES;break; }
         EHCI_PAUSE();
     }
     f.stop_tsc=clock_now();f.stop_frame=(ehci_reg(h,0xC)>>3)&2047;
-    f.iterations=2000000-left;f.pre_td=s->td.token;f.pre_overlay=s->qh.overlay.token;
+    f.iterations=EHCI_POLL_ITERS-left;f.pre_td=s->td.token;f.pre_overlay=s->qh.overlay.token;
     if(!done && !f.reason) f.reason=left?EHCI_TSC:EHCI_BUDGET;
     /* qTD writeback alone does not prove that the QH is no longer live. */
     f.retired=ehci_async_off(h);
