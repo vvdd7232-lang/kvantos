@@ -1128,6 +1128,7 @@ static int write_end(fat_vol_t *v,int result) {
     if(result>=0 && !v->error && wal_clean_bit(v,1) && fat_meta_flush(v) && stx_commit(&fat_tx)==0) {
         fat_meta_begin(0);v->writing=0;wal_release(v);if(!live(v)) { fence(v);return -1; }return result;
     }
+    kprintf("[fat] write failed: disk %d result %d error %d (rolled back)\n",v->disk,result,v->error);
     fat_meta_begin(0);
     if(stx_abort(&fat_tx)<0) fence(v);
     v->writing=0;wal_release(v);return result<0?result:-1;
