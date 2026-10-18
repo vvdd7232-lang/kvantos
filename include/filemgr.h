@@ -14,6 +14,8 @@ enum { FM_CONFIRM_NONE = 0, FM_CONFIRM_DELETE };
 
 void fm_init(void);
 void fm_refresh(void);
+u32 fm_listing_epoch(void);
+int fm_listing_current(int pane);
 int  fm_key(int c, int visible_rows);
 
 /* actions, shared by the keyboard and the toolbar buttons */
@@ -22,6 +24,13 @@ void fm_go_up(void);
 void fm_do_copy(void);
 void fm_ask_delete(void);
 void fm_ask_mkdir(void);
+void fm_ask_rename(void);
+void fm_input_submit(void);
+void fm_input_cancel(void);
+void fm_input_codepoint(u32 codepoint);
+int  fm_input_selected(void);
+const char *fm_input_title(void);
+const char *fm_input_original(void);
 void fm_next_volume(void);
 void fm_close_view(void);
 void fm_confirm_yes(void);

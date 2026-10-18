@@ -1,7 +1,9 @@
+.DEFAULT_GOAL := all
 # ============================================================
 #  KvantOS - build system
 # ============================================================
 NAME     := kvantos
+VERSION  := $(shell awk '$$2 == "KV_VERSION" {gsub(/"/, "", $$3); print $$3}' include/kernel.h)
 KERNEL   := build/kvant.bin
 ISO      := build/kvantos.iso
 
@@ -52,13 +54,26 @@ C_SRC    := $(wildcard kernel/*.c)
 # direct.asm is the GRUB-free boot stub: it is assembled separately by
 # tools/mkdirect.py and must never end up inside the kernel image.
 # boot64.asm / isr64.asm belong to the 64-bit kernel (kvant64.bin).
-ASM_SRC  := $(filter-out boot/direct.asm boot/boot64.asm boot/isr64.asm,$(wildcard boot/*.asm))
+ASM_SRC  := $(filter-out boot/direct.asm boot/boot64.asm boot/isr64.asm boot/user64.asm,$(wildcard boot/*.asm))
 OBJ      := $(patsubst kernel/%.c,build/obj/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj/%.o,$(ASM_SRC))
 
-ASM64_SRC:= boot/boot64.asm boot/isr64.asm
+ASM64_SRC:= boot/boot64.asm boot/isr64.asm boot/user64.asm
 OBJ64    := $(patsubst kernel/%.c,build/obj64/%.o,$(C_SRC)) \
             $(patsubst boot/%.asm,build/obj64/%.o,$(ASM64_SRC))
+
+# Laboratory-only write diagnostics must never leak through stale object files.
+STORAGE_LAB ?= 0
+CFLAGS += -include build/storage_config.h
+CFLAGS64 += -include build/storage_config.h
+.PHONY: storage-config-force
+build/storage_config.h: storage-config-force
+	@mkdir -p build
+	@tmp=$@.$$$$.tmp; printf '#define KV_STORAGE_LAB %s\n' '$(STORAGE_LAB)' > $$tmp; \
+	    cmp -s $$tmp $@ || mv $$tmp $@; rm -f $$tmp
+$(filter %.o,$(OBJ) $(OBJ64)): build/storage_config.h
+build/obj/usb.o build/obj64/usb.o build/obj/usb_bot.o build/obj64/usb_bot.o: include/usb_bot.h
+build/obj/fat.o build/obj64/fat.o build/obj/sector_tx.o build/obj64/sector_tx.o: include/sector_tx.h include/vfs.h
 
 ESPIMG   := build/esp.img
 
@@ -79,14 +94,20 @@ apps:
 build/obj:
 	@mkdir -p build/obj
 
-build/obj/mcc.o build/obj/gui.o build/obj/textedit.o build/obj/mouse.o build/obj/keyboard.o build/obj/usb.o build/obj/fat.o build/obj/ntfs.o: CFLAGS += -Os
-build/obj64/mcc.o build/obj64/gui.o build/obj64/textedit.o build/obj64/mouse.o build/obj64/keyboard.o build/obj64/usb.o build/obj64/fat.o build/obj64/ntfs.o: CFLAGS64 += -Os
+build/mcc_user_blob.h: sdk/isolated/mcc_runtime.c sdk/isolated/mcc_runtime.lds sdk/isolated/runtime_pack.py sdk/isolated/kvuser.h include/kvapp.h sdk/isolated/Makefile
+	$(MAKE) -C sdk/isolated CC="$(CC)" runtime
+build/obj/mcc.o build/obj64/mcc.o: build/mcc_user_blob.h include/mcc.h
 
-build/obj/usb.o build/obj64/usb.o: kernel/usb_ehci.h
+build/obj/mcc.o build/obj/gui.o build/obj/textedit.o build/obj/mouse.o build/obj/keyboard.o build/obj/usb.o build/obj/fat.o build/obj/sector_tx.o build/obj/ntfs.o: CFLAGS += -Os
+build/obj64/mcc.o build/obj64/gui.o build/obj64/textedit.o build/obj64/mouse.o build/obj64/keyboard.o build/obj64/usb.o build/obj64/fat.o build/obj64/sector_tx.o build/obj64/ntfs.o: CFLAGS64 += -Os
+
+build/obj/usb.o build/obj64/usb.o: kernel/usb_uhci.h kernel/usb_ehci.h kernel/usb_ohci.h kernel/usb_hub.h
+build/obj/fat.o build/obj64/fat.o: kernel/fat_wal.h kernel/fat_meta.h include/sector_tx.h include/vfs.h
+build/obj/sector_tx.o build/obj64/sector_tx.o: include/sector_tx.h
 
 build/obj/gui.o build/obj64/gui.o: $(wildcard kernel/gui_editor_*.h) include/vfs.h include/textedit.h
 
-build/obj/%.o: kernel/%.c include/kernel.h | build/obj
+build/obj/%.o: kernel/%.c include/kernel.h include/keymap.h | build/obj
 	@echo "  CC   $<"
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -98,7 +119,7 @@ build/obj/%.o: boot/%.asm | build/obj
 build/obj64:
 	@mkdir -p build/obj64
 
-build/obj64/%.o: kernel/%.c include/kernel.h | build/obj64
+build/obj64/%.o: kernel/%.c include/kernel.h include/keymap.h | build/obj64
 	@echo "  CC64 $<"
 	@$(CC) $(CFLAGS64) -c $< -o $@
 
@@ -152,29 +173,41 @@ $(KERNEL): $(OBJ) linker.ld
 # Built by the same grub-mkstandalone but with biosdisk, so that after
 # installation the system starts from the hard disk itself.
 # Installed GRUB needs loadable segments, not the host/QEMU symbol table.
-build/kvant-boot.bin: $(KERNEL)
-	@$(OBJCOPY) --strip-all $< $@
+# gzip + embedded gzio keep the memdisk safely below its fixed 0x78000 cap.
+# Embed only commands used by grub.cfg: i386-pc core has a 0x78000 byte cap.
+build/kvant-boot.bin: $(KERNEL) Makefile
+	@$(OBJCOPY) --strip-all $< $@.elf
+	@gzip -n -9 -c $@.elf > $@
+	@rm -f $@.elf
 
-build/hdboot.img: build/kvant-boot.bin grub/grub.cfg | build/obj
+# Comments are useful source documentation, but need not consume GRUB's
+# hard i386-pc memdisk cap. HD uses prelinked modules and no ISO-installer
+# search/module (the installed kernel must not reinstall itself). Menus/apps stay.
+build/hd-grub.cfg: grub/grub.cfg Makefile | build/obj
+	@awk 'NF && $$1 !~ /^#/ && $$1 != "insmod" && $$1 != "search" && !index($$0,"hdboot.img") {print}' $< > $@
+
+build/hdboot.img: build/kvant-boot.bin build/hd-grub.cfg tools/mkhdmem.py $(APPS) | build/obj
 	@echo "  HD   bootloader for disk installation"
-	@grub-mkstandalone --format=i386-pc --output=build/hd_core.img \
-	    --install-modules="biosdisk part_msdos multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
-	    --modules="biosdisk multiboot normal configfile" \
-	    --locales="" --fonts="" --themes="" --compress=xz \
-	    "boot/grub/grub.cfg=grub/grub.cfg" "boot/kvant.bin=build/kvant-boot.bin" \
-	    $(APP_GRAFT)
+	@python3 tools/mkhdmem.py build/hd-memdisk.tar build/hd-grub.cfg build/kvant-boot.bin release/apps
+	@printf 'set root=(memdisk)\nset prefix=(memdisk)/boot/grub\nnormal (memdisk)/boot/grub/grub.cfg\n' > build/hd-prefix.cfg
+	@grub-mkimage --format=i386-pc --output=build/hd_core.img \
+	    --prefix='(memdisk)/boot/grub' --config=build/hd-prefix.cfg \
+	    --memdisk=build/hd-memdisk.tar --compression=xz \
+	    memdisk tar gzio biosdisk part_msdos multiboot normal configfile vbe vga video_bochs video_cirrus reboot halt
 	@cat /usr/lib/grub/i386-pc/boot.img build/hd_core.img > $@
 
 iso: apps
 	@$(MAKE) --no-print-directory $(ISO)
 
-$(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg build/hdboot.img
+# A laboratory ISO is deliberately non-installable: no embedded disk installer
+# payload, and no GRUB search/module referencing one. Normal media are unchanged.
+$(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg Makefile $(if $(filter 1,$(STORAGE_LAB)),,build/hdboot.img)
 	@echo "  ISO  $@"
 	@rm -rf build/isodir
 	@mkdir -p build/isodir/boot/grub build/isodir/boot/apps
 	@cp $(KERNEL) build/isodir/boot/kvant.bin
-	@cp grub/grub.cfg build/isodir/boot/grub/grub.cfg
-	@cp build/hdboot.img build/isodir/boot/hdboot.img
+	@if [ "$(STORAGE_LAB)" = 1 ]; then awk 'index($$0,"hdboot.img")==0 {if($$0 ~ /^set timeout=/) print "set timeout=0"; else print}' grub/grub.cfg > build/isodir/boot/grub/grub.cfg; else cp grub/grub.cfg build/isodir/boot/grub/grub.cfg; fi
+	@if [ "$(STORAGE_LAB)" != 1 ]; then cp build/hdboot.img build/isodir/boot/hdboot.img; fi
 	@for a in $(APPS); do cp $$a build/isodir/boot/apps/; done
 	@# KvantOS 3.0 UEFI path: the EFI stub + 64-bit kernel live in the
 	@# ISO9660 tree (USB/hard-disk installs) and a second copy of them
@@ -225,7 +258,7 @@ $(ISO): $(KERNEL) $(KERNEL64) $(EFI) grub/grub.cfg build/hdboot.img
 floppy: apps
 	@$(MAKE) --no-print-directory build/kvantos.img
 
-build/kvantos.img: $(KERNEL)
+build/kvantos.img: build/kvant-boot.bin tools/mkhdmem.py Makefile
 	@echo "  FLOPPY  build/kvantos.img (fallback for machines without a DVD)"
 	@# There is deliberately NO filesystem on the floppy: core.img laid
 	@# down from sector 2 would overwrite the FAT. Instead the kernel
@@ -238,11 +271,12 @@ build/kvantos.img: $(KERNEL)
 	@printf 'menuentry "KvantOS - graphics 1024x768" { multiboot /boot/kvant.bin ; boot }\n' >> build/fd.cfg
 	@printf 'menuentry "KvantOS - VGA text 80x25" { multiboot /boot/kvant.bin text ; boot }\n' >> build/fd.cfg
 	@printf 'menuentry "KvantOS - safe mode" { multiboot /boot/kvant.bin text safe ; boot }\n' >> build/fd.cfg
-	@grub-mkstandalone --format=i386-pc --output=build/fd_core.img \
-	    --install-modules="biosdisk multiboot normal echo configfile test true sleep vbe vga minicmd reboot halt" \
-	    --modules="biosdisk multiboot normal configfile" \
-	    --locales="" --fonts="" --themes="" --compress=xz \
-	    "boot/grub/grub.cfg=build/fd.cfg" "boot/kvant.bin=$(KERNEL)"
+	@python3 tools/mkhdmem.py build/fd-memdisk.tar build/fd.cfg build/kvant-boot.bin
+	@printf 'set root=(memdisk)\nset prefix=(memdisk)/boot/grub\nnormal (memdisk)/boot/grub/grub.cfg\n' > build/fd-prefix.cfg
+	@grub-mkimage --format=i386-pc --output=build/fd_core.img \
+	    --prefix='(memdisk)/boot/grub' --config=build/fd-prefix.cfg \
+	    --memdisk=build/fd-memdisk.tar --compression=xz \
+	    memdisk tar gzio biosdisk multiboot normal configfile vbe vga video_bochs video_cirrus reboot halt
 	@cat /usr/lib/grub/i386-pc/boot.img build/fd_core.img > build/kvantos.img
 	@truncate -s 1474560 build/kvantos.img
 	@mkdir -p release && cp build/kvantos.img release/kvantos-floppy.img
@@ -274,8 +308,9 @@ debug: $(ISO)
 # The full distribution set: GRUB and direct BIOS/UEFI ISOs, floppy,
 # kernels, applications and an empty disk image. This target only builds
 # files locally; publishing is
-# handled separately by .github/workflows/release.yml on the v3.1.3 tag.
+# handled separately by .github/workflows/release.yml on the v3.1.4 tag.
 release:
+	@test "$(STORAGE_LAB)" = 0 || { echo 'Refusing release artifacts from STORAGE_LAB build'; exit 1; }
 	@mkdir -p build
 	@if $(MAKE) --no-print-directory release-inner >build/release.log 2>&1; then \
 	    cat build/release.log; \
@@ -285,21 +320,23 @@ release:
 	    exit $$rc; \
 	fi
 
-release-inner: iso floppy
+release-inner: iso
+	@test "$(STORAGE_LAB)" = 0 || { echo 'Refusing release artifacts from STORAGE_LAB build'; exit 1; }
+	@$(MAKE) --no-print-directory floppy
 	@# Run the direct builder after the GRUB ISO: both currently create build/esp.img.
 	@$(MAKE) --no-print-directory iso-direct
 	@mkdir -p release
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
-	@rm -f kvantos-3.1.3.tar.gz
+	@rm -f kvantos-$(VERSION).tar.gz
 	@cp LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md release/
 	@mkdir -p release/sdk
 	@cp sdk/WORKSHOP.md sdk/WORKSHOP.ru.md release/sdk/
 	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp > SHA256SUMS
-	@tar czf kvantos-3.1.3.tar.gz -C release \
+	@tar czf kvantos-$(VERSION).tar.gz -C release \
 	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
 	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64 \
 	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md sdk
-	@echo "  DONE: kvantos-3.1.3.tar.gz ($$(du -h kvantos-3.1.3.tar.gz | cut -f1))"
+	@echo "  DONE: kvantos-$(VERSION).tar.gz ($$(du -h kvantos-$(VERSION).tar.gz | cut -f1))"
 
 font:
 	@python3 tools/mkfont.py
@@ -311,3 +348,17 @@ clean:
 # Shared editor model and private GUI includes must rebuild both architectures.
 build/obj/gui.o build/obj64/gui.o: kernel/gui_editor_state.h kernel/gui_editor_view.h kernel/gui_editor_input.h include/textedit.h
 build/obj/textedit.o build/obj64/textedit.o: include/textedit.h
+
+# Workshop preprocessing workspace/limits affect both targets.
+build/obj/mcc.o build/obj64/mcc.o: kernel/mcc_pp.h kernel/mcc_types.h kernel/mcc_headers.h
+
+# Bounded native rename names; no filesystem path interpretation in flat drivers.
+build/obj/ramfs.o build/obj64/ramfs.o build/obj/kvfs.o build/obj64/kvfs.o: include/native_name.h
+
+VFS_OBJECTS := fat fat_lab filemgr gui kvfs main ntfs partition shell utilcmds vfs vfs_native
+$(addprefix build/obj/,$(addsuffix .o,$(VFS_OBJECTS))) $(addprefix build/obj64/,$(addsuffix .o,$(VFS_OBJECTS))): include/vfs.h
+
+build/obj/filemgr.o build/obj64/filemgr.o: include/native_name.h include/filemgr.h
+build/obj/gui.o build/obj64/gui.o: include/filemgr.h
+
+build/obj/gui.o build/obj64/gui.o: kernel/gui_store_policy.h

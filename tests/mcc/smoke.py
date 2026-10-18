@@ -27,7 +27,8 @@ from gui_driver import MouseGUI
 
 class Guest(MouseGUI):
     symbols=symbols
-    def __init__(self, disk=True, extra_args=()): self.disk = disk; self.extra_args = extra_args
+    def __init__(self, disk=True, extra_args=(), allow_unmounted=False):
+        self.disk=disk;self.extra_args=extra_args;self.allow_unmounted=allow_unmounted
     def __enter__(self):
         self.log=WORK/'workshop.serial.log'
         self.log.unlink(missing_ok=True)
@@ -47,22 +48,33 @@ class Guest(MouseGUI):
                            '-drive',f'file={DISK},format=raw,if=none,id=kvdata',
                            '-device','ide-hd,bus=kvide.0,drive=kvdata']
             else:disk_args=['-drive',f'file={DISK},format=raw,if=ide,index=0']
+        trace_args=[]
+        if os.environ.get('USB_TT_LAB')=='1':
+            events=['usb_ehci_lab_tt']
+            if os.environ.get('USB_TT_DIAG')=='1':
+                events+=['usb_ehci_packet_action','usb_ehci_guest_bug','usb_ehci_dma_error',
+                         'usb_msd_cmd_submit','usb_msd_cmd_complete','usb_msd_cmd_cancel',
+                         'usb_msd_packet_async','usb_msd_packet_complete']
+            event_file=WORK/'tt-events.txt';event_file.write_text('\n'.join(events)+'\n')
+            trace_args=['-trace',f'events={event_file},file={WORK}/tt-model-{time.monotonic_ns()}.trace']
         self.proc=subprocess.Popen([
-            'qemu-system-x86_64','-machine','q35,accel=tcg' if IS64 else 'pc,accel=tcg','-cpu','max' if IS64 else 'pentium','-m','512',*firmware,'-cdrom','release/kvantos.iso',
-            *disk_args, *self.extra_args,
+            os.environ.get('QEMU_SYSTEM_X86_64','qemu-system-x86_64'),'-machine','q35,accel=tcg' if IS64 else 'pc,accel=tcg','-cpu','max' if IS64 else 'pentium','-m','512',*firmware,'-cdrom','release/kvantos.iso',
+            *disk_args, *self.extra_args, *trace_args,
             '-boot','d','-display','none',
             '-serial','file:'+str(self.log),'-monitor','unix:'+str(monitor)+',server,nowait'
         ],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
-        deadline=time.monotonic()+40
+        deadline=time.monotonic()+int(os.environ.get("MCC_BOOT_TIMEOUT","40"))
         while time.monotonic()<deadline:
             if self.log.exists() and 'kvant:/' in self.log.read_text(errors='replace'):break
             if self.proc.poll() is not None:raise RuntimeError(self.proc.stderr.read())
             time.sleep(0.2)
-        else:raise RuntimeError('boot timeout')
+        else:
+            self.proc.terminate();self.proc.communicate(timeout=5)
+            raise RuntimeError('boot timeout')
         self.sock=socket.socket(socket.AF_UNIX)
         self.sock.connect(str(monitor));self.sock.settimeout(5);self.response()
-        if self.disk:assert 'KvFS mounted' in self.log.read_text(errors='replace'), 'test disk not mounted'
-        else:assert 'No ATA disk' in self.log.read_text(errors='replace')
+        if self.disk and not self.allow_unmounted:assert 'KvFS mounted' in self.log.read_text(errors='replace'), 'test disk not mounted'
+        elif not self.disk:assert 'No ATA disk' in self.log.read_text(errors='replace')
         return self
     def response(self):
         out=b''
@@ -75,6 +87,13 @@ class Guest(MouseGUI):
         self.sock.sendall((text+'\n').encode());return self.response()
     def key(self,name):
         self.cmd('sendkey '+name+' 40');time.sleep(0.1)
+        # TCG can be rendering a frame when the HMP call returns. Await actual
+        # queue consumption AND modifier release, not an optimistic fixed delay.
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            if self.num('kbd_head')==self.num('kbd_tail') and not (self.num('keymap')&63):return
+            time.sleep(.01)
+        raise AssertionError(('keyboard input was not consumed/released',name))
     def text(self,text):
         names={' ':'spc','\n':'ret','.':'dot','*':'shift-8','=':'equal',
                '!':'shift-1','_':'shift-minus','-':'minus','/':'slash',
@@ -107,10 +126,29 @@ def main():
     subprocess.run(['python3','sdk/mkdisk.py',str(DISK),'16'],check=True)
     sys.path.insert(0,str(ROOT/'sdk'))
     from mkdisk import KvFS
-    proof_source = b'''int *values=0;
+    proof_source = b'''#define COUNT N
+#define N 2
+#define SUM sum8
+#define ZERO 0
+int *values=0;
 char *buffer=0;
-int sum8(int a,int b,int c,int d,int e,int f,int g,int h){return a+b+c+d+e+f+g+h;}
-int calculate(void){int x=5;int *p=&x;int **q=&p;return **q+sum8(1,2,3,4,5,6,7,8);}
+int SUM(int a,int b,int c,int d,int e,int f,int g,int h){return a+b+c+d+e+f+g+h;}
+int marks[2];
+typedef struct Item{char pad[5];int value;int *ptr;} Item;
+typedef Item *IP;
+Item saved;
+int calculate(void){
+    int x=5;int *p=&x;int **q=&p;
+    int a[COUNT];char c[3];int *ptrs[1];
+    a[0]=**q;a[1]=SUM(1,2,3,4,5,6,7,8);c[0]=ZERO;ptrs[0]=&a[0];
+    int n=sizeof(a[0]++);int k=sizeof(marks[1]=99);
+    if(sizeof(a)!=8 || sizeof(c)!=3 || sizeof(ptrs)!=sizeof(int*) || marks[1]!=0)return -1;
+    Item items[COUNT];IP ip=items;++ip;
+    ip->value=a[1];ip->ptr=ptrs[0];ip->pad[4]=c[0];
+    if(sizeof(Item)!=sizeof(int*)*2+8 || saved.value!=0)return -2;
+    saved.value=ip->value;
+    return *ip->ptr+saved.value+ip->pad[4]+n-k;
+}
 void open(void){
     values=alloc(32);buffer=alloc(128);values[0]=calculate();
     format(buffer,128,"%d:%d:%d:%d:%d",values[0],2,3,4,5);
@@ -181,7 +219,7 @@ void close(void){release(values);release(buffer);}
         assert q.mem('app_file',40).split(b'\0')[0]==b'verify.kapp'
         assert q.mem('app_status',96).split(b'\0')[0]==b'41:2:3:4:5'
         q.cmd(f'screendump "{WORK / "abi-proof.ppm"}"')
-        print('Guest: native locals + double pointers + heap + 8-argument call + variadic format OK')
+        print('Guest: structs/typedef/layout + bounded macros + fixed arrays + unevaluated sizeof + native ABI/heap/format OK')
 
     
     # No hard disk attached: the compiler still creates and runs a RAM .kapp.

@@ -1,5 +1,6 @@
 /* The simplest possible in-memory filesystem (flat) */
 #include "kernel.h"
+#include "native_name.h"
 
 static rfile_t files[RAMFS_MAX_FILES];
 
@@ -85,4 +86,24 @@ int ramfs_delete(const char *name) {
     if (f->data) kfree(f->data);
     memset(f, 0, sizeof(*f));
     return 0;
+}
+
+/* Publish only the name; full file table/OOM cannot invalidate a rename. */
+int ramfs_rename(const char *from,const char *to) {
+    int length=native_name_length(to,sizeof(files[0].name));
+    if(length<0 || native_name_length(from,sizeof(files[0].name))<0)return -4;
+    char copy[sizeof(files[0].name)];memset(copy,0,sizeof(copy));memcpy(copy,to,(u32)length);
+#ifndef MCC_HOSTTEST
+    kv_flags_t flags=irq_save(); /* bounded RAM-only lookup/publication, no I/O */
+#endif
+    rfile_t *file=ramfs_find(from);int result=-3;
+    if(file) {
+        if(!strcmp(from,copy))result=0;
+        else if(ramfs_find(copy))result=-5;
+        else {memcpy(file->name,copy,sizeof(copy));result=0;}
+    }
+#ifndef MCC_HOSTTEST
+    irq_restore(flags);
+#endif
+    return result;
 }

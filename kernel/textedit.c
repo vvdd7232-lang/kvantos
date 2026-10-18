@@ -1,8 +1,7 @@
 #include "textedit.h"
 /* Single-threaded GUI scratch, not on the small kernel stack. Validation happens
    before committing: a full line/document or binary file never loses text. */
-static char before[ED_CAP], after[ED_CAP];
-static textdoc_t swap_doc;
+static char before[ED_CAP], after[ED_CAP], replaced[ED_CAP];
 static unsigned slen(const char *s) { unsigned n=0; while(s[n]) n++; return n; }
 
 _Static_assert(sizeof(unsigned short)==2 && ED_CAP==65536,"16-bit line offsets");
@@ -85,6 +84,37 @@ void text_range(const textdoc_t *d, unsigned *a, unsigned *b) {
         if(n<*a) *a=n; else *b=n;
     }
 }
+static textmark_t mark(const textdoc_t *d, unsigned revision) {
+    return (textmark_t){d->cy,d->cx,d->top,d->left,d->ay,d->ax,d->selecting,revision};
+}
+static void restore(textdoc_t *d, textmark_t m) {
+    d->cy=m.cy; d->cx=m.cx; d->top=m.top; d->left=m.left;
+    d->ay=m.ay; d->ax=m.ax; d->selecting=m.selecting;
+}
+void text_history_reset(const textdoc_t *d, textundo_t *u) {
+    u->used=u->count=u->cursor=u->serial=u->current=0;
+    u->saved=d->dirty?~0u:0;
+}
+void text_saved(textdoc_t *d, textundo_t *u) { u->saved=u->current; d->dirty=0; }
+/* Called only after validation succeeds. Redo is discarded on a new branch;
+   eviction changes available history, never the document or the saved marker. */
+static textchange_t *history_push(textdoc_t *d, textundo_t *u, unsigned bytes) {
+    if(u->serial>=~0u-1) text_history_reset(d,u); /* avoid revision wrap aliases */
+    if(u->cursor<u->count) u->used=u->changes[u->cursor].data;
+    u->count=u->cursor;
+    while(u->count && (u->count==ED_HISTORY_STEPS || u->used+bytes>ED_HISTORY_BYTES)) {
+        unsigned cut=u->changes[0].removed+u->changes[0].inserted;
+        for(unsigned i=cut;i<u->used;i++) u->data[i-cut]=u->data[i];
+        for(unsigned i=1;i<u->count;i++) {
+            u->changes[i-1]=u->changes[i]; u->changes[i-1].data-=cut;
+        }
+        u->used-=cut; u->count--; u->cursor--;
+    }
+    textchange_t *c=&u->changes[u->count++];
+    c->data=u->used; u->used+=bytes; u->cursor=u->count;
+    c->before=mark(d,u->current);
+    return c;
+}
 int text_replace(textdoc_t *d, textundo_t *u, const char *s, unsigned n) {
     unsigned a,b,old=text_export(d,before);
     text_range(d,&a,&b);
@@ -99,9 +129,16 @@ int text_replace(textdoc_t *d, textundo_t *u, const char *s, unsigned n) {
     if(normalize(after,o,before)<0) return 0;
     unsigned inserted=0;
     for(unsigned i=0;i<n;i++) inserted+=s[i]=='\r'?0:(s[i]=='\t'?4:1);
-    text_copy(&u->doc,d); u->valid=1;
+    if(a==b && !inserted) return 1;
+    textchange_t *c=history_push(d,u,b-a+inserted);
+    c->at=a; c->removed=b-a; c->inserted=inserted;
+    for(unsigned i=0;i<c->removed;i++) {
+        char ch=d->data[a+i]; u->data[c->data+i]=ch?ch:'\n';
+    }
+    for(unsigned i=0;i<inserted;i++) u->data[c->data+c->removed+i]=before[a+i];
     import(d,before); text_position(d,a+inserted);
     d->selecting=0; d->dirty=1;
+    u->current=++u->serial; c->after=mark(d,u->current);
     return 1;
 }
 int text_next(const char *s, int col) {
@@ -130,6 +167,7 @@ int text_delete(textdoc_t *d, textundo_t *u, int backwards) {
     if(text_selected(d)) return text_replace(d,u,"",0);
     unsigned pos=text_offset(d,d->cy,d->cx);
     if((backwards && !pos) || (!backwards && d->cy==d->lines-1 && !text_line(d,d->cy)[d->cx])) return 1;
+    textmark_t original=mark(d,u->current);
     int cy=d->cy,cx=d->cx;
     d->ay=cy; d->ax=cx; d->selecting=1;
     if(backwards) {
@@ -139,11 +177,83 @@ int text_delete(textdoc_t *d, textundo_t *u, int backwards) {
         if(text_line(d,cy)[cx]) d->cx=text_next(text_line(d,cy),cx);
         else { d->cy++; d->cx=0; }
     }
-    if(text_replace(d,u,"",0)) return 1;
-    d->cy=cy; d->cx=cx; d->selecting=0; return 0;
+    if(text_replace(d,u,"",0)) {
+        original.revision=u->changes[u->cursor-1].before.revision;
+        u->changes[u->cursor-1].before=original; return 1;
+    }
+    restore(d,original); return 0;
 }
-int text_undo(textdoc_t *d, textundo_t *u) {
-    if(!u->valid) return 0;
-    text_copy(&swap_doc,d); text_copy(d,&u->doc); text_copy(&u->doc,&swap_doc);
-    return 1; /* one step, toggles undo / redo */
+static int history_apply(textdoc_t *d, textundo_t *u, int redo) {
+    if(redo?u->cursor==u->count:!u->cursor) return 0;
+    textchange_t *c=&u->changes[redo?u->cursor:u->cursor-1];
+    unsigned removed=redo?c->removed:c->inserted, inserted=redo?c->inserted:c->removed;
+    const char *payload=u->data+c->data+(redo?c->removed:0);
+    unsigned n=text_export(d,before),o=0;
+    for(unsigned i=0;i<c->at;i++) after[o++]=before[i];
+    for(unsigned i=0;i<inserted;i++) after[o++]=payload[i];
+    for(unsigned i=c->at+removed;i<n;i++) after[o++]=before[i];
+    after[o]=0; import(d,after);
+    textmark_t m=redo?c->after:c->before; restore(d,m);
+    u->current=m.revision; d->dirty=u->current!=u->saved;
+    if(redo) u->cursor++; else u->cursor--;
+    return 1;
+}
+int text_undo(textdoc_t *d, textundo_t *u) { return history_apply(d,u,0); }
+int text_redo(textdoc_t *d, textundo_t *u) { return history_apply(d,u,1); }
+
+/* Literal, case-sensitive UTF-8 search. Never select half of a character. */
+static int boundary(const textdoc_t *d,unsigned at) {
+    return at==d->used || ((unsigned char)d->data[at]&0xc0)!=0x80;
+}
+static int matches(const textdoc_t *d,const char *q,unsigned n,unsigned at) {
+    if(at>d->used || n>d->used-at || !boundary(d,at) || !boundary(d,at+n)) return 0;
+    for(unsigned i=0;i<n;i++) if((d->data[at+i]?d->data[at+i]:'\n')!=q[i]) return 0;
+    return 1;
+}
+static int query_ok(const char *q,unsigned n) {
+    if(!n || n>=ED_QUERY_CAP || ((unsigned char)q[0]&0xc0)==0x80) return 0;
+    for(unsigned i=0;i<n;i++) if(!q[i]) return 0;
+    return 1;
+}
+int text_find(const textdoc_t *d,const char *q,unsigned n,unsigned start,int backwards,int wrap,unsigned *found) {
+    if(!query_ok(q,n) || n>d->used) return 0;
+    unsigned last=d->used-n;
+    if(start>d->used) start=d->used;
+    if(!backwards) {
+        for(unsigned i=start;i<=last;i++) if(matches(d,q,n,i)) { *found=i; return 1; }
+        if(wrap) for(unsigned i=0;i<start && i<=last;i++) if(matches(d,q,n,i)) { *found=i; return 1; }
+    } else {
+        unsigned first=start<last?start:last;
+        for(unsigned i=first+1;i;) { i--; if(matches(d,q,n,i)) { *found=i; return 1; } }
+        if(wrap) for(unsigned i=last+1;i>first+1;) { i--; if(matches(d,q,n,i)) { *found=i; return 1; } }
+    }
+    return 0;
+}
+int text_replace_all(textdoc_t *d,textundo_t *u,const char *q,unsigned n,const char *s,unsigned m,unsigned *count) {
+    *count=0;
+    if(!query_ok(q,n) || m>=ED_QUERY_CAP) return 0;
+    unsigned out=0,hits=0;
+    for(unsigned i=0;i<d->used;) {
+        if(matches(d,q,n,i)) {
+            if(m>=ED_CAP-out) return 0;
+            for(unsigned j=0;j<m;j++) replaced[out++]=s[j];
+            i+=n; hits++;
+        } else {
+            if(out>=ED_CAP-1) return 0;
+            replaced[out++]=d->data[i]?d->data[i]:'\n'; i++;
+        }
+    }
+    replaced[out]=0;
+    if(!hits) return 1;
+    int same=out==d->used;
+    for(unsigned i=0;same && i<out;i++) if(replaced[i]!=(d->data[i]?d->data[i]:'\n')) same=0;
+    if(same) { *count=hits; return 1; }
+    textmark_t original=mark(d,u->current);
+    unsigned caret=text_offset(d,d->cy,d->cx);
+    d->ay=d->ax=0; d->cy=d->lines-1; d->cx=(int)slen(text_line(d,d->cy)); d->selecting=1;
+    if(!text_replace(d,u,replaced,out)) { restore(d,original); return 0; }
+    textchange_t *change=&u->changes[u->cursor-1];
+    original.revision=change->before.revision; change->before=original;
+    text_position(d,caret); change->after=mark(d,u->current);
+    *count=hits; return 1;
 }

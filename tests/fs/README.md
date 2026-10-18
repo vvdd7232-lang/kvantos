@@ -29,6 +29,14 @@ What the tests cover:
 After a run, `fsck.vfat -n` on the FAT partition should report no errors
 and the NTFS partition should be byte-for-byte unchanged.
 
+The bounded NTFS image qualification is run separately with `make ntfs-image`.
+It creates only private regular-file images under `tests/fs/build/` and requires
+`mkntfs`, `ntfscp`, `ntfscat`, `ntfsinfo`, `ntfscluster`, `ntfsfallocate`, and
+`ntfstruncate` from ntfs-3g. It verifies 512/1024/2048/4096-byte logical-sector
+images, MBR offsets, malformed extents, fragmented Initialized Size zero-fill,
+64-bit volume-size refusal, and refusal of 4-GiB files that the 32-bit VFS cannot
+represent. It never mounts an image or accesses a physical block device.
+
 One subtlety worth keeping in mind: `ata_read` returns **0 on success**,
 not 1. An early version of this harness had it backwards; the tests all
 passed, and the system then failed to find a single volume when it was

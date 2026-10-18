@@ -6,6 +6,7 @@
  *  lives in shell.c, the prototypes in kernel.h.
  * ============================================================ */
 #include "kernel.h"
+#include "vfs.h"
 
 /* ---------- small helpers ---------- */
 
@@ -440,34 +441,26 @@ void cmd_cp(int argc, char **argv) {
     if (argc < 3) { kputs(T("\n  Usage: cp SRC DST\n\n", "\n  Использование: cp ОТКУДА КУДА\n\n")); return; }
     rfile_t *src = file_or_warn("cp", argv[1]);
     if (!src) return;
-    if (ramfs_find(argv[2])) {
-        if (ramfs_delete(argv[2]) != 0) {
-            kputs(T("  cp: cannot remove the destination\n\n", "  cp: не удалить файл назначения\n\n"));
-            return;
-        }
+    if(!strcmp(argv[1],argv[2])) {
+        kputs(T("  cp: source and destination are the same; unchanged\n", "  cp: источник и назначение совпадают; без изменений\n"));return;
     }
-    if (ramfs_create(argv[2], src->data, src->size) == 0)
+    /* RAMFS allocates/copies before replacing; failure preserves the target. */
+    if (ramfs_write(argv[2], src->data, src->size) == 0)
         kprintf(T("  '%s' -> '%s' (%u bytes)\n\n", "  '%s' -> '%s' (%u байт)\n\n"), argv[1], argv[2], src->size);
     else
-        kputs(T("  cp: ramfs is full or the name is bad\n\n", "  cp: ramfs переполнена или имя неверно\n\n"));
+        kputs(T("  cp: no memory/space or invalid name; target unchanged\n\n", "  cp: нет памяти/места или неверное имя; назначение не изменено\n\n"));
 }
 
 void cmd_mv(int argc, char **argv) {
-    if (argc < 3) { kputs(T("\n  Usage: mv SRC DST\n\n", "\n  Использование: mv ОТКУДА КУДА\n\n")); return; }
-    rfile_t *src = file_or_warn("mv", argv[1]);
-    if (!src) return;
-    if (strcmp(argv[1], argv[2]) == 0) { kputs(T("  mv: source and destination are the same\n\n", "  mv: источник и назначение совпадают\n\n")); return; }
-    if (ramfs_find(argv[2])) ramfs_delete(argv[2]);
-    char name[24];
-    strncpy(name, src->name, sizeof(name));
-    char *data = src->data;
-    u32 size = src->size;
-    if (ramfs_create(argv[2], data, size) != 0) {
-        kputs(T("  mv: ramfs is full or the name is bad\n\n", "  mv: ramfs переполнена или имя неверно\n\n"));
-        return;
-    }
-    ramfs_delete(name);
-    kprintf(T("  '%s' renamed to '%s'\n\n", "  '%s' переименован в '%s'\n\n"), name, argv[2]);
+    if(argc<3) {kputs(T("  Usage: mv SRC DST (RAM names or two absolute VFS paths)\n", "  mv ОТКУДА КУДА: RAM имена или два абсолютных VFS пути\n"));return;}
+    int absolute=argv[1][0]=='/' || argv[2][0]=='/';
+    int result=absolute?(argv[1][0]=='/' && argv[2][0]=='/'?vfs_rename(argv[1],argv[2]):-4):ramfs_rename(argv[1],argv[2]);
+    if(!result)kprintf(T("  '%s' renamed to '%s'\n", "  '%s' переименован в '%s'\n"),argv[1],argv[2]);
+    else if(result==-5)kputs(T("  mv: target exists; neither file replaced\n", "  mv: назначение существует; файлы не заменены\n"));
+    else if(result==-7)kputs(T("  mv: cross-volume move unsupported; no copy/delete attempted\n", "  mv: перенос между томами не поддержан; копирования/удаления нет\n"));
+    else if(result==-6)kputs(T("  mv: metadata outcome uncertain; remount and inspect, do not retry\n", "  mv: результат metadata неизвестен; перемонтируйте и проверьте, не повторяйте\n"));
+    else if(result==-2)kputs(T("  mv: read-only or rename unsupported\n", "  mv: только чтение или переименование не поддержано\n"));
+    else kputs(T("  mv: source unavailable or invalid name; not renamed\n", "  mv: источник недоступен или неверное имя; не переименовано\n"));
 }
 
 /* ============================================================

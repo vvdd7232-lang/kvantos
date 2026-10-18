@@ -44,7 +44,7 @@ class App:
             self.uc.mem_map(addr,size)
         self.uc.mem_write(BASE,blob[64:])
         self.calls=[]
-        # API pointer slots: rgb is slot 3, clear 4, text 9, log 33.
+        # API pointer slots: rgb is slot 3, clear 4, text 9, log 31.
         for slot in range(1,36):
             target=API+0x1000+slot*16
             self.uc.mem_write(API+slot*WORD,struct.pack('<Q' if IS64 else '<I',target))
@@ -126,6 +126,58 @@ check('f(1,2,3,4,5,6,7,8)',36,'int f(int a,int b,int c,int d,int e,int f,int g,i
 check('f()',12,'int f(void){int s=0;for(int i=0;i<6;i++){if(i%2)continue;s+=i*2;}return s;}')
 check('f()',120,'int f(void){char *p="abc";p[1]=120;return p[1];}')
 check('f()',4,'int f(void){int n=0;int *p=&n;int **q=&p;**q=4;return n;}')
+# Bounded fixed arrays: values, native pointer width, decay, padding and canaries.
+for scope in ('local','global'):
+    for t,n,expression,want in [('int',7,'a[0]+a[6]',42),
+                                ('char',7,'a[0]+a[6]',42),
+                                ('int',7,'sizeof a',28),
+                                ('char',7,'sizeof(a)',7),
+                                ('int',7,'sizeof(a+0)',WORD),
+                                ('int',7,'sizeof a[0]',4),
+                                ('char',7,'sizeof a[0]',1),
+                                ('int',7,'(a+6)-a',6)]:
+        decl=f'{t} a[{n}];'
+        body='a[0]=17;a[6]=25;return '+expression+';'
+        pre=(decl+'int f(void){'+body+'}' if scope=='global' else
+             'int f(void){'+decl+body+'}')
+        check('f()',want,pre)
+check('f()',42,'int f(void){int lo=9;char a[3];int hi=11;a[0]=20;a[2]=2;return lo+hi+a[0]+a[2];}')
+check('f()',42,'int a[3],b=42;int f(void){return a[0]+a[1]+a[2]+b;}')
+check('f()',42,'char a[3],b=42;int f(void){return a[0]+a[1]+a[2]+b;}')
+check('f()',7,'int f(void){int x=7;int *a[3];a[0]=&x;return *a[0];}')
+check('f()',3*WORD,'int f(void){int *a[3];return sizeof a;}')
+check('f()',3*WORD,'char *a[3];int f(void){return sizeof(a);}')
+check('f()',21,'int f(void){int a[2];a[0]=9;a[1]=12;return g(a);}int g(int *p){return p[0]+p[1];}')
+check('f()',WORD,'int f(void){int a[2];return g(a);}int g(int *p){return sizeof p;}')
+check('f()',65,'int f(void){char a[2];char *p=a;a[0]=65;p[1]=0;return *p;}')
+check('f()',7,'int f(void){int a[2];int *p=&a[0];p[1]=7;return a[1];}')
+check('f()',-1,'int f(void){char a[2];a[0]=255;return a[0];}')
+check('f()',42,'int *a[2];int x=42;int f(void){a[1]=&x;return *a[1];}')
+check('f()',42,'int f(void){char a[0x10];int b[010];a[15]=17;b[7]=25;return a[15]+b[7];}')
+check('f()',42,'int f(void){char a[1],b[1];a[0]=19;b[0]=23;return a[0]+b[0];}')
+for expression,want in [('sizeof(int)',4),('sizeof(char)',1),('sizeof(int*)',WORD),
+                        ('sizeof(void*)',WORD),('sizeof(char**)',WORD),
+                        ('sizeof(1+2)',4),('sizeof \'a\'',4),('sizeof "abc"',4),
+                        ('sizeof("a\\0b")',4),('sizeof("abc"[0])',1),
+                        ('sizeof(sizeof(int))',4)]:
+    check(expression,want)
+# sizeof discards calls, assignments, increments, data and relocation emission.
+check('f()',17,'int n=9;int change(void){n=100;return 1;}int f(void){int z=sizeof(change());int k=sizeof(n++);return n+z+k;}')
+check('f()',9,'int f(void){int n=9;int z=sizeof(n=42);return n;}')
+check('f()',9,'int f(void){int n=9;int z=sizeof(++n);return n;}')
+check('f()',WORD+9,'int f(void){int n=9;int *p=&n;int z=sizeof(p++);return z+*p;}')
+check('f()',WORD,'int f(void){return sizeof(alloc(64));}')
+check('f()',4,'int f(void){return sizeof(1/0);}')
+check('f()',5,'int f(void){char a[5];return sizeof((a));}')
+check('f()',4,'int f(void){int *p=0;return sizeof(*p);}')
+check('f()',112,'int f(void){int n=sizeof("hidden");return "live"[1]+n;}')
+check('f()',6,'int f(void){int x=7;return sizeof x+2;}')
+app=App('void draw(void){clear(sizeof(alloc(64)));}')
+assert app.result()==WORD and [slot for slot,args in app.calls]==[4],app.calls
+passed+=1
+check('f()',7000,'char a[7000];int f(void){return sizeof a;}')
+check('f()',128*WORD,'int f(void){char a[LOCAL_BYTES];return sizeof a;}'.replace('LOCAL_BYTES',str(128*WORD)))
+check('f()',42,'int f(void){int a[2];return g(a);}int g(int *p){p[0]=42;return p[0];}')
 app=App('void draw(void){text(10,20,"hello",rgb(1,2,3),-1);}')
 app.run(app.callbacks['draw'])
 text=[a for slot,a in app.calls if slot==9][-1]
@@ -137,18 +189,179 @@ app.run(app.callbacks['key'],[4]);assert app.result()==5
 app.run(app.callbacks['click'],[20,30,1]);assert app.result()==51
 passed+=1
 
+# Bounded object-like preprocessing: textual precedence, token boundaries, scope.
+check('ANSWER',42,'#define ANSWER 42')
+check('2*TERM',5,'#define TERM 1+3')
+check('2*TERM',8,'#define TERM (1+3)')
+check('A',42,'#define A B\n#define B 42')
+check('ANSWER',42,'  /* before */ #define ANSWER 42 // trailing comment')
+check('ANSWER',42,'#define ANSWER 40 /* gap */ +2')
+check('f()',42,'#define COUNT 3\nint f(void){int a[COUNT];a[2]=42;return a[2];}')
+check('f()',42,'#define T int\nT f(void){T x=42;return x;}')
+check('f()',4,'#define SIZE sizeof\nint f(void){return SIZE(int);}')
+check('f()',3,'#define NAME a\nint f(void){int a=3;return NAME;}')
+check('f()',42,'#define EMPTY\nint f(void){EMPTY return 42;}')
+check('f()',65,'#define LETTER \'A\'\nint f(void){return LETTER;}')
+check('f()',65,'#define A 7\nint f(void){return "A"[0];}')
+check('f()',65,'#define A 7\nint f(void){return \'A\';}')
+check('f()',42,'#define A 17\nint f(void){int AA=42;return AA;}')
+check('f()',3,'#define PLUS +\nint f(void){int x=2;return x PLUS+1;}')
+check('f()',3,'#define ID x\nint f(void){int x=2;return ID+1;}')
+check('f()',42,'#define TEXT "/* A // */"\nint f(void){return sizeof(TEXT)+31;}')
+check('f()',42,'#define NUM 40\nint f(void){return NUM+2;}\n')
+check('f()',42,'#define X 42\r\nint f(void){return X;}')
+check('f()',42,'int f(void){\n#define HERE 42\nreturn HERE;}')
+check('f()',42,'/* multiline\n#define NOT_A_DIRECTIVE 5\n*/\nint f(void){return 42;}')
+check('f()',42,'// #define X 17\nint f(void){return 42;}')
+check('A0',42,'#define A7 42\n'+''.join(f'#define A{i} A{i+1}\n' for i in range(6,-1,-1)))
+check('M31',31,''.join(f'#define M{i} {i}\n' for i in range(32)))
+# Bounded structs/typedef: native layout, member chains, aggregates by pointer only.
+check('f()',42,'struct S{int x;char y;};int f(void){struct S s;s.x=40;s.y=2;return s.x+s.y;}')
+check('f()',42,'struct S{int x;};struct S s;int f(void){s.x=42;return s.x;}')
+check('f()',0,'struct S{int x;char y;};struct S s;int f(void){return s.x+s.y;}')
+check('f()',42,'struct S{int x;};int f(void){struct S s;struct S *p=&s;p->x=42;return s.x;}')
+check('f()',42,'struct S{int x;};int f(void){struct S s;s.x=42;return (&s)->x;}')
+check('f()',42,'struct I{int n;};struct O{char c;struct I i;};int f(void){struct O o;o.i.n=42;return o.i.n;}')
+check('f()',42,'struct I{int n;};struct O{struct I *p;};int f(void){struct I i;struct O o;o.p=&i;o.p->n=42;return i.n;}')
+check('f()',42,'struct S{int a[3];char b[5];};int f(void){struct S s;s.a[2]=40;s.b[4]=2;return s.a[2]+s.b[4];}')
+check('f()',12,'struct S{int a[3];};int f(void){struct S s;return sizeof(s.a);}')
+check('f()',20,'struct S{int a[3];char b[5];};int f(void){return sizeof(struct S);}')
+check('f()',12,'struct S{char a[5];int x;};int f(void){struct S s;return sizeof s;}')
+check('f()',48,'struct S{char a[5];int x;};int f(void){struct S s[4];return sizeof s;}')
+check('f()',42,'struct S{char a[5];int x;};int f(void){struct S a[4];a[3].x=42;return a[3].x;}')
+check('f()',3,'struct S{char a[5];int x;};int f(void){struct S a[4];return &a[3]-a;}')
+check('f()',-3,'struct S{char a[5];int x;};int f(void){struct S a[4];return a-&a[3];}')
+check('f()',42,'struct S{char a[132];int x;};int f(void){struct S a[2];struct S *p=a;++p;p->x=42;p--;return a[1].x;}')
+check('f()',42,'struct S{char a[132];int x;};int f(void){struct S a[2];struct S *p=a;p++;p->x=42;return (p--)->x;}')
+check('f()',42,'struct S{int x;};int g(struct S *p){return p->x;}int f(void){struct S s;s.x=42;return g(&s);}')
+check('f()',42,'struct S{int x;};struct S s;struct S *get(void){return &s;}int f(void){get()->x=42;return s.x;}')
+check('f()',42,'struct Node;typedef struct Node Node;struct Node{int n;Node *next;};int f(void){Node a,b;a.next=&b;b.n=42;return a.next->n;}')
+check('f()',42,'typedef int Number;typedef Number *Ptr;int f(void){Number n=42;Ptr p=&n;return *p;}')
+check('f()',42,'typedef struct {int n;} Item;int f(void){Item i;i.n=42;return i.n;}')
+check('f()',42,'typedef struct S{int n;} Item,*IP;int f(void){Item i;IP p=&i;p->n=42;return i.n;}')
+check('f()',42,'typedef int N,*P;int f(void){N n=42;P p=&n;return *p;}')
+check('f()',42,'typedef char Byte;int f(void){Byte a[3];a[2]=42;return a[2];}')
+check('f()',WORD,'struct S;typedef struct S *SP;int f(void){return sizeof(SP);}')
+check('f()',WORD,'struct S{int n;};int f(void){return sizeof(struct S*);}')
+check('f()',42,'#define N 2\ntypedef struct {int n[N];} Item;int f(void){Item a;a.n[1]=42;return a.n[1];}')
+check('f()',42,'struct T{int x;};typedef int T;int f(void){T n=42;return n;}')
+check('f()',5,'struct S{int x;};int f(void){struct S s;s.x=5;int n=sizeof(s.x++);return s.x;}')
+check('f()',42,'struct S{int x;};struct S *p=0;int f(void){return sizeof(p->x)+38;}')
+# Independent ctypes layout oracle uses target-width integers in pointer slots.
+class Layout(C.Structure):
+    _fields_=[('head',C.c_char),('n',C.c_int32),('p',C.c_uint64 if IS64 else C.c_uint32),('tail',C.c_char)]
+size=C.sizeof(Layout)
+check('sizeof(struct S)',size,'struct S{char head;int n;int *p;char tail;};')
+app=App('struct S{char head;int n;int *p;char tail;};struct S s;void draw(void){s.head=17;s.n=42;s.p=&s.n;s.tail=23;log(&s);clear(sizeof s);}')
+assert app.result()==size
+address=[args[0] for slot,args in app.calls if slot==31][-1]
+raw=bytes(app.uc.mem_read(address,size))
+assert raw[Layout.head.offset]==17 and raw[Layout.tail.offset]==23
+assert struct.unpack_from('<i',raw,Layout.n.offset)[0]==42
+assert struct.unpack_from('<Q' if IS64 else '<I',raw,Layout.p.offset)[0]==address+Layout.n.offset
+passed+=1
+class Outer(C.Structure):
+    _fields_=[('head',C.c_char),('inner',Layout),('tail',C.c_char)]
+check('sizeof(struct O)',C.sizeof(Outer),'struct S{char head;int n;int *p;char tail;};struct O{char head;struct S inner;char tail;};')
 bad=['', 'void draw( {', 'void draw(void){missing();}', 'void draw(void){x=1;}',
      'void draw(void){int x=;}', 'void draw(void){1=2;}', 'void draw(void){break;}',
      'void draw(void){clear();}', 'void draw(void){clear(1,2);}', '#include "kvapp.h"',
      'void draw(void){char *p="oops;}', '/* missing end', 'int f(void);void draw(void){clear(f());}',
      'void draw(int x){}', 'int x;int x;', 'void draw(void){}void draw(void){}',
      'void draw(void){int x;int x;}', 'int f(void);int f(int x){return x;}void draw(void){}',
-     'void draw(void){int a[10];}', 'void draw(void){float x;}', 'char f(void){return;}void draw(void){}',
+     'void draw(void){int a[0];}', 'void draw(void){float x;}', 'char f(void){return;}void draw(void){}',
      'void draw(void){return 3;}',
      'void draw(void){clear(4294967296);}', 'void draw(void){clear(09);}',
      'void draw(void){clear('+('('*50)+'1'+(')'*50)+');}',
      'void draw(void){'+('clear(1);'*1200)+'}']
+bad += ['void draw(void){int a[-1];}', 'void draw(void){int a[];}',
+        'void draw(void){int n=2;int a[n];}', 'void draw(void){int a[1+1];}',
+        'void draw(void){int a[2][3];}', 'void draw(void){void a[3];}',
+        'void draw(void){int a[2]={1,2};}', 'char a[4]="abc";void draw(void){}',
+        'int a[4294967295];void draw(void){}', 'int a[2001];void draw(void){}',
+        'char a[4000],b[4000];void draw(void){}',
+        'void draw(void){char a['+str(128*WORD+1)+'];}',
+        'void draw(void){char a['+str(128*WORD)+'];int b;}',
+        'void draw(void){int a[2];a=0;}', 'void draw(void){int a[2];a++;}',
+        'void draw(void){int a[2];&a;}', 'void f(int a[2]){}void draw(void){}',
+        'void draw(void){sizeof(void);}', 'void draw(void){sizeof unknown;}',
+        'void draw(void){sizeof(missing());}', 'void draw(void){sizeof(clear(1));}',
+        'void draw(void){sizeof(int[3]);}', 'void draw(void){sizeof();}']
+bad += ['#define F(x) x\nvoid draw(void){}', '#define X 1\n#define X 1\nvoid draw(void){}',
+        '#define X X\nvoid draw(void){clear(X);}',
+        '#define A B\n#define B A\nvoid draw(void){clear(A);}',
+        '#undef X\nvoid draw(void){}', '#ifdef X\nvoid draw(void){}\n#endif',
+        '#define X ##\nvoid draw(void){}', '#define X #y\nvoid draw(void){}',
+        '#define X \\\n42\nvoid draw(void){}', '#define 9X 42\nvoid draw(void){}',
+        'void draw(void){ #define X 42\n}',
+        '#define X "unterminated\nvoid draw(void){}',
+        '#define X /* multiline\n*/42\nvoid draw(void){}',
+        '#define X '+('x'*256)+'\nvoid draw(void){}',
+        '#define '+('x'*48)+' 42\nvoid draw(void){}',
+        ''.join(f'#define M{i} {i}\n' for i in range(33))+'void draw(void){}',
+        ''.join(f'#define A{i} A{i+1}\n' for i in range(8))+'#define A8 42\nvoid draw(void){clear(A0);}',
+        '#define X '+('1 '*250)+'\nvoid draw(void){}',
+        '#define X '+(' '*2)+'1\nvoid draw(void){clear(0xX);}',
+        '#define X 1\nvoid draw(void){clear(12X);}',
+        '#define B '+(' '*0)+'1+1+1+1+1+1+1+1\n'+
+        '#define A '+('B '*100)+'\nvoid draw(void){'+('A '*50)+'}',
+        '#define define 42\n#nope x\nvoid draw(void){}']
+bad += ['struct S{};void draw(void){}', 'struct S{void x;};void draw(void){}',
+        'struct S{struct S s;};void draw(void){}', 'struct S;struct S s;void draw(void){}',
+        'struct S{int x;int x;};void draw(void){}', 'struct S{int x:3;};void draw(void){}',
+        'struct S{int x;};struct S{int y;};void draw(void){}',
+        'struct S{char a[8000];char b;};void draw(void){}',
+        'struct S{int x;};void draw(void){struct S a,b;a=b;}',
+        'struct S{int x;};void draw(void){struct S a=1;}',
+        'struct S{int x;};struct S a=1;void draw(void){}',
+        'struct S{int x;};void draw(void){struct S a;clear(a);}',
+        'struct S{int x;};struct S f(void);void draw(void){}',
+        'struct S{int x;};void f(struct S s){}void draw(void){}',
+        'struct S{int x;};void draw(void){struct S a;a.missing=1;}',
+        'struct S{int x;};void draw(void){struct S a;a->x=1;}',
+        'struct S{int x;};void draw(void){int a;a.x=1;}',
+        'struct S;void draw(void){struct S *p;p->x=1;}',
+        'void draw(void){sizeof(struct S);}',
+        'void draw(void){struct S{int x;}s;}',
+        'struct S{struct I{int x;}i;};void draw(void){}',
+        'typedef int T;typedef int T;void draw(void){}',
+        'typedef int T;int T;void draw(void){}',
+        'typedef int T;void draw(void){int T;}',
+        'typedef int clear;void draw(void){}',
+        'typedef int A[3];void draw(void){}',
+        'typedef int (*F)(void);void draw(void){}',
+        'void draw(void){typedef int T;}',
+        ''.join(f'struct S{i};' for i in range(33))+'void draw(void){}',
+        ''.join(f'typedef int T{i};' for i in range(33))+'void draw(void){}',
+        'struct S{'+''.join(f'char x{i};' for i in range(257))+'};void draw(void){}',
+        'void draw(void){sizeof(*3);}']
 for source in bad:compile(source,False);passed+=1
+for source,line_number in [('#define X 42\n\nvoid draw(void){missing();}',3),
+                           ('#define X X\n\nvoid draw(void){clear(X);}',3),
+                           ('/* a\nb */\n#define F(x) x\nvoid draw(void){}',3)]:
+    compile(source,False);assert lib.mcc_error_line()==line_number,(source,lib.mcc_error_line())
+    passed+=1
+# Builtin headers are literal, readonly and include-once, not filesystem CPP.
+for headers in ['#include "kvui.h"\n', '#include <kvui.h>\r\n',
+                '#include "kvtypes.h"\n#include <kvui.h>\n#include "kvkeys.h"\n',
+                '# include"kvui.h" /* one */ /**/ // two\n',
+                '#include <kvui.h>\n'*300]:
+    check('f()',42,headers+'int f(void){kv_point p;p.x=KV_CHAR_W;p.y=KV_CHAR_H;kv_int n=18;kv_byte c=0;return p.x+p.y+n+c;}')
+check('f()',8,'#include <kvtypes.h>\nint f(void){return sizeof(kv_point);}')
+check('f()',257,'#include <kvkeys.h>\nint f(void){return KV_KEY_DOWN;}')
+check('f()',-1,'#include <kvui.h>\nint f(void){return KV_TRANSPARENT;}')
+for header in ['kvapp.h','stdint.h','stdio.h','../kvui.h','/kvui.h','kvui\\.h',
+               './kvui.h','KVUI.H','cycle1.h','depth1.h','', 'x'*32]:
+    compile('#include "'+header+'"\nvoid draw(void){}',False);passed+=1
+for directive in ['#include', '#', '#inc', '#include "kvui.h', '#include <kvui.h"',
+                  '#include KV_HEADER', '#include "kvui.h" extra', '#include "kvui.h" /*',
+                  '#include "kvui.h" #include "kvkeys.h"', '#includeevil "kvui.h"']:
+    compile(directive+'\nvoid draw(void){}',False);passed+=1
+for source,row in [('#include "kvui.h"\n\nvoid draw(void){missing();}',3),
+                   ('#include "kvui.h"\n#define KV_BG 1\nvoid draw(void){}',2),
+                   ('// header below\n#include "no.h"\nvoid draw(void){}',2),
+                   ('#include "kvui.h"\n#define X X\nvoid draw(void){clear(X);}',3)]:
+    compile(source,False);assert lib.mcc_error_line()==row,(source,lib.mcc_error_line());passed+=1
 # Repeated failure must not leak compiler state into a later successful build.
 check('7*8',56)
 # Pointer-width and builtin stack-argument regressions.

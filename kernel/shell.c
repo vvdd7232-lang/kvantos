@@ -187,17 +187,21 @@ static void cmd_setup(int argc, char **argv) {
 
 static void cmd_disk(void) {
     kputs("\n");
-    if (!ata_count()) {
-        kputs(T("  No ATA disks found.\n", "  Диски ATA не найдены.\n"));
+    if (!ata_count() && !ahci_count()) {
+        kputs(T("  No ATA/AHCI disks found.\n", "  Диски ATA/AHCI не найдены.\n"));
         kputs(T("  In QEMU add: -hda disk.img\n\n", "  В QEMU добавьте: -hda disk.img\n\n"));
         return;
     }
-    kprintf(T("  Disks found: %d\n\n", "  Найдено дисков: %d\n\n"), ata_count());
+    kprintf(T("  Disks found: %d\n\n", "  Найдено дисков: %d\n\n"), ata_count()+ahci_count());
     for (int i = 0; i < ata_count(); i++) {
         kprintf("   [%d] %s\n", i, ata_model(i));
         kprintf(T("       sectors: %u, size: %u MiB%s\n", "       секторов: %u, объём: %u МиБ%s\n"),
                 ata_sectors(i), ata_size_mb(i),
                 i == ata_boot_drive() ? T("  (system)", "  (системный)") : "");
+    }
+    for(int i=0;i<ahci_count();i++) {
+        kprintf("   [%d] AHCI %s\n       sectors: %u, %s\n",
+                BLK_AHCI_BASE+i,ahci_model(i),ahci_sectors(i),ahci_status(i));
     }
     kputs("\n");
 }
@@ -206,17 +210,20 @@ static void cmd_format(void) {
     if (!ata_present()) { kputs(T("\n  No disk found.\n\n", "\n  Диск не найден.\n\n")); return; }
     kputs(T("\n  Formatting the disk for KvFS...\n", "\n  Разметка диска под KvFS...\n"));
     int rc = kvfs_format();
+    if(!rc && !vfs_find("kv"))kvfs_vfs_register();
     if (rc == 0) kputs(T("  Done. The filesystem has been created.\n\n", "  Готово. Файловая система создана.\n\n"));
-    else kprintf(T("  Failed: %s\n\n", "  Не удалось: %s\n\n"), kvfs_error(rc));
+    else kprintf(T("  Format failed (code %d); inspect disk state\n\n", "  Форматирование не удалось (код %d); проверьте состояние диска\n\n"),rc);
+}
+
+static int shell_kvfs_ready(void) {
+    if(kvfs_mounted())return 1;
+    kputs(T("\n  KvFS is not mounted. Disk may contain data.\n  Formatting is not recovery; use Programs > Check / mount.\n\n", "\n  KvFS не подключена. На диске могут быть данные.\n  Форматирование не восстановление; Программы > Проверить / подключить.\n\n"));
+    return 0;
 }
 
 static void cmd_df(void) {
     kputs("\n");
-    if (!kvfs_mounted()) {
-        kputs(T("  The filesystem is not mounted.\n", "  Файловая система не подключена.\n"));
-        kputs(T("  Format the disk with the format command.\n\n", "  Разметьте диск командой format.\n\n"));
-        return;
-    }
+    if(!shell_kvfs_ready())return;
     u32 mb, kb, nf;
     kvfs_stats(&mb, &kb, &nf);
     kprintf(T("  KvFS on the disk\n", "  KvFS на диске\n"));
@@ -227,7 +234,7 @@ static void cmd_df(void) {
 
 static void cmd_dls(void) {
     kputs("\n");
-    if (!kvfs_mounted()) { kputs(T("  The disk is not formatted (format).\n\n", "  Диск не размечен (format).\n\n")); return; }
+    if(!shell_kvfs_ready())return;
     char nm[44]; u32 sz; int ex;
     int n = 0;
     kputs(T("     SIZE  TYPE  NAME\n", "   РАЗМЕР  ТИП   ИМЯ\n"));
@@ -241,7 +248,7 @@ static void cmd_dls(void) {
 }
 
 static void cmd_dcat(const char *name) {
-    if (!kvfs_mounted()) { kputs(T("\n  The disk is not formatted.\n\n", "\n  Диск не размечен.\n\n")); return; }
+    if(!shell_kvfs_ready())return;
     u32 sz = kvfs_size(name);
     if (!sz) { kprintf(T("\n  File '%s' not found.\n\n", "\n  Файл '%s' не найден.\n\n"), name); return; }
     if (sz > 8192) sz = 8192;
@@ -260,10 +267,7 @@ static void cmd_dcat(const char *name) {
    "program" flag is set from the .kapp extension - those are exactly
    the files the Programs window shows. */
 static void cmd_install(const char *name) {
-    if (!kvfs_mounted()) {
-        kputs(T("\n  The disk is not formatted. Run format.\n\n", "\n  Диск не размечен. Выполните format.\n\n"));
-        return;
-    }
+    if(!shell_kvfs_ready())return;
     rfile_t *f = ramfs_find(name);
     if (!f) {
         kprintf(T("\n  File '%s' not found in ramfs.\n", "\n  Файл '%s' не найден в ramfs.\n"), name);
@@ -284,7 +288,7 @@ static void cmd_install(const char *name) {
 }
 
 static void cmd_uninstall(const char *name) {
-    if (!kvfs_mounted()) { kputs(T("\n  The disk is not formatted.\n\n", "\n  Диск не размечен.\n\n")); return; }
+    if(!shell_kvfs_ready())return;
     int rc = kvfs_delete(name);
     if (rc == 0) kprintf(T("\n  Removed: %s\n\n", "\n  Удалено: %s\n\n"), name);
     else kprintf(T("\n  Failed: %s\n\n", "\n  Не удалось: %s\n\n"), kvfs_error(rc));
@@ -292,7 +296,7 @@ static void cmd_uninstall(const char *name) {
 
 static void cmd_apps(void) {
     kputs("\n");
-    if (!kvfs_mounted()) { kputs(T("  The disk is not formatted (format).\n\n", "  Диск не размечен (format).\n\n")); return; }
+    if(!shell_kvfs_ready())return;
     char nm[44]; u32 sz; int ex;
     int n = 0;
     for (int i = 0; i < 64; i++) {
@@ -369,6 +373,7 @@ static void cmd_help(void) {
         {"dls",       T("files on the disk", "файлы на диске")},
         {"dcat F",    T("show a file from the disk", "показать файл с диска")},
         {"mount",     T("mounted volumes: FAT32, NTFS, KvFS", "подключённые тома: FAT32, NTFS, KvFS")},
+        {"fatwrite V enable|disable", T("explicit owned-WAL FAT32 write mode", "явно включить запись FAT32 с проверенным журналом")},
         {"rescan",    T("scan the disks for volumes again", "заново просканировать диски")},
         {"vls PATH",  T("list a directory on any volume", "список каталога на любом томе")},
         {"vcd PATH",  T("change the current volume directory", "сменить текущий каталог тома")},
@@ -742,10 +747,21 @@ static void cmd_alloc(int n) {
    relative to the current volume path kept below. */
 static char sh_cwd[VFS_MAX_PATH] = "";
 
-static void sh_abs(char *dst, u32 dstsz, const char *arg) {
-    if (arg[0] == '/') { strncpy(dst, arg, dstsz); return; }
-    if (!sh_cwd[0]) { ksnprintf(dst, dstsz, "/mnt/%s", arg); return; }
-    vfs_join(dst, dstsz, sh_cwd, arg);
+/* Resolve only complete absolute/relative paths; never operate on a truncated one. */
+static int sh_path(char out[VFS_MAX_PATH],const char *arg) {
+    if(!arg || !arg[0])return 0;
+    u32 n=0;while(n<VFS_MAX_PATH && arg[n])n++;
+    if(n==VFS_MAX_PATH)return 0;
+    if(arg[0]=='/'){memcpy(out,arg,n+1);return 1;}
+    const char *dir=sh_cwd[0]?sh_cwd:"/mnt";
+    u32 m=0;while(m<VFS_MAX_PATH && dir[m])m++;
+    if(m==VFS_MAX_PATH || m+n+(m && dir[m-1]!='/')>=VFS_MAX_PATH)return 0;
+    vfs_join(out,VFS_MAX_PATH,dir,arg);return 1;
+}
+
+static int sh_path_checked(char out[VFS_MAX_PATH],const char *arg) {
+    if(sh_path(out,arg))return 1;
+    kputs(T("  Invalid or too long path; nothing done\n\n", "  Неверный или слишком длинный путь; действие отменено\n\n"));return 0;
 }
 
 static void cmd_mount(void) {
@@ -783,24 +799,25 @@ static void cmd_mount(void) {
 
 static void cmd_vls(int argc, char **argv) {
     char path[VFS_MAX_PATH];
-    if (argc > 1) sh_abs(path, sizeof(path), argv[1]);
-    else if (sh_cwd[0]) strncpy(path, sh_cwd, sizeof(path));
+    if(argc>1){if(!sh_path_checked(path,argv[1]))return;}
+    else if(sh_cwd[0]){if(!sh_path_checked(path,sh_cwd))return;}
     else { kputs(T("  usage: vls /mnt/hda1[/dir]\n\n", "  использование: vls /mnt/hda1[/каталог]\n\n")); return; }
-
-    if (vfs_stat(path) != 2) {
-        kprintf(T("  Not a directory: %s\n\n", "  Не каталог: %s\n\n"), path);
-        return;
-    }
 
     kprintf("\n  %s\n", path);
     vga_set_color(VGA_COLOR(VGA_DGREY, VGA_BLACK));
     kputs("  ──────────────────────────────────────────────────────────\n");
     vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
 
-    vfs_dirent_t e;
+    vfs_dirent_t e;u32 epoch=vfs_generation();
     int n = 0, dirs = 0;
     u32 bytes = 0;
-    for (int i = 0; vfs_readdir(path, i, &e); i++) {
+    for(int i=0;;i++) {
+        int r=vfs_readdir(path,i,&e);
+        u32 len=0;if(r==1)while(len<sizeof(e.name) && e.name[len])len++;
+        if(epoch!=vfs_generation() || r<0 || r>1 || (r && (!len || len==sizeof(e.name)))) {
+            kputs(T("  Listing unavailable or read error; output incomplete\n\n", "  Список недоступен или ошибка чтения; вывод неполный\n\n"));return;
+        }
+        if(!r)break;
         if (e.is_dir) {
             vga_set_color(VGA_COLOR(VGA_LCYAN, VGA_BLACK));
             kprintf("  %s/", e.name);
@@ -823,20 +840,24 @@ static void cmd_vls(int argc, char **argv) {
 static void cmd_vcat(int argc, char **argv) {
     if (argc < 2) { kputs(T("  usage: vcat <path>\n\n", "  использование: vcat <путь>\n\n")); return; }
     char path[VFS_MAX_PATH];
-    sh_abs(path, sizeof(path), argv[1]);
+    if(!sh_path_checked(path,argv[1]))return;
 
-    if (vfs_stat(path) != 1) {
+    u32 epoch=vfs_generation();int kind=vfs_stat(path);
+    if(epoch!=vfs_generation())goto read_changed;
+    if(kind!=1) {
         kprintf(T("  File not found: %s\n\n", "  Файл не найден: %s\n\n"), path);
         return;
     }
 
     u32 size = vfs_size(path);
+    if(epoch!=vfs_generation())goto read_changed;
     u32 show = size > 4096 ? 4096 : size;
     char *buf = (char *)kmalloc(show + 1);
     if (!buf) { kputs(T("  Not enough memory\n\n", "  Недостаточно памяти\n\n")); return; }
 
+    if(epoch!=vfs_generation()){kfree(buf);goto read_changed;}
     int got = vfs_read(path, 0, buf, show);
-    if (got < 0) { kfree(buf); kputs(T("  Read error\n\n", "  Ошибка чтения\n\n")); return; }
+    if(got<0 || (u32)got!=show || epoch!=vfs_generation()){kfree(buf);goto read_changed;}
     buf[got] = 0;
 
     kputs("\n");
@@ -849,57 +870,68 @@ static void cmd_vcat(int argc, char **argv) {
     if (size > show)
         kprintf(T("  ... shown %u of %u bytes\n", "  ... показано %u из %u байт\n"), show, size);
     kputs("\n");
-    kfree(buf);
+    kfree(buf);return;
+read_changed:
+    kputs(T("  Incomplete read or storage changed; nothing displayed\n\n", "  Неполное чтение или смена хранилища; вывод отменён\n\n"));
 }
 
 static void cmd_vcp(int argc, char **argv) {
-    if (argc < 3) {
+    if(argc<3) {
         kputs(T("  usage: vcp <source> <destination>\n\n",
-                "  использование: vcp <источник> <приёмник>\n\n"));
-        return;
+                "  использование: vcp <источник> <приёмник>\n\n"));return;
     }
-    char from[VFS_MAX_PATH], to[VFS_MAX_PATH];
-    sh_abs(from, sizeof(from), argv[1]);
-    sh_abs(to,   sizeof(to),   argv[2]);
-
-    /* copying onto a directory keeps the original name */
-    if (vfs_stat(to) == 2) {
-        const char *base = argv[1];
-        for (const char *p = argv[1]; *p; p++) if (*p == '/') base = p + 1;
-        char joined[VFS_MAX_PATH];
-        vfs_join(joined, sizeof(joined), to, base);
-        strncpy(to, joined, sizeof(to));
+    char from[VFS_MAX_PATH],to[VFS_MAX_PATH];u8 *buf=NULL;
+    if(!sh_path(from,argv[1]) || !sh_path(to,argv[2])) {
+        kputs(T("  Invalid or too long path; target not written\n\n", "  Неверный или слишком длинный путь; назначение не записано\n\n"));return;
     }
-
-    if (vfs_stat(from) != 1) { kprintf(T("  Source not found: %s\n\n", "  Источник не найден: %s\n\n"), from); return; }
-
-    u32 size = vfs_size(from);
-    if (size > 4u * 1024 * 1024) {
-        kputs(T("  The file is larger than 4 MiB - not supported yet\n\n",
-                "  Файл больше 4 МиБ — пока не поддерживается\n\n"));
-        return;
+    u32 epoch=vfs_generation();int kind=vfs_stat(from);
+    if(!epoch || epoch!=vfs_generation())goto changed;
+    if(kind!=1){kprintf(T("  Source not found: %s\n\n", "  Источник не найден: %s\n\n"),from);return;}
+    kind=vfs_stat(to);
+    if(epoch!=vfs_generation())goto changed;
+    if(kind==2) {
+        const char *base=from;for(const char *p=from;*p;p++)if(*p=='/')base=p+1;
+        u32 n=strlen(to),m=0;int invalid=0;while(base[m]){if(base[m]=='\\')invalid=1;m++;}
+        if(!m || !strcmp(base,".") || !strcmp(base,"..") || invalid || n+m+(n && to[n-1]!='/')>=VFS_MAX_PATH) {
+            kputs(T("  Invalid or too long path; target not written\n\n", "  Неверный или слишком длинный путь; назначение не записано\n\n"));return;
+        }
+        char joined[VFS_MAX_PATH];vfs_join(joined,sizeof(joined),to,base);strcpy(to,joined);
     }
-    u8 *buf = (u8 *)kmalloc(size ? size : 1);
-    if (!buf) { kputs(T("  Not enough memory\n\n", "  Недостаточно памяти\n\n")); return; }
-
-    int got = vfs_read(from, 0, buf, size);
-    if (got < 0) { kfree(buf); kputs(T("  Read error\n\n", "  Ошибка чтения\n\n")); return; }
-
-    int wrote = vfs_write(to, buf, (u32)got);
-    kfree(buf);
-
-    if (wrote == (int)got) kprintf(T("  Copied %u bytes -> %s\n\n", "  Скопировано %u байт -> %s\n\n"), (u32)got, to);
-    else if (wrote == -2)  kputs(T("  The target is read-only\n\n", "  Приёмник только для чтения\n\n"));
-    else if (wrote == -3)  kputs(T("  Not enough space\n\n", "  Недостаточно места\n\n"));
-    else                   kputs(T("  Write error\n\n", "  Ошибка записи\n\n"));
+    if(!strcmp(from,to)){kputs(T("  Source and target are the same; unchanged\n\n", "  Источник и назначение совпадают; без изменений\n\n"));return;}
+    if(!vfs_writable(to)){kputs(T("  The target is read-only or unavailable\n\n", "  Приёмник только для чтения или недоступен\n\n"));return;}
+    u32 size=vfs_size(from);
+    if(epoch!=vfs_generation())goto changed;
+    if(size>4u*1024*1024) {
+        kputs(T("  The file is larger than 4 MiB - not supported yet\n\n", "  Файл больше 4 МиБ — пока не поддерживается\n\n"));return;
+    }
+    buf=(u8 *)kmalloc(size?size:1);
+    if(!buf){kputs(T("  Not enough memory\n\n", "  Недостаточно памяти\n\n"));return;}
+    if(epoch!=vfs_generation())goto changed;
+    int got=vfs_read(from,0,buf,size);
+    if(got!=(int)size || epoch!=vfs_generation()) {
+        kfree(buf);kputs(T("  Incomplete read or storage changed; target not written\n\n", "  Неполное чтение или смена томов; назначение не записано\n\n"));return;
+    }
+    int wrote=vfs_write(to,buf,size);kfree(buf);
+    if(epoch!=vfs_generation()) {
+        kputs(T("  Storage changed during write; source kept, inspect target\n\n", "  Смена томов при записи; источник оставлен, проверьте назначение\n\n"));return;
+    }
+    if(wrote>=0 && wrote!=(int)size)kputs(T("  Incomplete write; source kept, inspect target\n\n", "  Неполная запись; источник оставлен, проверьте назначение\n\n"));
+    else if(wrote==(int)size)kprintf(T("  Copied %u bytes -> %s\n\n", "  Скопировано %u байт -> %s\n\n"),size,to);
+    else if(wrote==-2)kputs(T("  The target is read-only\n\n", "  Приёмник только для чтения\n\n"));
+    else if(wrote==-3)kputs(T("  Not enough space\n\n", "  Недостаточно места\n\n"));
+    else kputs(T("  Write error; source kept, inspect target\n\n", "  Ошибка записи; источник оставлен, проверьте назначение\n\n"));
+    return;
+changed:
+    kfree(buf);kputs(T("  Storage changed; target not written\n\n", "  Хранилище изменилось; назначение не записано\n\n"));
 }
 
 static void cmd_vrm(int argc, char **argv) {
     if (argc < 2) { kputs(T("  usage: vrm <path>\n\n", "  использование: vrm <путь>\n\n")); return; }
     char path[VFS_MAX_PATH];
-    sh_abs(path, sizeof(path), argv[1]);
+    if(!sh_path_checked(path,argv[1]))return;
 
-    int r = vfs_remove(path);
+    u32 epoch=vfs_generation();int r=vfs_remove(path);
+    if(epoch!=vfs_generation()){kputs(T("  Delete outcome uncertain; remount and inspect\n\n", "  Результат удаления неизвестен; перемонтируйте и проверьте\n\n"));return;}
     if (r == 0)       kprintf(T("  Deleted: %s\n\n", "  Удалено: %s\n\n"), path);
     else if (r == -2) kputs(T("  This volume is read-only\n\n", "  Этот том только для чтения\n\n"));
     else if (r == -4) kputs(T("  The directory is not empty\n\n", "  Каталог не пуст\n\n"));
@@ -909,9 +941,10 @@ static void cmd_vrm(int argc, char **argv) {
 static void cmd_vmkdir(int argc, char **argv) {
     if (argc < 2) { kputs(T("  usage: vmkdir <path>\n\n", "  использование: vmkdir <путь>\n\n")); return; }
     char path[VFS_MAX_PATH];
-    sh_abs(path, sizeof(path), argv[1]);
+    if(!sh_path_checked(path,argv[1]))return;
 
-    int r = vfs_mkdir(path);
+    u32 epoch=vfs_generation();int r=vfs_mkdir(path);
+    if(epoch!=vfs_generation()){kputs(T("  Create outcome uncertain; remount and inspect\n\n", "  Результат создания неизвестен; перемонтируйте и проверьте\n\n"));return;}
     if (r == 0)       kprintf(T("  Created: %s\n\n", "  Создан: %s\n\n"), path);
     else if (r == -2) kputs(T("  This volume is read-only\n\n", "  Этот том только для чтения\n\n"));
     else if (r == -5) kputs(T("  Such a name already exists\n\n", "  Такое имя уже существует\n\n"));
@@ -925,11 +958,14 @@ static void cmd_vcd(int argc, char **argv) {
     }
     char path[VFS_MAX_PATH];
     if (!strcmp(argv[1], "..")) {
-        vfs_parent(path, sizeof(path), sh_cwd[0] ? sh_cwd : "/mnt");
+        char current[VFS_MAX_PATH];if(!sh_path_checked(current,sh_cwd[0]?sh_cwd:"/mnt"))return;
+        vfs_parent(path,sizeof(path),current);
     } else {
-        sh_abs(path, sizeof(path), argv[1]);
+        if(!sh_path_checked(path,argv[1]))return;
     }
-    if (vfs_stat(path) != 2) {
+    u32 epoch=vfs_generation();int kind=vfs_stat(path);
+    if(epoch!=vfs_generation()){kputs(T("  Storage changed; current directory unchanged\n\n", "  Хранилище изменилось; текущий каталог сохранён\n\n"));return;}
+    if(kind!=2) {
         kprintf(T("  Not a directory: %s\n\n", "  Не каталог: %s\n\n"), path);
         return;
     }
@@ -1027,6 +1063,19 @@ void shell_run(void) {
         }
         else if (!strcmp(cmd, "apps")) cmd_apps();
         else if (!strcmp(cmd, "mount") || !strcmp(cmd, "volumes")) cmd_mount();
+        else if(!strcmp(cmd,"isotest")) ku_selftest();
+#if KV_STORAGE_LAB
+        else if(!strcmp(cmd,"usbtest")) storage_lab(argc>1?argv[1]:"roundtrip");
+        else if(!strcmp(cmd,"fattest")) fat_lab(argc>1?argv[1]:"verify",argc>2?atoi(argv[2]):0);
+#endif
+        else if(!strcmp(cmd,"fatwrite")) {
+            if(argc!=3 || (strcmp(argv[2],"enable") && strcmp(argv[2],"disable")))
+                kputs("  fatwrite VOLUME enable|disable\n");
+            else if(fat_write_mode(argv[1],!strcmp(argv[2],"enable"))<0)
+                kputs(T("  Refused: need a validated owned WAL, current device and exclusive media.\n",
+                        "  Отказ: нужен проверенный журнал, текущий носитель и исключительный доступ.\n"));
+            else kputs(!strcmp(argv[2],"enable")?"  FAT32 RW enabled for this session.\n":"  FAT32 RO.\n");
+        }
         else if (!strcmp(cmd, "rescan")) cmd_rescan();
         else if (!strcmp(cmd, "vls")) cmd_vls(argc, argv);
         else if (!strcmp(cmd, "vcd")) cmd_vcd(argc, argv);

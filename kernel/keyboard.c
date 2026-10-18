@@ -2,32 +2,16 @@
 #include "kernel.h"
 
 #define BUF_SIZE 256
-static volatile char buf[BUF_SIZE];
-static volatile u32 head = 0, tail = 0;
-static int shift = 0, ctrl = 0, caps = 0, extended = 0;
+static volatile kbd_event_t buf[BUF_SIZE];
+static volatile u32 kbd_head = 0, kbd_tail = 0;
+static keymap_t keymap;
 static int mousekeys, mk_speed=1;
 static u64 mk_release;
 static void kbd_sync_leds(void);   /* defined below */
 
-static const char map_lower[128] = {
-    0, 27, '1','2','3','4','5','6','7','8','9','0','-','=', '\b',
-    '\t','q','w','e','r','t','y','u','i','o','p','[',']','\n',
-    0, 'a','s','d','f','g','h','j','k','l',';','\'','`',
-    0, '\\','z','x','c','v','b','n','m',',','.','/', 0,
-    '*', 0, ' ', 0
-};
-
-static const char map_upper[128] = {
-    0, 27, '!','@','#','$','%','^','&','*','(',')','_','+', '\b',
-    '\t','Q','W','E','R','T','Y','U','I','O','P','{','}','\n',
-    0, 'A','S','D','F','G','H','J','K','L',':','"','~',
-    0, '|','Z','X','C','V','B','N','M','<','>','?', 0,
-    '*', 0, ' ', 0
-};
-
-static void push(char c) {
-    u32 n = (head + 1) % BUF_SIZE;
-    if (n != tail) { buf[head] = c; head = n; }
+static void push(kbd_event_t e) {
+    u32 n=(kbd_head+1)%BUF_SIZE;
+    if(n!=kbd_tail) { buf[kbd_head]=e; kbd_head=n; }
 }
 
 static void kbd_cb(registers_t *r) {
@@ -49,34 +33,6 @@ static void kbd_cb(registers_t *r) {
     if (sc == 0xFA || sc == 0xFE || sc == 0xEE || sc == 0x00 || sc == 0xFF)
         return;
 
-    if (sc == 0xE0) { extended = 1; return; }
-
-    if (extended) {
-        extended = 0;
-        if (!(sc & 0x80)) {
-            switch (sc) {
-                case 0x48: push((char)(u8)KEY_UP); return;
-                case 0x50: push((char)(u8)KEY_DOWN); return;
-                case 0x4B: push((char)(u8)KEY_LEFT); return;
-                case 0x4D: push((char)(u8)KEY_RIGHT); return;
-                case 0x47: push((char)(u8)KEY_HOME); return;
-                case 0x4F: push((char)(u8)KEY_END); return;
-                case 0x49: push((char)(u8)KEY_PGUP); return;
-                case 0x51: push((char)(u8)KEY_PGDN); return;
-                case 0x53: push((char)(u8)KEY_DEL); return;
-                case 0x52: push((char)(u8)KEY_INS); return;
-            }
-        }
-        return;
-    }
-
-    if (sc & 0x80) {
-        u8 code = sc & 0x7F;
-        if (code == 0x2A || code == 0x36) shift = 0;
-        if (code == 0x1D) ctrl = 0;
-        return;
-    }
-
     /* ---------- MouseKeys ----------
        With NumLock on, the keypad drives the pointer instead of typing
        digits: 8/2/4/6 move it, 7/9/1/3 move it diagonally, 5 clicks,
@@ -86,10 +42,11 @@ static void kbd_cb(registers_t *r) {
 
        The keypad digits were not reachable at all before this (they are
        absent from map_lower), so nothing that used to work changes. */
-    if (mousekeys) {
+    unsigned mods=keymap_modifiers(&keymap);
+    if (mousekeys && !keymap.extended && !keymap.skip && !(sc&0x80)) {
         i32 step = 8;
-        if (shift) step = 1;            /* precise */
-        else if (ctrl) step = 48;       /* fast */
+        if (mods&KMOD_SHIFT) step = 1;            /* precise */
+        else if (mods&KMOD_CTRL) step = 48;       /* fast */
         step *= mk_speed;
 
         switch (sc) {
@@ -116,49 +73,11 @@ static void kbd_cb(registers_t *r) {
         }
     }
 
-    switch (sc) {
-        case 0x45:
-            kbd_mousekeys_set(!mousekeys); return;
-        case 0x2A: case 0x36: shift = 1; return;
-        case 0x1D: ctrl = 1; return;
-        /* the grey navigation block, and the same keys on the numeric
-           keypad when NumLock is off (they arrive without the 0xE0) */
-        case 0x47: push((char)(u8)KEY_HOME); return;
-        case 0x4F: push((char)(u8)KEY_END);  return;
-        case 0x49: push((char)(u8)KEY_PGUP); return;
-        case 0x51: push((char)(u8)KEY_PGDN); return;
-        case 0x53: push((char)(u8)KEY_DEL);  return;
-        /* function keys F1..F10 are contiguous from 0x3B */
-        case 0x3B: push((char)(u8)KEY_F1); return;
-        case 0x3C: push((char)(u8)KEY_F2); return;
-        case 0x3D: push((char)(u8)KEY_F3); return;
-        case 0x3E: push((char)(u8)KEY_F4); return;
-        case 0x3F: push((char)(u8)KEY_F5); return;
-        case 0x40: push((char)(u8)KEY_F6); return;
-        case 0x41: push((char)(u8)KEY_F7); return;
-        case 0x42: push((char)(u8)KEY_F8); return;
-        case 0x43: push((char)(u8)KEY_F9); return;
-        case 0x44: push((char)(u8)KEY_F10); return;
-        case 0x3A:                       /* CapsLock */
-            caps = !caps;
-            kbd_sync_leds();
-            return;
-    }
-
-    if (sc >= 128) return;
-    /* CapsLock affects letters ONLY. This used to be shift^caps for
-       every key, so with CapsLock on the digit 1 produced "!" while
-       Shift+1 produced "1" instead. */
-    char lo = map_lower[sc];
-    int letter = (lo >= 'a' && lo <= 'z');
-    int up = letter ? (shift ^ caps) : shift;
-    char c = up ? map_upper[sc] : lo;
-    if (!c) return;
-    if (ctrl) {
-        if (c >= 'a' && c <= 'z') c = c - 'a' + 1;
-        else if (c >= 'A' && c <= 'Z') c = c - 'A' + 1;
-    }
-    push(c);
+    if(sc==0x45 && !keymap.extended && !keymap.skip) { kbd_mousekeys_set(!mousekeys); return; }
+    int caps=keymap.caps;
+    kbd_event_t e;
+    if(keymap_feed(&keymap,sc,&e)) push(e);
+    if(caps!=keymap.caps) kbd_sync_leds();
 }
 
 /* Keyboard LED control.
@@ -182,10 +101,14 @@ static void kbd_wait_ack(void) {
 
 /* Mirror the CapsLock state on the keyboard indicator. */
 static void kbd_sync_leds(void) {
-    kbd_set_leds((u8)((caps?4:0)|(mousekeys?2:0)));
+    kbd_set_leds((u8)((keymap.caps?4:0)|(mousekeys?2:0)));
 }
 
-int kbd_shift(void) { return shift; }
+int kbd_shift(void) { return (keymap_modifiers(&keymap)&KMOD_SHIFT)!=0; }
+int kbd_layout(void) { return keymap.layout; }
+void kbd_layout_set(int russian) {
+    kv_flags_t f=irq_save(); keymap.layout=russian!=0; irq_restore(f);
+}
 int kbd_mousekeys(void) { return mousekeys; }
 void kbd_mousekeys_set(int on) {
     mousekeys=on?1:0; mk_release=0;
@@ -244,7 +167,7 @@ u8 kbd_get_leds(void) {
    translation off or an unread byte in the buffer - and then IRQ1 never
    arrives and there is no input at all. */
 void keyboard_init(void) {
-    head = tail = 0;
+    kbd_head = kbd_tail = 0; keymap_init(&keymap);
     irq_install_handler(1, kbd_cb);
 
     kv_flags_t fl = irq_save();
@@ -288,11 +211,14 @@ void keyboard_init(void) {
     irq_restore(fl);
 }
 
+int kbd_getevent_nb(kbd_event_t *e) {
+    if(kbd_head==kbd_tail) return 0;
+    *e=buf[kbd_tail]; kbd_tail=(kbd_tail+1)%BUF_SIZE; return 1;
+}
 int kbd_getchar_nb(void) {
-    if (head == tail) return -1;
-    char c = buf[tail];
-    tail = (tail + 1) % BUF_SIZE;
-    return (int)(u8)c;
+    kbd_event_t e;
+    while(kbd_getevent_nb(&e)) if(e.key!=KEY_LAYOUT) return e.key;
+    return -1;
 }
 
 char kbd_getchar(void) {

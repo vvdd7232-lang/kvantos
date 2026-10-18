@@ -51,6 +51,7 @@ static void ed_continue_quit(void) {
 }
 static void ed_request_quit(void) { ed_quit_mask=0; ed_continue_quit(); }
 static void ed_cancel(void) {
+    if(ed_name_mode==ED_DEST_REPLACE) { ed_name_mode=ED_DEST_DIALOG; return; }
     if(ed_name_mode==ED_IMPORT_REPLACE) { ed_name_mode=ED_IMPORT_DIALOG; return; }
     if(ed_name_mode==ED_OVERWRITE_DIALOG) { ed_name_mode=ED_SAVE_DIALOG; return; }
     ed_name_mode=editor->pending=0; ed_quit_mask=0;
@@ -70,11 +71,26 @@ static int ed_exists(const char *name) {
 }
 static void ed_commit_save(int win) {
     char previous[24]; strncpy(previous,ed_name,sizeof(previous));
+    int old_ram=editor->ram_valid,old_disk=editor->disk_valid,old_failed=editor->disk_failed;
+    u32 old_ram_rev=editor->ram_revision,old_disk_rev=editor->disk_revision;
+    int renamed=strcmp(previous,ed_name_in)!=0;
+    if(renamed) editor->ram_valid=editor->disk_valid=editor->disk_failed=0;
     strncpy(ed_name,ed_name_in,sizeof(ed_name));
-    if(!ed_save()) { strncpy(ed_name,previous,sizeof(ed_name)); ed_name_mode=ED_SAVE_DIALOG; return; }
+    if(!ed_save_local()) {
+        strncpy(ed_name,previous,sizeof(ed_name));
+        if(renamed) {
+            editor->ram_valid=old_ram; editor->disk_valid=old_disk; editor->disk_failed=old_failed;
+            editor->ram_revision=old_ram_rev; editor->disk_revision=old_disk_rev;
+        }
+        ed_name_mode=ED_SAVE_DIALOG; return;
+    }
     ed_name_mode=0; ed_do_pending(win);
 }
 static void ed_accept(int win) {
+    if(ed_destination() || ed_name_mode==ED_DEST_REPLACE) {
+        if(ed_dest_accept(ed_name_mode==ED_DEST_REPLACE)) ed_do_pending(win);
+        return;
+    }
     if(ed_name_mode==ED_IMPORT_DIALOG || ed_name_mode==ED_IMPORT_REPLACE) { ed_import_accept(ed_name_mode==ED_IMPORT_REPLACE); return; }
     if(ed_name_mode==ED_DIRTY_DIALOG) {
         if(editor->named) {
@@ -89,6 +105,9 @@ static void ed_accept(int win) {
             ed_msg(T("Disk delete failed; document kept", "Ошибка удаления с диска; документ сохранён в редакторе")); return;
         }
         if(ramfs_find(ed_name)) ramfs_delete(ed_name);
+        ed_storage_changed(ed_name,1,1);
+        editor->ram_valid=editor->disk_valid=editor->disk_failed=0;
+        editor->undo.saved=~0u;
         ed_name_mode=0; editor->named=0; ed_dirty=1;
         ed_msg(had?T("File deleted; buffer kept. Save to recreate.", "Файл удалён; текст оставлен. Сохраните для восстановления."):
                        T("No such file; document kept", "Такого файла нет; текст оставлен"));
@@ -125,6 +144,12 @@ static void ed_build_action(int run) {
 }
 static void ed_action(int win,int widget) {
     switch(widget) {
+        case W_ED_KEEP:
+            if(kvfs_mounted()) ed_save_local();
+            else ed_msg(T("No KvFS disk. Import is in RAM only; keep the USB original.", "Нет диска KvFS. Импорт только в RAM; сохраните оригинал на USB."));
+            return;
+        case W_ED_FIND: ed_search_open(0); return;
+        case W_ED_LAYOUT: kbd_layout_set(!kbd_layout()); damage_full(); return;
         case W_ED_NEW: ed_request(win,ED_NEW); break;
         case W_ED_OPEN: ed_request(win,ED_OPEN); break;
         case W_ED_IMPORT: ed_request(win,ED_IMPORT); break;
@@ -132,11 +157,20 @@ static void ed_action(int win,int widget) {
             if(editor->named) ed_save();
             else ed_prompt_save(T("Choose a name and click Save", "Выберите имя и нажмите Сохранить"));
             break;
-        case W_ED_SAVEAS: ed_prompt_save(T("Type a new name or select an existing file", "Введите новое имя или выберите существующий файл")); break;
-        case W_ED_DEL: ed_name_mode=ED_DELETE_DIALOG; ed_status[0]=0; break;
-        case W_ED_UNDO:
-            if(text_undo(&editor->doc,&editor->undo)) ed_scroll_to_cursor();
-            ed_msg(T("Undo / redo (one step)", "Отмена / повтор (один шаг)")); break;
+        case W_ED_SAVEAS:
+            if(editor->target[0]) { ed_dest_begin(); break; }
+            ed_prompt_save(T("Type a new name or select an existing file", "Введите новое имя или выберите существующий файл")); break;
+        case W_ED_DEL:
+            if(editor->target[0]) { ed_msg(T("Use File Manager to delete the destination; buffer kept", "Удаление назначения — в Файлах; текст оставлен")); break; }
+            ed_name_mode=ED_DELETE_DIALOG; ed_status[0]=0; break;
+        case W_ED_UNDO: case W_ED_REDO: {
+            int ok=widget==W_ED_UNDO?text_undo(&editor->doc,&editor->undo):text_redo(&editor->doc,&editor->undo);
+            if(ok) ed_scroll_to_cursor();
+            char message[96];
+            ksnprintf(message,sizeof(message),T("Undo: %u | Redo: %u", "Отменить: %u | Повторить: %u"),
+                      editor->undo.cursor,editor->undo.count-editor->undo.cursor);
+            ed_msg(message); break;
+        }
         case W_ED_COPY: ed_copy(0); break;
         case W_ED_CUT: ed_copy(1); break;
         case W_ED_PASTE:
@@ -149,6 +183,11 @@ static void ed_action(int win,int widget) {
         case W_DEV_BUILD: ed_build_action(0); break;
         case W_DEV_RUN: ed_build_action(1); break;
         case W_DEV_HELP: dev_help=!dev_help; break;
+        case W_DEV_ISOLATE:
+            dev_isolated=!dev_isolated;
+            ed_msg(dev_isolated?T("ABI4/CPL3: private RAM; clock/beep/log unavailable",
+                                  "ABI4/CPL3: приватная RAM; clock/beep/log недоступны"):
+                                 T("ABI3: trusted kernel-mode program", "ABI3: доверенная программа в ядре"));break;
     }
 }
 static void ed_name_key(int win,int c) {
@@ -169,8 +208,14 @@ static void ed_name_key(int win,int c) {
         ed_name_in[at]=(char)c; editor->name_caret++;
     }
 }
-static void ed_key(int win,int c) {
+static void ed_key(int win,int c,unsigned codepoint,unsigned modifiers,unsigned physical) {
+    if(ed_destination()) {
+        if(c==27) ed_cancel(); else if(c=='\n') ed_accept(win); else ed_dest_key(c,codepoint);
+        return;
+    }
+    if(ed_name_mode==ED_SEARCH_DIALOG) { ed_search_key(c,codepoint,modifiers,physical); return; }
     if(ed_name_mode) { ed_name_key(win,c); return; }
+    if(c==6 || (c==8 && (physical=='h' || physical=='H') && (modifiers&KMOD_CTRL))) { ed_search_open(c==8); return; }
     if(editor==&dev_editor && (dev_help || c==KEY_F1)) {
         if(c==27 || c==KEY_F1) dev_help=!dev_help;
         return;
@@ -184,7 +229,8 @@ static void ed_key(int win,int c) {
         case 24: ed_copy(1); return;
         case 22: ed_action(win,W_ED_PASTE); return;
         case 1: ed_action(win,W_ED_ALL); return;
-        case 26: case 25: ed_action(win,W_ED_UNDO); return;
+        case 26: ed_action(win,(modifiers&KMOD_SHIFT)?W_ED_REDO:W_ED_UNDO); return;
+        case 25: ed_action(win,W_ED_REDO); return;
         case 23: ed_request(win,ED_CLOSE); return;
         case KEY_F5: if(editor==&dev_editor) ed_build_action(0); return;
         case KEY_F6: if(editor==&dev_editor) ed_build_action(1); return;
@@ -197,7 +243,7 @@ static void ed_key(int win,int c) {
     }
     if(c>=KEY_UP && c<=KEY_PGDN) {
         textdoc_t *d=&editor->doc;
-        int shifted=kbd_shift();
+        int shifted=(modifiers&KMOD_SHIFT)!=0;
         if(shifted && !d->selecting) { d->ay=ed_cy; d->ax=ed_cx; d->selecting=1; }
         int col=text_column(ed_line(ed_cy),ed_cx);
         if(!shifted && text_selected(d) && (c==KEY_LEFT || c==KEY_RIGHT)) {
@@ -222,7 +268,7 @@ static void ed_key(int win,int c) {
         if(!shifted) d->selecting=0;
         ed_scroll_to_cursor(); return;
     }
-    if(c>=32 && c<127) { char ch=(char)c; ed_edit(&ch,1); }
+    if(codepoint>=32) { char text[4]; unsigned n=keymap_utf8(codepoint,text); if(n) ed_edit(text,n); }
 }
 static void ed_caret_at(ed_layout_t g,i32 mx,i32 my) {
     int row=ed_clamp((my-g.y-4)/16,0,g.rows-1)+ed_top;
@@ -246,22 +292,28 @@ static void ed_scroll_press(int win,ed_layout_t g,int vertical,i32 mx,i32 my) {
 }
 static void ed_click(int win,i32 mx,i32 my) {
     int widget=hit_test(win,mx,my);
+    if(ed_name_mode==ED_SEARCH_DIALOG) { ed_search_click(widget); return; }
     if(ed_name_mode) {
         if(widget==W_ED_CANCEL) ed_cancel();
         else if(widget==W_ED_ACCEPT) ed_accept(win);
         else if(widget==W_ED_DISCARD && ed_name_mode==ED_DIRTY_DIALOG) ed_do_pending(win);
-        else if(ed_name_mode==ED_IMPORT_DIALOG) {
+        else if(ed_name_mode==ED_IMPORT_DIALOG || ed_destination()) {
             if(widget==W_ED_VOLUME) ed_import_volume(1);
             else if(widget==W_ED_RESCAN) ed_import_refresh();
             else if(widget==W_ED_PARENT && editor->import_dir[0] && !vfs_is_root(editor->import_dir)) {
                 vfs_parent(editor->import_dir,sizeof(editor->import_dir),editor->import_dir); ed_import_list();
             } else if(widget==W_ED_FUP) { if(editor->file_top>0) editor->file_top--; }
             else if(widget==W_ED_FDOWN) editor->file_top++;
-            else if(widget==W_ED_NAME) editor->name_caret=ed_clamp((mx-(wins[win].x+25+72)+4)/8,0,(int)strlen(ed_name_in));
+            else if(widget==W_ED_NAME) {
+                const char *name=ed_destination()?editor->save_name:ed_name_in;
+                int cols=(wins[win].w-50-92)/8,col=text_column(name,editor->name_caret),left=col>=cols?col-cols+1:0;
+                editor->name_caret=text_byte(name,left+ed_clamp((mx-(wins[win].x+25+72)+4)/8,0,cols-1));
+            }
             else if(widget>=W_ED_IMPORT0 && widget<W_ED_IMPORT0+128) ed_import_select(widget-W_ED_IMPORT0);
         }
         else if(ed_name_mode<=ED_OPEN_DIALOG) {
-            if(widget==W_ED_RAM || widget==W_ED_DISK) { editor->file_disk=widget==W_ED_DISK; editor->file_top=0; }
+            if(widget==W_ED_VOLUME && ed_name_mode==ED_SAVE_DIALOG) ed_dest_begin();
+            else if(widget==W_ED_RAM || widget==W_ED_DISK) { editor->file_disk=widget==W_ED_DISK; editor->file_top=0; }
             else if(widget==W_ED_FUP) { if(editor->file_top>0) editor->file_top--; }
             else if(widget==W_ED_FDOWN) editor->file_top++;
             else if(widget==W_ED_NAME) {
@@ -319,7 +371,7 @@ static void ed_wheel(i32 mx,i32 my,int delta) {
         if(!v->used || !v->visible || v->minimized || mx<v->x || mx>=v->x+v->w || my<v->y || my>=v->y+v->h) continue;
         if(v->app!=APP_EDIT && v->app!=APP_DEV) return;
         editor=v->app==APP_DEV?&dev_editor:&note_editor;
-        if(ed_name_mode && (ed_name_mode<=ED_OPEN_DIALOG || ed_name_mode==ED_IMPORT_DIALOG)) editor->file_top+=delta*3;
+        if(ed_name_mode && (ed_name_mode<=ED_OPEN_DIALOG || ed_name_mode==ED_IMPORT_DIALOG || ed_destination())) editor->file_top+=delta*3;
         else if(!ed_name_mode && !(v->app==APP_DEV && dev_help)) {
             ed_layout_t g=ed_layout(v);
             if(kbd_shift()) ed_left=ed_clamp(ed_left+delta*3,0,g.max_left);

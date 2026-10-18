@@ -2,6 +2,7 @@
 """Exercise both main-ISO kernels through real keyboard/mouse input in QEMU."""
 from pathlib import Path
 import os
+import re
 import shutil
 import socket
 import struct
@@ -55,7 +56,8 @@ def run(arch):
         else:
             raise RuntimeError(log.read_text(errors='replace'))
         text = log.read_text(errors='replace')
-        assert 'KvantOS 3.1.3' in text, text
+        version=re.search(r'#define\s+KV_VERSION\s+"([^"]+)"',(ROOT/'include/kernel.h').read_text()).group(1)
+        assert 'KvantOS '+version in text, text
         sock = socket.socket(socket.AF_UNIX)
         sock.settimeout(5)
         sock.connect(str(monitor))

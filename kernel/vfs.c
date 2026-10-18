@@ -5,8 +5,13 @@
 #include "vfs.h"
 
 static vfs_volume_t vols[VFS_MAX_VOLUMES];
+static u32 generation;
+u32 vfs_generation(void) { return generation; }
+
+void vfs_namespace_changed(void) {if(!++generation)++generation;}
 
 void vfs_init(void) {
+    vfs_namespace_changed();
     memset(vols, 0, sizeof(vols));
     fat_reset_mounts();
     ntfs_reset_mounts();
@@ -86,6 +91,7 @@ static vfs_volume_t *resolve(const char *path, const char **rest) {
     u32 n = 0;
     while (*p && *p != '/' && n < sizeof(vol) - 1) vol[n++] = *p++;
     vol[n] = 0;
+    if(*p && *p!='/')return NULL; /* never alias a truncated volume component */
     if (!n) return NULL;
 
     vfs_volume_t *v = vfs_find(vol);
@@ -96,10 +102,31 @@ static vfs_volume_t *resolve(const char *path, const char **rest) {
 }
 
 int vfs_readdir(const char *path, int index, vfs_dirent_t *out) {
-    const char *rest;
-    vfs_volume_t *v = resolve(path, &rest);
-    if (!v || !v->ops || !v->ops->readdir) return 0;
-    return v->ops->readdir(v->fs, rest, index, out);
+    if(!out || index<0)return -1;
+    const char *rest;vfs_volume_t *v=resolve(path,&rest);
+    if(!v || !v->ops || !v->ops->readdir)return -1;
+    u32 epoch=vfs_generation();int r=v->ops->readdir(v->fs,rest,index,out);
+    return epoch && epoch==vfs_generation() && (r==0 || r==1)?r:-1;
+}
+
+/* Other drivers keep their existing single-entry interface. No persistent
+ * cursor/cache: every batch resolves the current namespace afresh. */
+int vfs_readdir_many(const char *path,int first,vfs_dirent_t *out,int count) {
+    if(!out || first<0 || count<1 || count>128 || first>0x7FFFFFFF-count) return -1;
+    const char *rest;vfs_volume_t *v=resolve(path,&rest);
+    if(!v || !v->ops) return -1;
+    u32 epoch=vfs_generation();int n=0;
+    if(v->ops->readdir_many)n=v->ops->readdir_many(v->fs,rest,first,out,count);
+    else {
+        if(!v->ops->readdir)return -1;
+        while(n<count) {
+            int r=v->ops->readdir(v->fs,rest,first+n,out+n);
+            if(epoch!=vfs_generation() || (r!=0 && r!=1))return -1;
+            if(!r)break;
+            n++;
+        }
+    }
+    return epoch && epoch==vfs_generation() && n>=0 && n<=count?n:-1;
 }
 
 int vfs_read(const char *path, u32 off, void *buf, u32 max) {
@@ -137,6 +164,26 @@ int vfs_remove(const char *path) {
     if (!v) return -1;
     if (!v->writable || !v->ops || !v->ops->remove) return -2;
     return v->ops->remove(v->fs, rest);
+}
+
+int vfs_can_rename(const char *path) {
+    const char *rest;vfs_volume_t *v=resolve(path,&rest);
+    return v && v->writable && v->ops && v->ops->rename;
+}
+
+int vfs_rename(const char *from,const char *to) {
+    const char *paths[2]={from,to};
+    for(int i=0;i<2;i++) {
+        if(!paths[i])return -4;
+        u32 n=0;while(n<VFS_MAX_PATH && paths[i][n])n++;
+        if(!n || n==VFS_MAX_PATH)return -4;
+    }
+    const char *old_name,*new_name;
+    vfs_volume_t *source=resolve(from,&old_name),*target=resolve(to,&new_name);
+    if(!source || !target)return -1;
+    if(source!=target)return -7;
+    if(!source->writable || !source->ops || !source->ops->rename)return -2;
+    return source->ops->rename(source->fs,old_name,new_name);
 }
 
 int vfs_mkdir(const char *path) {

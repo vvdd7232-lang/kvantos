@@ -1,7 +1,7 @@
 /* ============================================================
  *  KvantOS - MBR/GPT partition tables and volume autodetection
  *
- *  Reads sector 0 of every ATA/USB disk, walks the four primary entries
+ *  Reads sector 0 of every ATA/USB/AHCI disk, walks the four primary entries
  *  and the extended chain, then asks each filesystem driver whether it
  *  recognises the partition. Whatever is recognised gets mounted under
  *  /mnt/hdaN.
@@ -61,7 +61,10 @@ static int try_mount(const char *name, int disk, u32 lba, u32 count) {
 }
 
 static void volume_name(char *nm, int disk, int seq) {
-    if (blk_is_usb(disk)) {
+    if (blk_is_ahci(disk)) {
+        if(seq) ksnprintf(nm,16,"sata%dp%d",disk-BLK_AHCI_BASE,seq);
+        else ksnprintf(nm,16,"sata%d",disk-BLK_AHCI_BASE);
+    } else if (blk_is_usb(disk)) {
         if (seq) ksnprintf(nm,16,"usb%dp%d",disk-4,seq);
         else ksnprintf(nm,16,"usb%d",disk-4);
     } else {
@@ -87,7 +90,7 @@ static u32 gpt_crc(u32 crc, const u8 *p, u32 size) {
     return crc;
 }
 static int gpt_table(int disk, u32 at, gpt_table_t *t) {
-    static u8 h[512], sector[512];
+    static u8 h[512], sector[4096];
     u32 total=blk_sectors(disk);
     if (total<68 || !disk_read(disk,at,1,h) || memcmp(h,"EFI PART",8)) return 0;
     u32 size=gpt_u32(h+12), expected=gpt_u32(h+16);
@@ -109,8 +112,8 @@ static int gpt_table(int disk, u32 at, gpt_table_t *t) {
     if (at==1 ? entries+sectors>first : entries<=last) return 0;
     u32 crc=0xFFFFFFFFu;
     for (u32 done=0;done<bytes;) {
-        if (!disk_read(disk,(u32)entries+done/512,1,sector)) return 0;
-        u32 n=bytes-done; if (n>512) n=512;
+        u32 n=bytes-done; if(n>sizeof(sector)) n=sizeof(sector);
+        if(!disk_read(disk,(u32)entries+done/512,(n+511)/512,sector)) return 0;
         crc=gpt_crc(crc,sector,n); done+=n;
     }
     if ((crc^0xFFFFFFFFu)!=gpt_u32(h+88)) return 0;
@@ -124,16 +127,17 @@ static int scan_gpt(int disk) {
     u32 total=blk_sectors(disk);
     if (total<68 || (!gpt_table(disk,1,&t) && !gpt_table(disk,total-1,&t))) return 0;
     scan_status=T("GPT valid; no supported FAT volume found", "GPT прочитана, но поддерживаемый FAT-том не найден");
-    static u8 sector[512];
+    static u8 sector[4096];
     u32 loaded=0xFFFFFFFFu;
     int mounted=0;
     for (u32 i=0;i<t.count;i++) {
-        u32 off=i*t.size, lba=t.entries+off/512;
+        u32 off=i*t.size, block=off/sizeof(sector),lba=t.entries+block*8;
         if (loaded!=lba) {
-            if (!disk_read(disk,lba,1,sector)) return mounted;
+            u32 n=(t.count*t.size+511)/512-block*8;if(n>8) n=8;
+            if(!disk_read(disk,lba,n,sector)) return mounted;
             loaded=lba;
         }
-        const u8 *p=sector+off%512;
+        const u8 *p=sector+off%sizeof(sector);
         unsigned type=0;
         for (int n=0;n<16;n++) type|=p[n];
         if (!type) continue; /* unused slot, not an MSR/ESP/data partition */
@@ -142,9 +146,15 @@ static int scan_gpt(int disk) {
         char name[16]; volume_name(name,disk,(int)i+1); /* preserve GPT slot number */
         if (try_mount(name,disk,(u32)start,(u32)(end-start+1))) {
             vfs_volume_t *v=vfs_find(name);
-            if (v) v->writable=0; /* GPT is read-only, including on ATA */
+            /* Only fat_mount's validated, recovered USB lab enrollment may
+               preserve RW here. Normal GPT and all ATA GPT remain RO. */
+#if KV_STORAGE_LAB
+            if(v && !(blk_is_usb(disk) && v->kind==FS_FAT32 && v->writable)) v->writable=0;
+#else
+            if(v) v->writable=0;
+#endif
             mounted++;
-            scan_status=T("GPT volume mounted read-only", "GPT-том подключён только для чтения");
+            scan_status=(v && v->writable)?"GPT lab volume recovered before RW":T("GPT volume mounted read-only", "GPT-том подключён только для чтения");
         }
     }
     return mounted;
@@ -214,6 +224,7 @@ int vfs_autoscan(void) {
     scan_status=NULL;
     int total = 0;
     usb_rescan();
+    ahci_rescan();
 
     /* RAM disk and our own KvFS keep their historical names. */
     ramfs_vfs_register();

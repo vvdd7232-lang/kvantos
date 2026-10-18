@@ -23,9 +23,13 @@
  * ============================================================ */
 #include "kernel.h"
 #include "kvapp.h"
+#include "user_app.h"
 
 /* ---------- state of the loaded application ---------- */
 static int        loaded = 0;
+static int        isolated = 0;
+static struct {int text;union {ks_rect rect;ks_text label;ks_line line;} value;} isolated_commands[64];
+static u32 isolated_draw_id,isolated_rect_count;
 static kv_app_t  *app    = NULL;
 static u32        app_delta_time_ms = 0;
 static u32        app_last_tick_sample = 0;
@@ -239,7 +243,7 @@ static void api_status(const char *s) {
     strncpy(app_status, s ? s : "", sizeof(app_status));
     app_status[sizeof(app_status) - 1] = 0;
 }
-const char *kapp_status(void) { return app_status; }
+const char *kapp_status(void) { const char *s=isolated?ku_app_status():"";return s[0]?s:app_status; }
 
 static void *api_alloc(kv_u32 n)  { return kmalloc(n); }
 static void  api_release(void *p) { kfree(p); }
@@ -327,6 +331,7 @@ static kv_api_t api_table = {
 
 const char *kapp_last_error(void) { return last_error; }
 int         kapp_loaded(void)     { return loaded; }
+int         kapp_isolated(void)   { return loaded && isolated; }
 const char *kapp_name(void)       { return loaded ? app_title : ""; }
 const char *kapp_filename(void)   { return loaded ? app_file : ""; }
 
@@ -341,6 +346,9 @@ static int check_header(const kapp_header_t *h, u32 filesize) {
         h->magic[2] != KAPP_MAGIC2 || h->magic[3] != KAPP_MAGIC3) {
         strncpy(last_error, T("not a KvantOS application (no KAPP signature)", "это не приложение KvantOS (нет подписи KAPP)"), sizeof(last_error));
         return -1;
+    }
+    if(h->header_size!=sizeof(kapp_header_t) || filesize<sizeof(kapp_header_t)) {
+        strncpy(last_error,"invalid legacy header size",sizeof(last_error));return -1;
     }
     if (h->version != KAPP_FORMAT_VERSION) {
         ksnprintf(last_error, sizeof(last_error),
@@ -374,7 +382,7 @@ static int check_header(const kapp_header_t *h, u32 filesize) {
         strncpy(last_error, T("code size in the header does not match the file", "размер кода в заголовке не совпадает с файлом"), sizeof(last_error));
         return -1;
     }
-    if (h->code_size + h->bss_size > KAPP_MAX_SIZE) {
+    if (h->code_size>KAPP_MAX_SIZE || h->bss_size>KAPP_MAX_SIZE-h->code_size) {
         strncpy(last_error, T("application larger than 2 MiB", "приложение больше 2 МиБ"), sizeof(last_error));
         return -1;
     }
@@ -387,6 +395,10 @@ static int check_header(const kapp_header_t *h, u32 filesize) {
 
 void kapp_unload(void) {
     if (!loaded) return;
+    if(isolated) {
+        if(ku_app_live() && cl_w>0 && cl_h>0)ku_app_event(KS_EVENT_CLOSE,0,(u32)cl_w,(u32)cl_h,0,0,0,0);
+        ku_app_unload();isolated=0;isolated_draw_id=isolated_rect_count=0;
+    }
     if (app && app->on_close && !app_faulted) {
         int urc;
         GUARD_SET(&guard_buf, urc);
@@ -403,6 +415,35 @@ void kapp_unload(void) {
     app_delta_time_ms = 0;
     app_last_tick_sample = 0;
     app_tick_started = 0;
+}
+
+/* A suspended DRAW may finish in a later tick/key pump. Never paint from the
+   syscall: that could target an unrelated dirty clip or an obsolete GUI frame.
+   Snapshot validated commands here; replay only from the window's paint pass. */
+static void isolated_sink(void *ctx,const ks_rect *rects,unsigned count) {
+    (void)ctx;
+    u32 token=ku_app_draw_token();
+    if(!token)return;
+    if(token!=isolated_draw_id) {isolated_draw_id=token;isolated_rect_count=0;}
+    if(count>64-isolated_rect_count)return; /* service enforces 64 per event */
+    for(unsigned i=0;i<count;i++) {
+        isolated_commands[isolated_rect_count].text=0;
+        isolated_commands[isolated_rect_count++].value.rect=rects[i];
+    }
+}
+static void isolated_text_sink(void *ctx,const ks_text *text) {
+    (void)ctx;u32 token=ku_app_draw_token();if(!token)return;
+    if(token!=isolated_draw_id) {isolated_draw_id=token;isolated_rect_count=0;}
+    if(isolated_rect_count==64)return;
+    isolated_commands[isolated_rect_count].text=1;
+    isolated_commands[isolated_rect_count++].value.label=*text;
+}
+static void isolated_line_sink(void *ctx,const ks_line *line) {
+    (void)ctx;u32 token=ku_app_draw_token();if(!token)return;
+    if(token!=isolated_draw_id) {isolated_draw_id=token;isolated_rect_count=0;}
+    if(isolated_rect_count==64)return;
+    isolated_commands[isolated_rect_count].text=2;
+    isolated_commands[isolated_rect_count++].value.line=*line;
 }
 
 /* Loads an application from a KvFS file. 0 on success, otherwise see kapp_last_error() */
@@ -451,6 +492,17 @@ int kapp_load(const char *filename) {
 
     kapp_header_t hdr;
     memcpy(&hdr, tmp, sizeof(hdr));
+    if(hdr.version==2 || hdr.api_version==4) {
+        if(ku_app_load(tmp,(u32)got,isolated_sink,isolated_text_sink,isolated_line_sink,NULL)) {
+            strncpy(last_error,ku_app_error(),sizeof(last_error));last_error[sizeof(last_error)-1]=0;kfree(tmp);return -1;
+        }
+        kfree(tmp);isolated=loaded=1;app=NULL;isolated_draw_id=isolated_rect_count=0;
+        strncpy(app_file,filename,sizeof(app_file));app_file[sizeof(app_file)-1]=0;
+        memcpy(app_title,hdr.name,32);app_title[32]=0;
+        if(!app_title[0])strncpy(app_title,filename,sizeof(app_title)-1);
+        strncpy(app_status,T("ABI4 isolated / private RAM","ABI4 изоляция / приватная RAM"),sizeof(app_status));
+        app_status[sizeof(app_status)-1]=0;app_delta_time_ms=app_tick_started=0;return 0;
+    }
     if (check_header(&hdr, (u32)got) < 0) { kfree(tmp); return -1; }
 
     /* Unpack the image at the fixed address */
@@ -464,8 +516,8 @@ int kapp_load(const char *filename) {
 
     strncpy(app_file, filename, sizeof(app_file));
     app_file[sizeof(app_file) - 1] = 0;
-    strncpy(app_title, hdr.name[0] ? hdr.name : filename, sizeof(app_title));
-    app_title[sizeof(app_title) - 1] = 0;
+    if(hdr.name[0]) {memcpy(app_title,hdr.name,32);app_title[32]=0;}
+    else {strncpy(app_title,filename,sizeof(app_title));app_title[sizeof(app_title)-1]=0;}
     app_status[0] = 0;
 
     /* The new field is appended to the table, so old ABI-2 binaries see
@@ -533,15 +585,7 @@ static void leave(void) {
     }
 }
 
-void kapp_draw(i32 x, i32 y, i32 w, i32 h) {
-    if (!enter(x, y, w, h)) return;
-    if (app->on_draw) app->on_draw();
-    leave();
-}
-
-void kapp_tick(i32 x, i32 y, i32 w, i32 h) {
-    if (!enter(x, y, w, h)) return;
-
+static void sample_delta(void) {
     /* Keep simulation time independent from the GUI's FPS cap. Unsigned
        subtraction handles the 32-bit tick counter wrapping naturally. */
     u32 now = (u32)timer_ticks();
@@ -562,23 +606,64 @@ void kapp_tick(i32 x, i32 y, i32 w, i32 h) {
         app_delta_time_ms = elapsed_ticks * 1000u / hz;
     }
 
+}
+static void isolated_pump(u32 type,i32 x,i32 y,i32 w,i32 h,i32 mx,i32 my,i32 key,i32 button) {
+    if(!loaded)return;
+    cl_x=x;cl_y=y;cl_w=w;cl_h=h;
+    int rc=ku_app_event(type,app_delta_time_ms,(u32)w,(u32)h,mx,my,key,button);
+    if(rc<=0) {
+        if(rc<0) {strncpy(last_error,ku_app_error(),sizeof(last_error));last_error[sizeof(last_error)-1]=0;app_faulted=1;}
+        kapp_unload();
+    }
+}
+void kapp_draw(i32 x, i32 y, i32 w, i32 h) {
+    if(isolated) {
+        isolated_pump(KS_EVENT_DRAW,x,y,w,h,0,0,0,0);
+        if(isolated && loaded)for(u32 i=0;i<isolated_rect_count;i++) {
+            if(isolated_commands[i].text==2) {
+                const ks_line *l=&isolated_commands[i].value.line;api_line(l->x0,l->y0,l->x1,l->y1,l->color);
+            } else if(isolated_commands[i].text==1) {
+                const ks_text *t=&isolated_commands[i].value.label;
+                api_text(t->x,t->y,t->bytes,t->color,t->bg);
+            } else {
+                const ks_rect *r=&isolated_commands[i].value.rect;
+                if(r->type==1)api_fill(r->x,r->y,r->w,r->h,r->color);
+                else api_rect(r->x,r->y,r->w,r->h,r->color);
+            }
+        }
+        return;
+    }
+    if (!enter(x, y, w, h)) return;
+    if (app->on_draw) app->on_draw();
+    leave();
+}
+
+void kapp_tick(i32 x, i32 y, i32 w, i32 h) {
+    if(isolated) {sample_delta();isolated_pump(KS_EVENT_TICK,x,y,w,h,0,0,0,0);return;}
+    if (!enter(x, y, w, h)) return;
+
+    sample_delta();
+
     if (app->on_tick) app->on_tick();
     leave();
 }
 
 void kapp_key(int key, i32 x, i32 y, i32 w, i32 h) {
+    if(isolated) {isolated_pump(KS_EVENT_KEY,x,y,w,h,0,0,key,0);return;}
     if (!enter(x, y, w, h)) return;
     if (app->on_key) app->on_key(key);
     leave();
 }
 
 void kapp_click(i32 mx, i32 my, int button, i32 x, i32 y, i32 w, i32 h) {
+    if(isolated) {isolated_pump(KS_EVENT_CLICK,x,y,w,h,mx,my,0,button);return;}
     if (!enter(x, y, w, h)) return;
     if (app->on_click) app->on_click(mx, my, button);
     leave();
 }
 
 void kapp_opened(i32 x, i32 y, i32 w, i32 h) {
+    if(isolated) {isolated_pump(KS_EVENT_DRAW,x,y,w,h,0,0,0,0);return;}
     if (!enter(x, y, w, h)) return;
     if (app->on_open) app->on_open();
     leave();

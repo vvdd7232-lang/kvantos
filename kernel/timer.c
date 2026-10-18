@@ -7,6 +7,7 @@ static u32 frequency = 100;
 static void timer_cb(registers_t *r) {
     (void)r;
     ticks++;
+    if(ku_mode_tick(r))return;
     kbd_poll();          /* fallback in case IRQ1 does not work */
     schedule();          /* pre-emptive multitasking */
 }

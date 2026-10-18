@@ -2,6 +2,8 @@
 """Structural regressions for the release PE/COFF loader and both ISO paths."""
 from pathlib import Path
 import io
+import gzip
+import tarfile
 import os
 import struct
 import subprocess
@@ -94,3 +96,35 @@ assert len(list(Path('release/apps64').glob('*.kapp'))) == 11
 subprocess.run(['sha256sum', '-c', 'SHA256SUMS'], cwd='release', check=True,
                stdout=subprocess.DEVNULL)
 print('Release: 11 apps per architecture + all SHA-256 checksums PASS')
+
+# The standalone BIOS installer no longer duplicates loadable .mod files.
+# Its memdisk contains exactly the menu, a gzip ELF, and the 11 applications.
+if Path('build/hd-memdisk.tar').exists():
+    with tarfile.open('build/hd-memdisk.tar') as archive:
+        names=archive.getnames()
+        assert len(names)==13 and not any(n.endswith('.mod') for n in names)
+        kernel=gzip.decompress(archive.extractfile('boot/kvant.bin').read())
+        assert kernel[:4]==b'\x7fELF'
+        assert elf_loads(kernel)[1]==elf_loads(Path('release/kvant.bin').read_bytes())[1]
+        config=archive.extractfile('boot/grub/grub.cfg').read().decode()
+        assert 'hdboot.img' not in config and 'search ' not in config
+        assert config.count('menuentry ')==Path('grub/grub.cfg').read_text().count('menuentry ')
+        for path in Path('release/apps').glob('*.kapp'):
+            assert archive.extractfile('boot/apps/'+path.name).read()==path.read_bytes()
+    assert Path('build/hd_core.img').stat().st_size<=0x78000
+    print('Installed BIOS: bounded core, gzip ELF load segments, menus and all app payloads PASS')
+
+# The bare floppy has no apps, but keeps all three menus and the same ELF
+# load segments. Like the installer, its prelinked core must fit GRUB's cap.
+if Path('build/fd-memdisk.tar').exists():
+    with tarfile.open('build/fd-memdisk.tar') as archive:
+        assert set(archive.getnames()) == {'boot/grub/grub.cfg', 'boot/kvant.bin'}
+        kernel = gzip.decompress(archive.extractfile('boot/kvant.bin').read())
+        assert elf_loads(kernel)[1] == elf_loads(Path('release/kvant.bin').read_bytes())[1]
+        config = archive.extractfile('boot/grub/grub.cfg').read().decode()
+        assert config.count('menuentry ') == 3 and 'text safe' in config
+    assert Path('build/fd_core.img').stat().st_size <= 0x78000
+    floppy = Path('release/kvantos-floppy.img').read_bytes()
+    assert len(floppy) == 1474560 and floppy[510:512] == b'\x55\xaa'
+    assert floppy[512:512+Path('build/fd_core.img').stat().st_size] == Path('build/fd_core.img').read_bytes()
+    print('Floppy BIOS: bounded prelinked core, gzip ELF, three menus + boot signature PASS')

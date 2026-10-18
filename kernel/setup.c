@@ -45,6 +45,9 @@ static void stage(const char *s, int pct) {
 /* Does the media carry a bootloader image? Without one installing is
    pointless: there would be nothing to write. */
 int setup_available(void) {
+#if KV_STORAGE_LAB
+    return 0;
+#endif
     return ramfs_find(BOOT_IMAGE) != NULL;
 }
 
@@ -86,6 +89,10 @@ static void fill_partition(u8 *mbr, u32 total_sectors) {
  *  Returns 0 on success. The error text goes to setup_last_result().
  * ------------------------------------------------------------ */
 int setup_install(int keep_files) {
+#if KV_STORAGE_LAB
+    strncpy(setup_result,"Storage lab: installation disabled",sizeof(setup_result));
+    return -1;
+#endif
     setup_running = 1;
     setup_result[0] = 0;
     setup_percent = 0;
