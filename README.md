@@ -1,4 +1,6 @@
-# KvantOS 3.1.3
+# KvantOS 3.1.4
+
+Source and usage notes for the 3.1.4 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -37,14 +39,16 @@ the guest. This is a limited C subset, not full GCC. **Save** writes source;
 **Open** shows a RAM/disk file picker. KvFS persists files; RAM-only files disappear on reboot.
 The Workshop and Notepad have independent documents.
 
-[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.3](RELEASE.md)
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.1.4](RELEASE.md)
 
-## FAT32 / USB import (3.1.3)
+## FAT32 / USB import and write policy (3.1.4)
 
 Version 3.1.3 adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later
-KvFS persistence. The source is not modified. **USB now supports UHCI and high-speed EHCI,
-not OHCI/xHCI or hubs.** This is not in the already-published 3.1.2 ISO.
+KvFS persistence. The source is not modified. USB mass-storage covers UHCI, EHCI with OHCI
+companions and a native full-speed OHCI backend. xHCI/USB 3 and UAS are not
+supported; hub/TT routing is limited and experimental. Physical media and
+VirtualBox are not qualified by the software test suite.
 The **128-line editor limit is removed**: above it, an amber warning appears
 without blocking import/edit/save/build. There is no independent row limit;
 the editor byte pool is <64 KiB with 120 bytes/line. The compiler's separate
@@ -53,6 +57,12 @@ the editor byte pool is <64 KiB with 120 bytes/line. The compiler's separate
 **GPT + FAT32** now works too, including an MSR before the data partition,
 CRC validation and backup metadata; read-only, no repartitioning/reformatting.
 [Instructions and limits](USB-IMPORT.md).
+
+All ordinary FAT volumes mount read-only. Writes are only possible on a
+pre-provisioned FAT32 volume with the owned-file `KVANTWAL.SYS` journal, after
+recovery checks and an explicit per-session `fatwrite VOLUME enable`. The kernel
+does not create/reset the journal; unprepared and damaged volumes stay read-only
+or are withheld. See [storage safety policy](docs/STORAGE-M2.md).
 
 ## Quick start
 
@@ -211,12 +221,12 @@ Use **KVANT → Exit to console** to leave. Single-letter G/B/E/T/Q/W and other
 desktop launch/close shortcuts are gone. In-game keyboard controls are unchanged.
 
 Both editors support click-to-position, drag selection with edge auto-scroll,
-shared Copy/Cut/Paste, independent one-step Undo/Redo, Select all, draggable
+shared Copy/Cut/Paste, independent multi-step Undo/Redo, Select all, draggable
 vertical/horizontal scrollbars and the mouse wheel. Open / Save as provide
 RAM/disk file lists, an editable name field and clickable confirmation/cancel.
 New/open/close/exit protect unsaved text; replacing another file and deletion
 require confirmation. Notepad now saves to RAM + mounted KvFS too. Without a
-disk RAM is temporary. Text input, arrows and optional Ctrl+C/V/X/A/Z/S,
+disk RAM is temporary. Text input, arrows and optional Ctrl+C/V/X/A/Z/Y/S,
 Ctrl+O/N/W and F5/F6 remain. Esc dismisses a dialog/selection, not the editor.
 
 Optional **KVANT → MouseKeys** (or NumLock): keypad 8/2/4/6 and 7/9/1/3 move,
@@ -280,17 +290,20 @@ it finds and mounts them into one namespace under `/mnt`.
 
 | Filesystem | Read | Write | Notes |
 |---|---|---|---|
-| **FAT32** | yes | yes | long names (VFAT), subdirectories, files up to 4 GiB |
-| **FAT16** | yes | yes | the same driver; chosen automatically by cluster count |
+| **FAT32** | yes | enrolled volume + opt-in only | VFAT/subdirectories; M2.4 owned WAL, default RO |
+| **FAT16** | yes | no in normal ISO | legacy write algorithm tested separately; production RO |
 | **NTFS** | yes | **no** | MFT, resident and non-resident data, B-tree directories |
 | KvFS | yes | yes | the system's own format, for installed applications |
 | ramfs | yes | yes | files in RAM, from the boot modules |
 
-**FAT32/FAT16** is a complete driver. It reads and creates long names in UTF-16,
+**FAT32/FAT16** share a driver. Normal writes require an enrolled FAT32 volume
+and explicit opt-in; ordinary volumes are RO. It reads and, where enabled,
+creates long names in UTF-16,
 walks subdirectories, allocates and frees clusters through both copies of the
 FAT, keeps the FSInfo free-cluster hint up to date, and creates directories with
-their `.` and `..` entries. Volumes written by KvantOS pass `fsck.vfat` without a
-single complaint and mount normally under Linux and Windows.
+their `.` and `..` entries. Disposable-image writes are checked with independent `fsck.fat`; any pending
+private WAL must be recovered by KvantOS before another OS writes/repairs it.
+Physical Windows/USB compatibility has not been qualified.
 
 **NTFS is deliberately read-only.** The driver understands the Master File
 Table, the update-sequence fixups, resident and non-resident `$DATA` attributes,
@@ -592,3 +605,143 @@ of RAM — booted from the floppy image, the kvsh console works.
 
 ![x86-64 Workshop: successful diskless build](screenshots/60-c-workshop-x64.png)
 ![Native application compiled inside the x86-64 Workshop](screenshots/62-native-c-x64.png)
+
+
+### 3.1.4: RU input, find/replace and storage state
+
+The **EN/RU** chip or **Alt+Shift** selects Russian ЙЦУКЕН in both editors and
+search fields (Caps/Shift, ё/Ё/№ included). UI language is independent. Filename
+fields, shell commands and the application key ABI keep physical English input;
+Ctrl shortcuts remain usable. **Find** / Ctrl+F opens literal, case-sensitive,
+wrapping search; Ctrl+H focuses replacement. Previous/Next, Replace/Replace all
+are clickable. Replace first selects a match if the selection does not match.
+Each field permits 127 UTF-8 bytes: Tab changes field, Ctrl+U clears,
+Enter/Shift+Enter searches forward/backward, Esc closes. Replace all is one Undo;
+a line/text-budget failure preserves the document and history. No regex/case folding.
+
+The permanent footer distinguishes Modified, RAM and KvFS for this document
+revision, including no disk/write failures. After import, **Keep: KvFS** saves
+only when clicked, never back to the source USB drive. No disk means temporary
+RAM only. A failed disk write does not mark the document saved; a partial RAM
+success is reported separately. This is not power-loss protection or monitoring
+of every external overwrite.
+
+### M2.1 — write groundwork, not complete FAT32 saving
+
+KvFS replacement ordering and ATA flush error handling are hardened. USB
+WRITE(10)/SYNCHRONIZE CACHE are tested only in a separate lab build against
+marked disposable scratch images. **Normal USB/FAT mounts remain RO; FAT32
+file-write recovery and editor volume/folder selection are still pending.**
+See [M2 status and tests](docs/STORAGE-M2.md).
+
+### M2.2a — FAT COW and host recovery prototype
+
+FAT replacement retains the old chain until the new body is ready. Bounded
+metadata undo accounts for FAT copies, FSInfo and fragmented directory/LFN slots.
+1048 interrupted host-image operations pass independent fsck and namespace checks.
+**Normal kernels have RAM undo, not persistent FAT power-loss protection; USB is
+still RO and editor destination selection is pending.** See [limits and tests](docs/STORAGE-M2.md).
+
+### M2.2b — actual USB/FAT guest writes and recovery lab
+
+Explicit disposable-image enrollment now exercises common-VFS file writes and
+persistent recovery **before mount publication**, with two disjoint FAT/WAL grants
+and USB-generation fencing. Ordinary USB remains RO; lab ISOs are non-installable.
+Real-media journal provisioning is still pending; editor selection is added below.
+See [protocol and reproduction](docs/STORAGE-M2.md).
+
+### M2.3a — explicit editor Save As destinations
+
+Both editors offer **Save as -> Destination...**: cycle mounted volumes, navigate
+folders, name the file and confirm replacement. Subsequent Save stays bound to
+that VFS path; failures never silently save to another volume. RAM is labelled
+temporary, RO/errors are explicit, and rescan requires choosing the destination
+again. The quick default local save still keeps RAM+KvFS.
+
+Normal images write RAM/KvFS only; ordinary USB remains RO. Actual GUI FAT saves
+and unplug/recovery tests use explicitly owned disposable lab images, not real
+flash drives. Production journal ownership and hardware tests still block full M2.
+See [boundaries and reproduction](docs/STORAGE-M2.md).
+
+
+### M2.4 — normal-kernel owned FAT journal file
+
+The remaining software path is implemented: a preallocated `KVANTWAL.SYS` file,
+exclusive ownership checks using both FATs and a validated undo overlay, recovery
+**before namespace publication**, and bounded generation-fenced USB leases.
+All FAT mounts now default RO (including ATA/FAT16). Only enrolled FAT32 can opt
+in per session with `fatwrite VOLUME enable|disable`. Both editors then use the
+normal VFS Save As path; no lab kernel or implicit RAM fallback is required.
+
+The Linux `tools/fat-wal.py` provisioner defaults to read-only inspection and needs
+explicit serial confirmation to create a new journal. It never formats/repartitions
+or resets an existing log. Standard file allocation is staged on private images;
+unsupported/full/fragmented/conflicting layouts leave the original unchanged.
+Physical access is separately gated to unmounted partition block devices, not
+whole disks. Those device-policy guards have software tests, not hardware proof.
+
+**Exclusive-media contract:** after an uncertain save/crash/unplug, recover in
+KvantOS BEFORE another OS writes or repairs the FAT volume. Other FAT drivers do
+not understand this WAL; FAT's dirty bit is not a cross-OS lock. Initial host
+provisioning itself must not be interrupted and requires an independent backup.
+The normal-image/software fault/GUI/fsck suites do not close physical USB or
+VirtualBox passthrough acceptance. No automatic push/tag/release was performed.
+See [protocol, safety limits and reproduction](docs/STORAGE-M2.md).
+
+## AHCI SATA — DMA, default RO and explicit WAL writes
+
+M3.1 added SATA DMA reads, FAT volumes under `/mnt/sataNpM`, mouse import and
+copying to RAM/KvFS. M3.2 adds WRITE DMA EXT / FLUSH EXT and shared owned-WAL
+recovery before publication. SATA still defaults RO: only explicitly enrolled
+FAT32 may opt in per session with `fatwrite VOLUME enable`. Transport-enforced
+bounded generation leases protect writes and flush. No AHCI installer or hotplug;
+physical SATA/VBox and M2 physical USB acceptance remain open.
+See [current M3.2](docs/STORAGE-M3.2.md) and [historical M3.1](docs/STORAGE-M3.md).
+
+### M3.3 — OHCI full-speed USB storage
+
+A distinct OHCI HCCA/ED/TD backend reuses BOT/SCSI and FAT owned WAL, with private
+per-controller DMA memory, bounded waits and reboot-only fencing after I/O faults.
+Default RO and explicit prepared-FAT32 opt-in remain unchanged. Standalone OHCI
+12 Mb/s is separate from UHCI and EHCI high-speed/companions. No hubs, USB HID,
+xHCI or physical/VirtualBox qualification. See [M3.3](docs/STORAGE-M3.3.md).
+
+### M3.5a — EHCI DMA safety prerequisite
+
+EHCI now has a pinned private periodic/QH/qTD/bounce pool per initialization
+attempt (including failed starts), per-controller serialization and bounded
+waits. IN copyout and toggle changes require a retired async schedule plus
+consistent QH/qTD completion. Faults fence the HC until reboot; siblings on
+that same HC may also become unavailable. Two independent QEMU HS controllers
+are tested with debugger-timed detach; this is not IOMMU isolation or physical
+qualification. Default RO, explicit prepared-FAT32 opt-in and WAL are unchanged.
+At the M3.5a boundary, HS hubs/TT/splits were intentionally rejected. [Details](docs/STORAGE-M3.5A.md).
+
+### M3.5b — experimental EHCI HS-only hub trees
+
+At the M3.5b boundary, the development source accepts **HS hubs with HS descendants**,
+checks hub protocols/descriptors and post-reset/live speed, and isolates every
+root link before reusing descendant addresses. FS/LS behind EHCI remain disabled
+before EP0: **no TT/split**, no multi-TT alternate activation. Default RO,
+prepared-FAT32 opt-in and owned WAL are unchanged. Software evidence separates
+actual-code host models, a separately patched QEMU HS-only hub fixture, and
+stock-QEMU regressions; physical HS hubs/VBox remain unqualified. The optional
+fixture does not replace stock QEMU and is not a complete USB2 TT model.
+[Limits and reproduction](docs/STORAGE-M3.5B.md).
+
+### M3.5c — experimental FS async TT behind HS hubs
+
+The current preview admits **FS BOT leaves directly under HS hubs**, including
+nested HS ancestors. Device speed, nearest TT hub/physical port and every
+ancestor edge are checked separately. EHCI receives FS async QHs; hardware owns
+the actual SS/CS sequence. IN copyout requires ASS retirement and an unambiguous
+QH/qTD result, including SplitXState. Uncertain TT/errors fence the **whole HC
+until reboot**; there is no CLEAR_TT_BUFFER recovery yet. Other HCs stay isolated.
+FS hubs, LS/HID/periodic splits and multi-TT alternate 1 are not supported.
+
+Evidence separates actual-backend host tests from an explicit, separately built
+**TD-level SS/CS QEMU LAB**. Neither is wire/bandwidth/timing or physical/VBox
+qualification. Default RO/prepared-FAT32 opt-in/WAL remain unchanged; no physical
+media were opened. One initial parallel x64 large-save refusal remains
+**unexplained**: the isolated full suite and archived-state cold recovery pass,
+but stress reliability is OPEN. [Scope, limits and reproduction](docs/STORAGE-M3.5C.md).

@@ -84,8 +84,8 @@ typedef struct {
  *
  *  The application receives a pointer to it in kapp_main() and must
  *  keep it. All drawing coordinates are measured from the top left
- *  corner of the window client area; anything outside is clipped by
- *  the kernel, so corrupting another window is impossible.
+ *  corner of the window client area; these wrappers clip drawing.
+ *  ABI2/3 runs in ring0: wrappers are NOT a security boundary.
  * ============================================================ */
 typedef struct kv_api {
     kv_u32 api_version;          /* packed ABI version: 2 or KV_API_VERSION */

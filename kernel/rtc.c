@@ -3,6 +3,17 @@
 
 #define CMOS_ADDR 0x70
 #define CMOS_DATA 0x71
+static u32 cached_hms[3];
+static int cached_valid;
+int rtc_cached_clock(u32 hms[3]) {
+    if(!hms)return -1;
+    kv_flags_t flags=irq_save();int valid=cached_valid;
+    if(valid)for(unsigned i=0;i<3;i++)hms[i]=cached_hms[i];
+    irq_restore(flags);return valid?0:-1;
+}
+static void invalidate_clock(void) {
+    kv_flags_t flags=irq_save();cached_valid=0;irq_restore(flags);
+}
 
 static u8 cmos_read(u8 reg) {
     outb(CMOS_ADDR, reg);
@@ -25,10 +36,14 @@ void rtc_read(rtc_time_t *t) {
         hour = (u8)(((hour & 0x0F) + (((hour & 0x70) / 16) * 10)) | (hour & 0x80));
         day = bcd2bin(day); mon = bcd2bin(mon); yr = bcd2bin(yr);
     }
-    if (!(regb & 0x02) && (hour & 0x80)) hour = (u8)(((hour & 0x7F) + 12) % 24);
+    int valid_hour=(regb&0x02)?hour<24:((hour&0x7f)>=1 && (hour&0x7f)<=12);
+    if (!(regb & 0x02)) hour=(u8)(((hour&0x7f)%12)+((hour&0x80)?12:0));
 
     t->sec = sec; t->min = min; t->hour = hour;
     t->day = day; t->month = mon; t->year = (u16)(2000 + yr);
+    kv_flags_t flags=irq_save();cached_valid=guard>=0 && valid_hour && hour<24 && min<60 && sec<60;
+    if(cached_valid) {cached_hms[0]=hour;cached_hms[1]=min;cached_hms[2]=sec;}
+    irq_restore(flags);
 }
 
 /* ---------- setting the clock (KvantOS 2.0) ---------- */
@@ -54,7 +69,7 @@ int rtc_write_time(int h, int m, int s) {
     cmos_store(0x00, (u8)s);
     cmos_store(0x02, (u8)m);
     cmos_store(0x04, (u8)h);
-    return 0;
+    invalidate_clock();return 0;
 }
 
 int rtc_write_date(int y, int mo, int d) {
@@ -70,5 +85,5 @@ int rtc_write_date(int y, int mo, int d) {
     cmos_store(0x07, (u8)d);
     cmos_store(0x08, (u8)mo);
     cmos_store(0x09, (u8)(y - 2000));
-    return 0;
+    invalidate_clock();return 0;
 }

@@ -62,7 +62,7 @@ with smoke.Guest() as q:
     original=q.document()['text']
     q.widget(79,7);assert q.document()['text']==b'alpha  delta'
     q.widget(77,7);assert q.document()['text']==original
-    q.widget(77,7);assert q.document()['text']==b'alpha  delta'
+    q.widget(100,7);assert q.document()['text']==b'alpha  delta'
     q.widget(77,7);assert q.document()['text']==original
     q.open_app(9);template=q.document(9)['text']
     dx,dy=area(q,9);q.click(dx+3*8,dy+7);q.widget(80,9)
@@ -175,6 +175,37 @@ with smoke.Guest() as q:
     q.widget(92,9);q.screenshot(smoke.WORK/'small-screen-help.png');q.widget(92,9)
     q.exit_gui()
     print('Mouse launch/caret/selection, shared clipboard, undo/redo, file dialogs, save/new/close/quit guards, overwrite, wheel, both scrollbars, file paging, MouseKeys PASS',flush=True)
+# Dedicated multi-step history + saved checkpoint + independent editor state.
+with smoke.Guest() as q:
+    q.text('lang ru\n');q.text('guimenu\n');time.sleep(1);q.open_app(7)
+    q.text('abc');assert q.document()['text']==b'abc'
+    q.widget(77,7);q.widget(77,7);assert q.document()['text']==b'a'
+    q.widget(100,7);assert q.document()['text']==b'ab'
+    q.widget(100,7);assert q.document()['text']==b'abc'
+    q.widget(76,7);q.choose_name('history.txt');q.widget(82,7)
+    assert not q.document()['dirty']
+    q.widget(77,7);assert q.document()['text']==b'ab' and q.document()['dirty']
+    q.widget(100,7);assert q.document()['text']==b'abc' and not q.document()['dirty']
+    q.widget(77,7);q.text('X');assert q.document()['text']==b'abX'
+    q.widget(100,7);assert q.document()['text']==b'abX' and q.document()['dirty']
+    q.widget(77,7);q.widget(77,7);assert q.document()['text']==b'a'
+    q.widget(100,7);q.widget(100,7);assert q.document()['text']==b'abX'
+    q.open_app(9);template=q.document(9)['text'];q.text('xyz')
+    q.key('ctrl-z');assert q.document(9)['text']==b'xy'+template
+    q.key('ctrl-y');assert q.document(9)['text']==b'xyz'+template
+    q.open_app(7);assert q.document()['text']==b'abX'
+    q.widget(42,7);assert not q.document()['dirty']
+    q.widget(77,7);assert q.document()['dirty']
+    q.widget(100,7);assert not q.document()['dirty']
+    q.screenshot(smoke.WORK/'history-stack.png')
+    # Opening a file resets history without touching the other editor.
+    q.widget(41,7);q.choose_name('alpha.txt');q.widget(82,7)
+    assert q.document()['text']==alpha and not q.document()['dirty']
+    q.widget(77,7);q.widget(100,7);assert q.document()['text']==alpha
+    q.open_app(9);assert q.document(9)['text']==b'xyz'+template
+    q.widget(77,9);q.widget(77,9);q.widget(77,9);assert q.document(9)['text']==template
+    q.widget(100,9);q.widget(100,9);q.widget(100,9);assert q.document(9)['text']==b'xyz'+template
+    print('Multi-step mouse Undo/Redo, Ctrl+Z/Y, saved checkpoint, branching, independent histories, load reset PASS',flush=True)
 # Check persisted contents only AFTER QEMU has closed the disk.
 k=KvFS(str(smoke.DISK))
 def persisted(name):
@@ -183,4 +214,5 @@ def persisted(name):
         f.seek(entry['start']*512);return f.read(entry['size'])
 assert persisted('mouse.txt')==changed
 assert persisted('target.txt')==alpha
+assert persisted('history.txt')==b'abX'
 print('Notepad RAM + real KvFS persistence PASS',flush=True)

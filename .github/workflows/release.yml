@@ -1,20 +1,20 @@
-name: Release 3.1.3
+name: Release 3.1.4
 
 on:
   push:
-    tags: ['v3.1.3']
+    tags: ['v3.1.4']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.1.3
+        default: v3.1.4
 
 permissions:
   contents: write
 
 concurrency:
-  group: kvantos-release-3.1.3
+  group: kvantos-release-3.1.4
   cancel-in-progress: false
 
 jobs:
@@ -26,19 +26,19 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       - name: Verify release tag
-        run: test "$(git describe --exact-match --tags HEAD)" = v3.1.3
+        run: test "$(git describe --exact-match --tags HEAD)" = v3.1.4
       - name: Install toolchain and test firmware
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-12 gcc-multilib nasm binutils xorriso mtools \
-            grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip dosfstools gdisk
+            grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip dosfstools gdisk ntfs-3g
       - name: Install compiler execution test dependency
         run: python3 -m pip install --user --break-system-packages unicorn pillow
       - name: Build distribution
         run: make CC=gcc-12 release
-      - name: Test native compiler and RAM saves
-        run: make -C tests/mcc CC=gcc-12 check sanitize ramfs editors
+      - name: Test native compiler, editors, VFS and storage models
+        run: make -C tests/mcc CC=gcc-12 check sanitize ramfs editors input storage vfs filemgr ahci ohci ehci uhci hub fat-meta
       - name: Validate images
         run: python3 tests/boot/check-images.py
       - name: Test BIOS and UEFI CD boot
@@ -53,8 +53,22 @@ jobs:
         run: python3 tests/mcc/smoke.py
       - name: Test mouse-first editors on BIOS and UEFI
         run: python3 tests/boot/editor-smoke.py
+      - name: Test EN/RU input, find/replace and KvFS persistence
+        run: python3 tests/boot/editor-input-smoke.py
+      - name: Test normal AHCI read and mixed AHCI/USB owned-WAL paths
+        run: |
+          python3 tests/boot/ahci-smoke.py
+          python3 tests/boot/ahci-usb-smoke.py
+      - name: Test mouse Save As to enrolled FAT32 (ordinary policy)
+        run: GUI_SAVE_OWNED=1 python3 tests/boot/save-as-smoke.py
+      - name: Test EHCI controller isolation and detach fencing
+        run: python3 tests/boot/ehci-isolation-smoke.py
       - name: Test GPT parser and read-only partition discovery
         run: make -C tests/fs CC=gcc-12 gpt
+      - name: Test NTFS read-only image matrix and 64-bit size refusal
+        run: make -C tests/fs CC=gcc-12 ntfs-image
+      - name: Test normal-policy FAT/WAL recovery and bounded reads
+        run: make -C tests/fs CC=gcc-12 fat-owned fat-perf
       - name: Test USB 2.0 import and long documents on GPT and MBR
         run: |
           USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
@@ -64,7 +78,7 @@ jobs:
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.1.3-release
+          name: kvantos-3.1.4-release
           path: packages/
       - name: Publish GitHub release
         env:
@@ -72,11 +86,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # Never silently replace an existing release or its assets.
-          if gh release view v3.1.3 >/dev/null 2>&1; then
-            echo 'Release v3.1.3 already exists; refusing to overwrite it.' >&2
+          if gh release view v3.1.4 >/dev/null 2>&1; then
+            echo 'Release v3.1.4 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.1.3 --verify-tag --latest \
-            --title 'KvantOS 3.1.3' --notes-file RELEASE.ru.md \
+          gh release create v3.1.4 --verify-tag --latest \
+            --title 'KvantOS 3.1.4' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
             packages/*.bin packages/*.efi packages/*SHA256SUMS.txt

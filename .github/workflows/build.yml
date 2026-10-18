@@ -4,13 +4,21 @@ on:
     branches: [main, 'arena/**']
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
       - name: kernel
         run: make CC=gcc-12
       - name: multiboot check
@@ -19,6 +27,30 @@ jobs:
         run: make CC=gcc-12 apps
       - name: release (iso + floppy)
         run: make CC=gcc-12 release
+      - name: editor model and atomic RAM saves
+        run: make -C tests/mcc CC=gcc-12 editors ramfs input storage vfs filemgr ahci ohci ehci uhci hub fat-meta
+      - name: validate boot images
+        run: python3 tests/boot/check-images.py
+      - name: BIOS and UEFI boot smoke
+        run: bash tests/boot/qemu-smoke.sh release/kvantos.iso
+      - name: EHCI independent controllers and timed detach (BIOS + UEFI)
+        run: python3 tests/boot/ehci-isolation-smoke.py
+      - name: editor RU input, find/replace and storage (BIOS + UEFI)
+        run: |
+          python3 -m venv build/ci-python
+          build/ci-python/bin/pip install --disable-pip-version-check pillow
+          build/ci-python/bin/python tests/boot/editor-input-smoke.py
+          build/ci-python/bin/python tests/boot/kvfs-write-smoke.py
+          build/ci-python/bin/python tests/boot/save-as-smoke.py
+          build/ci-python/bin/python tests/boot/filemgr-copy-smoke.py
+          build/ci-python/bin/python tests/boot/native-rename-smoke.py
+          build/ci-python/bin/python tests/boot/ramfs-command-smoke.py
+          build/ci-python/bin/python tests/boot/shell-vcp-smoke.py
+          build/ci-python/bin/python tests/boot/shell-path-smoke.py
+          build/ci-python/bin/python tests/boot/filemgr-rename-smoke.py
+          build/ci-python/bin/python tests/boot/kvfs-state-smoke.py
+          build/ci-python/bin/python tests/boot/filemgr-namespace-smoke.py
+          build/ci-python/bin/python tests/boot/listing-status-smoke.py
       - uses: actions/upload-artifact@v4
         with:
           name: kvantos-iso
@@ -27,3 +59,342 @@ jobs:
         with:
           name: kvantos-kernel
           path: release/kvant.bin
+
+  storage-lab:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {controller: ehci-ohci, layout: gpt}
+          - {controller: uhci, layout: mbr}
+    env:
+      USB_CONTROLLER: ${{ matrix.controller }}
+      USB_LAYOUT: ${{ matrix.layout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: isolated storage-lab toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 qemu-system-x86 ovmf dosfstools python3-venv
+      - name: lab image (never published)
+        run: make -j2 CC=gcc-12 STORAGE_LAB=1 iso
+      - name: transport and injected failures, both kernels
+        run: python3 tests/boot/usb-write-smoke.py
+      - name: actual FAT VFS files, crash recovery before mount, both kernels
+        run: |
+          set -o pipefail
+          python3 tests/boot/fat-write-smoke.py | tee "build/fat-$USB_CONTROLLER-validation.log"
+      - name: mouse Save As to FAT and unplug preservation, both kernels
+        run: |
+          python3 -m venv build/ci-python
+          build/ci-python/bin/pip install --disable-pip-version-check pillow
+          set -o pipefail
+          GUI_SAVE_LAB=1 build/ci-python/bin/python tests/boot/save-as-smoke.py | tee "build/gui-save-$USB_CONTROLLER-validation.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-lab-logs-only-${{ matrix.controller }}-${{ matrix.layout }}
+          path: |
+            build/usb-write/**/case-*.log
+            build/fat-usb/**/case-*.log
+            build/fat-*-validation.log
+            build/gui-save-*-validation.log
+            build/save-as/lab/**/*.log
+
+  fat-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: regular-file FAT test tools (no mounts/devices)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 dosfstools mtools python3
+      - name: volatile-cache and interrupted-recovery model
+        run: make -C tests/mcc CC=gcc-12 storage
+      - name: real FAT/VFS fault matrix, ASan/UBSan + independent fsck
+        run: |
+          make -C tests/fs CC=gcc-12 build/fat-fault-sanitize
+          set -o pipefail
+          FAT_HARNESS="$PWD/tests/fs/build/fat-fault-sanitize" python3 tests/fs/test_fat_write.py | tee tests/fs/build/fat-write-validation.log
+      - name: normal-policy owned-file WAL + provisioner safety, ASan/UBSan
+        run: |
+          make -C tests/fs CC=gcc-12 build/fat-owned-sanitize
+          set -o pipefail
+          FAT_OWNED_HARNESS="$PWD/tests/fs/build/fat-owned-sanitize" python3 tests/fs/test_fat_owned.py | tee tests/fs/build/fat-owned-validation.log
+          python3 tests/fs/test_fat_owned_policy.py | tee tests/fs/build/fat-owned-policy.log
+          make -C tests/fs CC=gcc-12 fat-perf fat-meta-eviction
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fat-host-validation-only
+          path: |
+            tests/fs/build/fat-write-validation.log
+            tests/fs/build/fat-owned-validation.log
+            tests/fs/build/fat-owned-policy.log
+
+  storage-owned-normal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {controller: ehci-ohci, layout: gpt}
+          - {controller: uhci, layout: mbr}
+    env:
+      USB_CONTROLLER: ${{ matrix.controller }}
+      USB_LAYOUT: ${{ matrix.layout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: normal owned-WAL toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
+      - name: NORMAL image, no lab hooks
+        run: make -j2 CC=gcc-12 STORAGE_LAB=0 iso
+      - name: real normal USB writes, debugger power cuts, EIO, reconnect and fsck (both kernels)
+        run: |
+          set -o pipefail
+          python3 tests/boot/fat-owned-smoke.py | tee build/owned-guest-validation.log
+      - name: normal GUI Save As and actual unplug (both kernels)
+        run: |
+          python3 -m venv build/ci-python
+          build/ci-python/bin/pip install --disable-pip-version-check pillow
+          set -o pipefail
+          GUI_SAVE_OWNED=1 build/ci-python/bin/python tests/boot/save-as-smoke.py | tee build/owned-gui-validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owned-normal-logs-only-${{ matrix.controller }}-${{ matrix.layout }}
+          path: |
+            build/owned-*-validation.log
+            build/fat-owned-guest/**/case-*.log
+            build/save-as/owned/**/fat-saved.png
+            build/save-as/owned/**/unplug-keeps-document.png
+
+  storage-ahci:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: AHCI default-RO toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
+      - name: ordinary BIOS and UEFI image
+        run: make -j2 CC=gcc-12 STORAGE_LAB=0 iso
+      - name: AHCI host register/DMA model
+        run: make -C tests/mcc CC=gcc-12 ahci
+      - name: actual SATA reads and independent SATA/USB WAL writes, cold and warm reset
+        run: |
+          python3 -m venv build/ci-ahci
+          build/ci-ahci/bin/pip install --disable-pip-version-check pillow
+          set -o pipefail
+          build/ci-ahci/bin/python tests/boot/ahci-smoke.py | tee build/ahci-validation.log
+          build/ci-ahci/bin/python tests/boot/ahci-usb-smoke.py | tee build/ahci-usb-validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ahci-default-ro-and-mixed-logs-only
+          path: |
+            build/ahci*-validation.log
+            build/ahci-smoke/**/*.serial.log
+            build/ahci-smoke/**/sata-gui.png
+            build/ahci-usb/**/*.serial.log
+
+  storage-ahci-wal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [mbr, gpt]
+    env:
+      STORAGE_CONTROLLER: ahci
+      STORAGE_LAYOUT: ${{ matrix.layout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: normal AHCI WAL toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
+      - name: ordinary kernels only
+        run: make -j2 CC=gcc-12 STORAGE_LAB=0 iso
+      - name: AHCI DMA/flush/grant host contracts
+        run: make -C tests/mcc CC=gcc-12 ahci
+      - name: actual FAT, barriers, power cuts, EIO and cold recovery, both kernels
+        run: |
+          set -o pipefail
+          python3 tests/boot/fat-owned-smoke.py | tee build/ahci-wal-validation.log
+      - name: GUI Save As and real flush timeout plus late completion, both kernels
+        run: |
+          python3 -m venv build/ci-ahci-wal
+          build/ci-ahci-wal/bin/pip install --disable-pip-version-check pillow
+          set -o pipefail
+          GUI_SAVE_OWNED=1 build/ci-ahci-wal/bin/python tests/boot/save-as-smoke.py | tee build/ahci-gui-validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ahci-wal-logs-only-${{ matrix.layout }}
+          path: |
+            build/ahci-*-validation.log
+            build/fat-owned-guest/ahci/**/case-*.log
+            build/save-as/owned/ahci/**/fat-saved.png
+            build/save-as/owned/ahci/**/timeout-keeps-document.png
+
+  storage-ohci:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        layout: [mbr, gpt]
+    env:
+      STORAGE_CONTROLLER: ohci
+      STORAGE_LAYOUT: ${{ matrix.layout }}
+      USB_CONTROLLER: ohci
+      USB_LAYOUT: ${{ matrix.layout }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: OHCI disposable-image toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
+      - name: ordinary kernels and real backend model
+        run: |
+          make -j2 CC=gcc-12 STORAGE_LAB=0 iso
+          make -C tests/mcc CC=gcc-12 ohci
+          python3 -m venv build/ci-ohci
+          build/ci-ohci/bin/pip install --disable-pip-version-check pillow
+      - name: native OHCI WAL write, power cuts, EIO and reconnect, both kernels
+        run: |
+          set -o pipefail
+          build/ci-ohci/bin/python tests/boot/fat-owned-smoke.py | tee build/ohci-wal-validation.log
+      - name: OHCI read-only mouse import and native apps, both kernels
+        if: matrix.layout == 'mbr'
+        run: |
+          set -o pipefail
+          build/ci-ohci/bin/python tests/boot/usb-import-smoke.py | tee build/ohci-import-validation.log
+      - name: OHCI GUI writes and actual unplug, both kernels
+        if: matrix.layout == 'gpt'
+        run: |
+          set -o pipefail
+          GUI_SAVE_OWNED=1 build/ci-ohci/bin/python tests/boot/save-as-smoke.py | tee build/ohci-gui-validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ohci-logs-only-${{ matrix.layout }}
+          path: |
+            build/ohci-*-validation.log
+            build/fat-owned-guest/ohci/**/case-*.log
+            build/save-as/owned/ohci/**/*.png
+            build/usb-import/ohci/**/*.png
+
+  storage-fs-hubs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ['0', '1']
+        bus:
+          - {controller: uhci, layout: mbr}
+          - {controller: ohci, layout: gpt}
+    env:
+      MCC_ARCH64: ${{ matrix.arch }}
+      MCC_BOOT_TIMEOUT: '120'
+      USB_CONTROLLER: ${{ matrix.bus.controller }}
+      USB_LAYOUT: ${{ matrix.bus.layout }}
+      USB_HUB_DEPTH: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: disposable-image FS hub toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf dosfstools
+      - name: normal kernels and actual backend/topology models
+        run: |
+          make -j2 CC=gcc-12 STORAGE_LAB=0 iso
+          make -C tests/mcc CC=gcc-12 uhci ohci hub
+          python3 -m venv build/ci-hub
+          build/ci-hub/bin/pip install --disable-pip-version-check pillow
+      - name: nested tree, three disks, addresses, unplug and stale caches
+        run: |
+          set -o pipefail
+          build/ci-hub/bin/python tests/boot/usb-hub-smoke.py | tee build/hub-topology-validation.log
+      - name: real WAL, debugger power cuts, EIO, recovery and fsck through a hub
+        run: |
+          set -o pipefail
+          build/ci-hub/bin/python tests/boot/fat-owned-smoke.py | tee build/hub-wal-validation.log
+      - name: mouse import/build/run through a hub
+        if: matrix.bus.controller == 'uhci'
+        run: |
+          set -o pipefail
+          build/ci-hub/bin/python tests/boot/usb-import-smoke.py | tee build/hub-import-validation.log
+      - name: mouse Save As, WAL and unplug through a hub
+        if: matrix.bus.controller == 'ohci'
+        run: |
+          set -o pipefail
+          GUI_SAVE_OWNED=1 build/ci-hub/bin/python tests/boot/save-as-smoke.py | tee build/hub-gui-validation.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fs-hub-logs-only-${{ matrix.bus.controller }}-${{ matrix.arch }}
+          path: |
+            build/hub-*-validation.log
+            build/usb-hubs/**/*.log
+            build/fat-owned-guest/**/hub1/case-*.log
+            build/save-as/owned/**/hub1/*.png
+            build/usb-import/**/hub1/*.png
+
+  compiler-isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: integer compiler and isolated runtime toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm xorriso mtools grub-pc-bin grub-common binutils python3 python3-venv qemu-system-x86 ovmf
+      - name: Python execution model and GUI helpers
+        run: |
+          python3 -m venv build/ci-isolated
+          build/ci-isolated/bin/pip install --disable-pip-version-check unicorn==2.1.0 'setuptools<81' 'pillow>=10,<13'
+          echo "$PWD/build/ci-isolated/bin" >> "$GITHUB_PATH"
+      - name: ordinary SDK, kernels and boot images (never published by this job)
+        run: |
+          set -euo pipefail
+          mkdir -p build/isolated-ci
+          make -C sdk/isolated CC=gcc-12 all runtime 2>&1 | tee build/isolated-ci/sdk.log
+          make -j2 CC=gcc-12 STORAGE_LAB=0 release 2>&1 | tee build/isolated-ci/release.log
+      - name: compiler, guards, budgets, services and image validation
+        run: |
+          set -euo pipefail
+          make -C tests/mcc CC=gcc-12 check includes budgets rtc-cache isolated sanitize sanitize-isolated user-space user-service user-image 2>&1 | tee build/isolated-ci/host.log
+      - name: real CPL3 CPU faults and denied xstate access, BIOS32 and UEFI64
+        run: |
+          set -euo pipefail
+          python3 tests/boot/user-isolation-smoke.py 2>&1 | tee build/isolated-ci/cpu-native.log
+      - name: in-OS source compiler, ABI4 adapters and legacy target switch
+        run: |
+          set -euo pipefail
+          python3 tests/boot/isolated-workshop-smoke.py 2>&1 | tee build/isolated-ci/workshop-native.log
+      - name: SDK GUI replay, unload and immutable source disk
+        run: |
+          set -euo pipefail
+          python3 tests/boot/isolated-app-smoke.py 2>&1 | tee build/isolated-ci/sdk-native.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-isolation-validation-only
+          path: |
+            build/isolated-ci/*.log
+            build/user-isolation/**/*.log
+            build/user-isolation/**/result.json
+            build/isolated-workshop/**/*.log
+            build/isolated-workshop/**/result.json
+            build/isolated-app/**/*.log
+            build/isolated-app/**/result.json

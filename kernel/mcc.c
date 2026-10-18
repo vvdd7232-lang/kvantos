@@ -3,12 +3,14 @@
    Deliberately a documented subset, not an ISO C implementation. */
 #include "mcc.h"
 #include "kvapp.h"
+#include "../build/mcc_user_blob.h"
 #ifdef MCC_HOSTTEST
 #include <string.h>
 #endif
 
 #define CODE_MAX 24000
 #define DATA_MAX 8000
+_Static_assert(CODE_MAX<=0x6000 && DATA_MAX<=0x2000 && 0x6000+sizeof(mcc_user_text)<=0x8000,"isolated adapter layout");
 #define SYM_MAX 256
 #define LOCAL_MAX 128
 #define FIX_MAX 1024
@@ -17,16 +19,16 @@
 
 enum { ID = 256, NUM, STR, INT, CHAR, VOID, CONST, IF, ELSE, WHILE, FOR,
        RETURN, BREAK, CONTINUE, EQ, NE, LE, GE, SHL, SHR, AND, OR,
-       INC, DEC, ADDSET, SUBSET, MULSET, DIVSET, MODSET };
+       INC, DEC, ADDSET, SUBSET, MULSET, DIVSET, MODSET, SIZEOF, STRUCT, TYPEDEF, ARROW };
 enum { TY_INT, TY_CHAR, TY_VOID }; /* adding 4 adds one pointer indirection */
 enum { GLOBAL, FUNCTION, BUILTIN };
 typedef struct {
     char name[NAME_MAX];
-    int kind, type, argc, args[ARG_MAX], defined, address;
+    int kind, type, argc, args[ARG_MAX], defined, address, count;
 } symbol_t;
-typedef struct { char name[NAME_MAX]; int type, offset; } local_t;
+typedef struct { char name[NAME_MAX]; int type, offset, count; } local_t;
 typedef struct { int where, in_data, target, function, relative; } fix_t;
-typedef struct { int type, lvalue; } expr_t;
+typedef struct { int type, lvalue, array_bytes; } expr_t;
 typedef struct { int again, first_break; } loop_t;
 
 /* Compiler workspace is BSS: the kernel task stack is only 8 KiB. */
@@ -36,7 +38,7 @@ static local_t locals[LOCAL_MAX];
 static fix_t fixes[FIX_MAX];
 static loop_t loops[8];
 static int breaks[256];
-static int nc, nd, ns, nl, nf, nb, nloop, local_bytes, depth, return_type;
+static int nc, nd, ns, nl, nf, nb, nloop, local_bytes, depth, return_type,target_isolated;
 static const char *input;
 static int token, line, token_line, tokens, error_line;
 static u32 value;
@@ -54,6 +56,8 @@ static int enter(void) {
 }
 static int letter(int c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
 static int digit(int c) { return c >= '0' && c <= '9'; }
+#include "mcc_pp.h"
+
 static int escape(void) {
     int c = (u8)*input++;
     if (c == 'n') return '\n';
@@ -94,7 +98,7 @@ static void next(void) {
         static const struct { const char *name; int id; } keywords[] = {
             {"int",INT}, {"char",CHAR}, {"void",VOID}, {"const",CONST},
             {"if",IF}, {"else",ELSE}, {"while",WHILE}, {"for",FOR},
-            {"return",RETURN}, {"break",BREAK}, {"continue",CONTINUE}
+            {"return",RETURN}, {"break",BREAK}, {"continue",CONTINUE}, {"sizeof",SIZEOF}, {"struct",STRUCT}, {"typedef",TYPEDEF}
         };
         token = ID;
         for (unsigned i = 0; i < sizeof(keywords)/sizeof(keywords[0]); i++)
@@ -137,7 +141,7 @@ static void next(void) {
         return;
     }
     static const struct { const char *s; int id; } pairs[] = {
-        {"==",EQ},{"!=",NE},{"<=",LE},{">=",GE},{"<<",SHL},{">>",SHR},
+        {"->",ARROW},{"==",EQ},{"!=",NE},{"<=",LE},{">=",GE},{"<<",SHL},{">>",SHR},
         {"&&",AND},{"||",OR},{"++",INC},{"--",DEC},{"+=",ADDSET},{"-=",SUBSET},
         {"*=",MULSET},{"/=",DIVSET},{"%=",MODSET}
     };
@@ -150,10 +154,14 @@ static void next(void) {
 }
 static int accept(int t) { if (token != t) return 0; next(); return 1; }
 static void expect(int t) { if (!accept(t)) fail("unexpected token"); }
-static int is_type(void) { return token == INT || token == CHAR || token == VOID || token == CONST; }
+#include "mcc_types.h"
+
+static int is_type(void) { return token == INT || token == CHAR || token == VOID || token == CONST || token == STRUCT || (token==ID && alias_find(word)>=0); }
 static int parse_type(void) {
     accept(CONST);
     int t = TY_INT;
+    if(token==STRUCT)return record_type();
+    if(token==ID && alias_find(word)>=0) {t=aliases[alias_find(word)].type;next();return t;}
     if (token == INT) t = TY_INT;
     else if (token == CHAR) t = TY_CHAR;
     else if (token == VOID) t = TY_VOID;
@@ -162,7 +170,7 @@ static int parse_type(void) {
     return t;
 }
 static int pointer_type(int t) {
-    while (accept('*')) { t += 4; if (t > 18) fail("pointer depth limit"); accept(CONST); }
+    while (accept('*')) { if((t&28)>=16)fail("pointer depth limit");else t+=4; accept(CONST); }
     return t;
 }
 static void name_copy(char *dst) {
@@ -193,10 +201,17 @@ static void fix(int where, int in_data, int target, int function, int relative) 
 }
 static void wide(int enabled) { if (MCC_TARGET64 && enabled) byte(0x48); }
 /* Pointer offsets are signed C ints, widened before address arithmetic. */
+static int stride(int type) {
+    int bytes=type_bytes(type-4);
+    if(type==TY_VOID+4)return 4; /* preserve the old void-pointer arithmetic extension */
+    if(!bytes)fail("pointer arithmetic needs a complete element type");
+    return bytes;
+}
 static void scale(int type, int reg) {
-    int step = type == TY_CHAR + 4 ? 1 : type >= 8 ? MCC_WORD : 4;
+    int step = stride(type);
     if (MCC_TARGET64) { byte(0x48); byte(0x63); byte(reg ? 0xC9 : 0xC0); }
-    if (step > 1) { wide(1); byte(0xC1); byte(reg ? 0xE1 : 0xE0); byte(step == 8 ? 3 : 2); }
+    if (step==4 || step==8) {wide(1);byte(0xC1);byte(reg?0xE1:0xE0);byte(step==8?3:2);}
+    else if(step>1) {wide(1);byte(0x69);byte(reg?0xC9:0xC0);imm((u32)step);}
 }
 static void address(int data_offset) { byte(0xB8); fix(nc,0,data_offset,0,0); imm(0); }
 static int jump(int condition) {
@@ -211,49 +226,66 @@ static int find(const char *name) {
     return -1;
 }
 static int symbol(const char *name, int kind, int type) {
+    if(alias_find(name)>=0)fail("name conflicts with typedef");
     if (ns >= SYM_MAX) { fail("too many symbols"); return 0; }
     symbol_t *s = &symbols[ns];
     memset(s,0,sizeof(*s)); strcpy(s->name,name); s->kind=kind; s->type=type; s->address=-1;
     return ns++;
 }
 static void local(const char *name, int type, int offset) {
+    if(alias_find(name)>=0)fail("local conflicts with typedef");
     if (nl >= LOCAL_MAX) { fail("too many locals"); return; }
-    if (type == TY_VOID) fail("variable cannot be void");
+    if (!type_bytes(type)) fail("variable has void or incomplete type");
     for (int i = nl - 1; i >= 0; i--) if (!strcmp(name,locals[i].name)) {
         /* Block shadowing is deliberately not supported. */
         fail("duplicate local name"); break;
     }
-    strcpy(locals[nl].name,name); locals[nl].type=type; locals[nl++].offset=offset;
+    strcpy(locals[nl].name,name); locals[nl].type=type; locals[nl].offset=offset; locals[nl++].count=0;
 }
 static void rvalue(expr_t *e) {
+    e->array_bytes=0; /* arrays already leave their decayed address in the accumulator */
+    if(is_record(e->type)) {fail("aggregate values are unsupported; use fields or pointers");return;}
     if (e->lvalue) {
         if (e->type == TY_CHAR) { byte(0x0F); byte(0xBE); byte(0x00); }
-        else { wide(e->type >= 4); byte(0x8B); byte(0x00); }
+        else { wide(is_pointer(e->type)); byte(0x8B); byte(0x00); }
         e->lvalue = 0;
     }
 }
 static void store(int type) { /* address in ecx, value in eax */
-    wide(type >= 4); byte(type == TY_CHAR ? 0x88 : 0x89); byte(0x01);
+    if(is_record(type)) {fail("aggregate assignment is unsupported");return;}
+    wide(is_pointer(type)); byte(type == TY_CHAR ? 0x88 : 0x89); byte(0x01);
     if (type == TY_CHAR) { byte(0x0F); byte(0xBE); byte(0xC0); }
 }
-static int stride(int type) { return type == TY_CHAR + 4 ? 1 : type >= 8 ? MCC_WORD : 4; }
+/* Literal extents only: bounded before multiplication, no VLA/incomplete arrays. */
+static int array_count(int t, int limit) {
+    if(!accept('[')) return 0;
+    int bytes=type_bytes(t), count=0;
+    if(!bytes || (t&28)>=16 || token!=NUM || !value || value>(u32)(limit/bytes))
+        fail("array needs a positive literal size within storage limit");
+    else count=(int)value;
+    next();expect(']');
+    if(token=='[') fail("multidimensional arrays are not supported");
+    return count;
+}
 static expr_t expression(int minimum);
 static expr_t unary(void);
 
 static expr_t change(expr_t e, int op, int post) {
     if (!e.lvalue) fail("increment needs a variable");
     byte(0x50); rvalue(&e);
-    wide(e.type >= 4); byte(0x89); byte(0xC2); /* old value */
-    wide(e.type >= 4); byte(0x83); byte(op == INC ? 0xC0 : 0xE8); byte(e.type >= 4 ? stride(e.type) : 1);
+    wide(is_pointer(e.type)); byte(0x89); byte(0xC2); /* old value */
+    int step=is_pointer(e.type)?stride(e.type):1;
+    wide(is_pointer(e.type));byte(step>127?0x81:0x83);byte(op==INC?0xC0:0xE8);
+    if(step>127)imm((u32)step);else byte(step);
     byte(0x59); store(e.type);
-    if (post) { wide(e.type >= 4); byte(0x89); byte(0xD0); }
+    if (post) { wide(is_pointer(e.type)); byte(0x89); byte(0xD0); }
     return e;
 }
 static expr_t primary(void) {
-    expr_t e = {TY_INT,0};
+    expr_t e = {TY_INT,0,0};
     if (token == NUM) { byte(0xB8); imm(value); next(); }
     else if (token == STR) {
-        e.type = TY_CHAR + 4;
+        e.type = TY_CHAR + 4; e.array_bytes=literal_len+1;
         address(string_data(literal, literal_len + 1)); next();
     } else if (accept('(')) { e = expression(1); expect(')'); }
     else if (token == ID) {
@@ -276,6 +308,9 @@ static expr_t primary(void) {
                 wide(1); byte(0x89); byte(0x44); byte(0x24); byte((argc-1-i)*MCC_WORD);
             }
             if (symbols[s].kind == BUILTIN) {
+                const char *name=symbols[s].name;
+                if(target_isolated && (!strcmp(name,"beep") ||
+                   !strcmp(name,"log")))fail("API unavailable in isolated target (beep/log)");
                 if (MCC_TARGET64) {
                     /* Private stack ABI -> SysV, preserving the original stack
                        even inside nested expressions and odd-sized frames. */
@@ -311,41 +346,76 @@ static expr_t primary(void) {
             for (l = nl-1; l >= 0; l--) if (!strcmp(name,locals[l].name)) break;
             if (l >= 0) {
                 wide(1); byte(0x8D); byte(0x85); imm((u32)locals[l].offset); e.type=locals[l].type;
+                e.array_bytes=locals[l].count*type_bytes(e.type);
             } else {
                 int s = find(name);
                 if (s < 0 || symbols[s].kind != GLOBAL) { fail("unknown variable"); return e; }
                 address(symbols[s].address); e.type=symbols[s].type;
+                e.array_bytes=symbols[s].count*type_bytes(e.type);
             }
-            e.lvalue = 1;
+            e.lvalue = !e.array_bytes;
+            if(e.array_bytes) e.type+=4;
         }
     } else { fail("expected expression"); return e; }
     while (!error_text) {
         if (accept('[')) {
             rvalue(&e);
-            if (e.type < 4) { fail("index needs a pointer"); break; }
+            if (!is_pointer(e.type)) { fail("index needs a pointer"); break; }
             byte(0x50);
             expr_t index = expression(1); rvalue(&index); expect(']');
             scale(e.type,0);
             byte(0x59); wide(1); byte(0x01); byte(0xC8);
             e.type -= 4; e.lvalue = 1;
+        } else if(token=='.' || token==ARROW) {
+            int arrow=token==ARROW;next();
+            if(arrow) {
+                rvalue(&e);
+                if(!is_pointer(e.type)) {fail("arrow needs a struct pointer");break;}
+                e.type-=4;
+            }
+            if(!is_record(e.type) || (!e.lvalue && !arrow)) {fail("member access needs a struct object");break;}
+            int id=e.type>>5, field=-1;
+            if(id>=nrecords || !records[id].complete) {fail("member access on incomplete struct");break;}
+            char name[NAME_MAX];name_copy(name);
+            for(int i=0;i<records[id].count;i++)if(!strcmp(name,members[records[id].first+i].name))field=records[id].first+i;
+            if(field<0) {fail("unknown struct member");break;}
+            if(members[field].offset) {wide(1);byte(0x05);imm((u32)members[field].offset);}
+            e.type=members[field].type;e.array_bytes=members[field].count*type_bytes(e.type);
+            e.lvalue=!e.array_bytes;if(e.array_bytes)e.type+=4;
         } else if (token == INC || token == DEC) { int op=token; next(); e=change(e,op,1); }
         else break;
     }
     return e;
 }
 static expr_t unary(void) {
-    expr_t e = {TY_INT,0};
+    expr_t e = {TY_INT,0,0};
     if (!enter()) return e;
     int op = token;
-    if (op == '+' || op == '-' || op == '!' || op == '~' || op == '*' || op == '&' || op == INC || op == DEC) {
+    if (accept(SIZEOF)) {
+        /* Parse/check normally, but discard ALL emission: never evaluate operands,
+           retain string storage, or leave relocations pointing into dead code. */
+        int saved_code=nc, saved_data=nd, saved_fixes=nf, bytes;
+        int paren=accept('(');
+        if(paren && is_type()) {
+            int t=parse_type(); t=pointer_type(t); bytes=type_bytes(t);
+        } else {
+            e=paren?expression(1):unary();
+            bytes=e.array_bytes?e.array_bytes:type_bytes(e.type);
+        }
+        if(paren) expect(')');
+        if(!bytes) fail("sizeof void is not supported");
+        nc=saved_code;nd=saved_data;nf=saved_fixes;
+        e=(expr_t){TY_INT,0,0};byte(0xB8);imm((u32)bytes);
+    } else if (op == '+' || op == '-' || op == '!' || op == '~' || op == '*' || op == '&' || op == INC || op == DEC) {
         next(); e = unary();
         if (op == '&') {
-            if (!e.lvalue) fail("address-of needs a variable");
-            e.type += 4; e.lvalue=0;
+            if (!e.lvalue) fail(e.array_bytes?"address-of whole array is not supported":"address-of needs a variable");
+            if((e.type&28)>=16)fail("pointer depth limit");else e.type+=4;
+            e.lvalue=0;
         } else if (op == INC || op == DEC) e=change(e,op,0);
         else {
             rvalue(&e);
-            if (op == '*') { if (e.type < 4) fail("dereference needs a pointer"); e.type-=4; e.lvalue=1; }
+            if (op == '*') { if (!is_pointer(e.type)) fail("dereference needs a pointer"); e.type-=4; e.lvalue=1; }
             if (op == '-') { byte(0xF7); byte(0xD8); }
             if (op == '~') { byte(0xF7); byte(0xD0); }
             if (op == '!') { test(); byte(0x0F); byte(0x94); byte(0xC0); byte(0x0F); byte(0xB6); byte(0xC0); e.type=TY_INT; }
@@ -384,7 +454,7 @@ static void binary(int op, int pointers) { /* lhs ecx, rhs eax */
     }
 }
 static expr_t expression(int minimum) {
-    expr_t left = {TY_INT,0};
+    expr_t left = {TY_INT,0,0};
     if (!enter()) return left;
     left=unary();
     while (!error_text && precedence(token) >= minimum) {
@@ -397,8 +467,8 @@ static expr_t expression(int minimum) {
             if (op!='=') {
                 byte(0x59);
                 int base=op==ADDSET?'+':op==SUBSET?'-':op==MULSET?'*':op==DIVSET?'/':'%';
-                if (left.type>=4 && (base=='+' || base=='-')) scale(left.type,0);
-                binary(base,left.type>=4);
+                if (is_pointer(left.type) && (base=='+' || base=='-')) scale(left.type,0);
+                binary(base,is_pointer(left.type));
             }
             byte(0x59); store(left.type); left.lvalue=0;
         } else if (op==AND || op==OR) {
@@ -406,16 +476,17 @@ static expr_t expression(int minimum) {
             expr_t right=expression(prec+1); rvalue(&right);
             test(); byte(0x0F);byte(0x95);byte(0xC0);byte(0x0F);byte(0xB6);byte(0xC0);
             int end=jump(0); patch(short_jump,nc); byte(0xB8);imm(op==OR);patch(end,nc);
-            left=(expr_t){TY_INT,0};
+            left=(expr_t){TY_INT,0,0};
         } else {
             rvalue(&left); byte(0x50);
             expr_t right=expression(prec+1); rvalue(&right); byte(0x59);
-            int lp=left.type>=4, rp=right.type>=4;
+            int lp=is_pointer(left.type), rp=is_pointer(right.type);
             if ((op=='+' || op=='-') && lp && !rp) scale(left.type,0);
             if (op=='+' && !lp && rp) scale(right.type,1);
             binary(op,lp||rp);
             if (op=='-' && lp && rp) {
-                if(stride(left.type)>1){wide(1);byte(0xC1);byte(0xF8);byte(stride(left.type)==8?3:2);}
+                int step=stride(left.type);
+                if(step>1) {byte(0xB9);imm((u32)step);wide(1);byte(0x99);wide(1);byte(0xF7);byte(0xF9);}
                 left.type=TY_INT;
             } else if(op=='+' && !lp && rp) left.type=right.type;
             else if(prec<10 || (!lp && !rp)) left.type=TY_INT;
@@ -429,10 +500,15 @@ static void declarations(void) {
     int base=parse_type();
     do {
         int t=pointer_type(base); char name[NAME_MAX];name_copy(name);
-        local_bytes+=MCC_WORD;
+        int count=array_count(t,LOCAL_MAX*MCC_WORD);
+        int size=type_bytes(t);
+        int bytes=count?count*size:is_record(t)?size:MCC_WORD;
+        local_bytes+=(bytes+MCC_WORD-1)&~(MCC_WORD-1);
         if(local_bytes>LOCAL_MAX*MCC_WORD)fail("local stack limit");
         local(name,t,-local_bytes);
+        if(!error_text) locals[nl-1].count=count;
         if (accept('=')) {
+            if(count || is_record(t)) {fail("aggregate initializers are not supported");return;}
             expr_t e=expression(1);rvalue(&e);
             wide(1);byte(0x8D);byte(0x8D);imm((u32)-local_bytes); store(t);
         }
@@ -512,18 +588,32 @@ static void builtins(void) {
     }
 }
 static void translation_unit(int pass) {
+    type_pass=pass;anon_serial=0;
     while(token && !error_text) {
+        if(accept(TYPEDEF)) {
+            int base=parse_type();
+            do {
+                int t=pointer_type(base);char name[NAME_MAX];name_copy(name);
+                if(token=='[' || token=='(') {fail("typedef supports object and pointer types only");break;}
+                type_alias(name,t);
+            }while(!error_text && accept(','));
+            expect(';');continue;
+        }
         int base=parse_type();
+        if(accept(';')) {if(!is_record(base))fail("expected declarator");continue;}
         do {
             int type=pointer_type(base);char name[NAME_MAX];name_copy(name);
             int s=find(name);
             if(accept('(')) {
+                if(is_record(type))fail("struct return by value is unsupported");
                 int argc=0, argtypes[ARG_MAX]; char argnames[ARG_MAX][NAME_MAX];
                 if(token!=')')do{
                     if(argc>=ARG_MAX){fail("at most 8 parameters");break;}
                     int param_type=parse_type();
                     if(param_type==TY_VOID && token==')' && !argc)break;
-                    argtypes[argc]=pointer_type(param_type);name_copy(argnames[argc]);argc++;
+                    argtypes[argc]=pointer_type(param_type);
+                    if(is_record(argtypes[argc]))fail("struct parameter by value is unsupported");
+                    name_copy(argnames[argc]);argc++;
                 }while(!error_text && accept(','));
                 expect(')');
                 if(pass==1){
@@ -548,23 +638,26 @@ static void translation_unit(int pass) {
                     symbols[s].address=nc;nl=local_bytes=nloop=nb=0;return_type=type;
                     for(int i=0;i<argc;i++)local(argnames[i],argtypes[i],MCC_WORD*2+i*MCC_WORD);
                     byte(0x55);wide(1);byte(0x89);byte(0xE5);wide(1);byte(0x81);byte(0xEC);int frame=nc;imm(0);
-                    statement();put32(code,frame,(u32)local_bytes);
+                    in_function=1;statement();in_function=0;put32(code,frame,(u32)local_bytes);
                     byte(0x31);byte(0xC0);byte(0xC9);byte(0xC3);
                 }
                 break;
             } else {
-                if(type==TY_VOID)fail("global cannot be void");
+                if(!type_bytes(type))fail("global has void or incomplete type");
+                int count=array_count(type,DATA_MAX);
                 if(pass==1){
                     if(s>=0)fail("name already declared");
                     else {
                         s=symbol(name,GLOBAL,type);
                         while((nd&(MCC_WORD-1)) && !error_text)reserve_data(1);
-                        symbols[s].address=reserve_data(MCC_WORD);
+                        symbols[s].count=count;
+                        symbols[s].address=reserve_data(count?count*type_bytes(type):is_record(type)?type_bytes(type):MCC_WORD);
                     }
                 }
                 if(accept('=')){
+                    if(count || is_record(type)) {fail("aggregate initializers are not supported");return;}
                     int negative=accept('-');accept('+');
-                    if(token==STR && type>=4 && !negative){
+                    if(token==STR && is_pointer(type) && !negative){
                         if(pass==1){int at=string_data(literal,literal_len+1);fix(symbols[s].address,1,at,0,0);}
                         next();
                     }else{
@@ -582,12 +675,16 @@ static void reset_lexer(const char *source){input=source;line=token_line=1;token
 const char *mcc_error(void){return error_text?error_text:"";}
 int mcc_error_line(void){return error_line;}
 
-int mcc_compile(const char *source,const char *title,u8 *output,u32 capacity,u32 *size){
+int mcc_compile_target(const char *source,const char *title,u8 *output,u32 capacity,u32 *size,int mode){
     error_text=NULL;error_line=token_line=1;nc=nd=ns=nl=nf=nb=nloop=depth=0;
     if(size)*size=0;
+    target_isolated=mode==1;
+    if(mode!=0 && mode!=1){fail("invalid compiler target");return -1;}
     if(!source || !output || !size){fail("invalid compiler arguments");return -1;}
     u32 length=0;while(source[length] && length<=MCC_SOURCE_MAX)length++;
     if(length>MCC_SOURCE_MAX){fail("source limit (16000 bytes)");return -1;}
+    source=preprocess(source);if(error_text)return -1;
+    nrecords=nmembers=naliases=record_depth=in_function=0;
     reserve_data(MCC_TARGET64 ? 72 : 40); /* saved API + architecture-native descriptor */
     int title_len=0;while(title && title[title_len] && title_len<31)title_len++;
     int title_at=reserve_data(title_len+1);
@@ -632,13 +729,28 @@ int mcc_compile(const char *source,const char *title,u8 *output,u32 capacity,u32
             symbol_t *s=&symbols[f->target];
             if(!s->defined || s->address<0){fail("function declared but not defined");break;}
             target=KAPP_LOAD_BASE+(u32)s->address;
-        }else target=KAPP_LOAD_BASE+(u32)nc+(u32)f->target;
+        }else target=KAPP_LOAD_BASE+(target_isolated?0x8000u:(u32)nc)+(u32)f->target;
         if(f->relative)target-=KAPP_LOAD_BASE+(u32)f->where+4;
         put32(f->in_data?data:code,f->where,target);
     }
-    u32 total=64+(u32)nc+(u32)nd;
+    u32 text_bytes=0x6000u+sizeof(mcc_user_text),data_file=(text_bytes+15u)&~15u;
+    u32 total=target_isolated?96u+data_file+(u32)nd:64u+(u32)nc+(u32)nd;
     if(total>capacity)fail("output buffer too small");
     if(error_text)return -1;
+    if(target_isolated) {
+        /* Same 24k code / 8k data budgets. Adapter is separate user RX text;
+           program data has a fixed RW VA and adapter state/heap is zero BSS. */
+        u32 header[24]={0};
+        header[0]=0x5050414b;header[1]=(96u<<16)|2u;header[2]=4;
+        header[3]=1u|(MCC_TARGET64?256u:0u);header[4]=KAPP_LOAD_BASE;header[5]=MCC_USER_ENTRY;
+        header[6]=total-96;header[7]=MCC_USER_END-0x8000u-(u32)nd;
+        if(title_len)memcpy((u8 *)header+32,title,(size_t)title_len);
+        header[16]=text_bytes;header[17]=0x8000;header[18]=data_file;header[19]=(u32)nd;
+        header[20]=header[7];header[21]=16384;header[22]=1;
+        memset(output,0,total);memcpy(output,header,96);memcpy(output+96,code,(size_t)nc);
+        memcpy(output+96+0x6000,mcc_user_text,sizeof(mcc_user_text));
+        memcpy(output+96+data_file,data,(size_t)nd);*size=total;return 0;
+    }
     kapp_header_t header;
     memset(&header,0,sizeof(header));memcpy(header.magic,"KAPP",4);
     header.version=KAPP_FORMAT_VERSION;header.header_size=64;header.api_version=KV_API_VERSION;
@@ -647,4 +759,8 @@ int mcc_compile(const char *source,const char *title,u8 *output,u32 capacity,u32
     if(title_len)memcpy(header.name,title,(size_t)title_len);
     memcpy(output,&header,64);memcpy(output+64,code,(size_t)nc);memcpy(output+64+nc,data,(size_t)nd);
     *size=total;return 0;
+}
+
+int mcc_compile(const char *source,const char *title,u8 *output,u32 capacity,u32 *size) {
+    return mcc_compile_target(source,title,output,capacity,size,0);
 }

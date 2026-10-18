@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.1.3"
+#define KV_VERSION  "3.1.4"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -153,6 +153,10 @@ u32   timer_seconds(void);
 void  sleep_ms(u32 ms);
 
 void  keyboard_init(void);
+#include "keymap.h"
+int   kbd_getevent_nb(kbd_event_t *event);
+int   kbd_layout(void);
+void  kbd_layout_set(int russian);
 int   kbd_getchar_nb(void);      /* -1 when no character is available */
 char  kbd_getchar(void);         /* blocking read */
 void  kbd_set_leds(u8 mask);     /* bits: 1 Scroll, 2 Num, 4 Caps */
@@ -162,32 +166,12 @@ int   kbd_mousekeys(void);
 void  kbd_mousekeys_set(int on);
 void  kbd_poll(void);            /* fallback when IRQ1 never arrives */
 
-#define KEY_UP     0x81
-#define KEY_DOWN   0x82
-#define KEY_LEFT   0x83
-#define KEY_RIGHT  0x84
-/* Navigation and function keys. They travel through the same one-byte
-   queue as characters, so the values stay above the printable range
-   and below 0xFF. */
-#define KEY_HOME   0x85
-#define KEY_END    0x86
-#define KEY_PGUP   0x87
-#define KEY_PGDN   0x88
-#define KEY_DEL    0x89
-#define KEY_INS    0x8A
-#define KEY_F1     0x90
-#define KEY_F2     0x91
-#define KEY_F3     0x92
-#define KEY_F4     0x93
-#define KEY_F5     0x94
-#define KEY_F6     0x95
-#define KEY_F7     0x96
-#define KEY_F8     0x97
-#define KEY_F9     0x98
-#define KEY_F10    0x99
+
 
 typedef struct { u8 sec, min, hour, day, month; u16 year; } rtc_time_t;
 void rtc_read(rtc_time_t *t);
+/* Last range-checked RTC read. No CMOS I/O; -1 if absent/invalidated. */
+int rtc_cached_clock(u32 hms[3]);
 int  rtc_write_time(int h, int m, int s);   /* set the CMOS clock      */
 int  rtc_write_date(int y, int mo, int d);  /* set the CMOS date       */
 
@@ -208,6 +192,10 @@ u32    pmm_used_frames(void);
 u32    pmm_total_bytes(void);
 
 /* ---------- paging ---------- */
+kv_addr_t get_kernel_stack(void);
+int ku_mode_trap(registers_t *r);
+int ku_mode_tick(registers_t *r);
+void ku_selftest(void);
 void   paging_init(void);
 int    paging_map(u32 virt, u32 phys, int rw);
 int    paging_map_range(u32 base, u32 size, int rw);
@@ -257,6 +245,7 @@ rfile_t *ramfs_find(const char *name);
 int     ramfs_create(const char *name, const char *data, u32 size);
 int     ramfs_write(const char *name, const char *data, u32 size);
 int     ramfs_delete(const char *name);
+int     ramfs_rename(const char *from,const char *to); /* no-replace, no allocation */
 rfile_t *ramfs_table(void);
 
 /* ---------- ATA disk (PIO, LBA28) ---------- */
@@ -277,6 +266,7 @@ int         kvfs_mounted(void);
 int         kvfs_write(const char *name, const void *data, u32 size, int is_exec);
 int         kvfs_read(const char *name, void *buf, u32 max);
 int         kvfs_delete(const char *name);
+int         kvfs_rename(const char *from,const char *to); /* vfs_rename status, NOT kvfs_error codes */
 int         kvfs_exists(const char *name);
 u32         kvfs_size(const char *name);
 int         kvfs_list(int index, char *name, u32 *size, int *is_exec);
@@ -296,6 +286,7 @@ const char *setup_last_result(void);
 int         kapp_load(const char *filename);
 void        kapp_unload(void);
 int         kapp_loaded(void);
+int         kapp_isolated(void);
 const char *kapp_name(void);
 const char *kapp_filename(void);
 const char *kapp_last_error(void);
@@ -395,17 +386,51 @@ int  mouse_wheel_delta(void);
 void mouse_move_rel(i32 dx, i32 dy);
 void mouse_set_button(int btn, int down);
 
-/* Read-only USB mass storage and shared ATA/USB sector routing. */
+/* USB mass storage and shared ATA/USB/AHCI sector routing. */
 void usb_rescan(void);
 int usb_count(void);
 u32 usb_sectors(int disk);
+u32 usb_generation(int disk);
+int usb_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void usb_fat_revoke(int disk);
 int usb_read(int disk, u32 lba, u8 count, void *buf);
+int usb_write(int disk,u32 lba,u8 count,const void *buf);
+int usb_sync(int disk);
+int usb_sense(int disk,u8 *key,u8 *asc,u8 *ascq);
+#if KV_STORAGE_LAB
+int usb_test_authorize(int disk,u32 start,u32 count);
+int usb_test_authorize_pair(int disk,u32 start,u32 count,u32 journal,u32 journal_count);
+void fat_lab(const char *mode,int cut);
+void storage_lab(const char *mode);
+#endif
 const char *usb_status(void);
+int ata_sync(int disk);
+int blk_sync(int disk);
 int blk_count(void);
 u32 blk_sectors(int disk);
 int blk_read(int disk, u32 lba, u8 count, void *buf);
 int blk_write(int disk, u32 lba, u8 count, const void *buf);
 int blk_is_usb(int disk);
+
+/* AHCI SATA: default RO; FAT WAL leases only, no installer/KvFS routing. */
+void ahci_init(void);
+int ahci_count(void);
+u32 ahci_sectors(int disk);
+const char *ahci_model(int disk);
+const char *ahci_status(int disk);
+int ahci_read(int disk,u32 lba,u8 count,void *buf);
+#define BLK_USB_BASE 4
+#define BLK_AHCI_BASE 12 /* eight stable USB IDs remain 4..11 */
+int blk_is_ahci(int disk);
+u32 ahci_generation(int disk);
+void ahci_rescan(void);
+int ahci_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void ahci_fat_revoke(int disk);
+int ahci_write(int disk,u32 lba,u8 count,const void *buf);
+int ahci_sync(int disk);
+u32 blk_generation(int disk);
+int blk_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void blk_fat_revoke(int disk);
 
 /* ---------- PCI bus ---------- */
 #define PCI_MAX_DEV 48

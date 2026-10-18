@@ -209,6 +209,8 @@ skip_hw:
     /* The disk: the system works without one, but there is nowhere to install applications */
     if (!safe_mode) {
         ata_init();
+        ahci_init();
+        kprintf("       AHCI: %d SATA disks (DMA, default RO)\n",ahci_count());
         if (ata_present()) {
             int d = ata_boot_drive();
             kprintf(T("       %s, %u MiB\n", "       %s, %u МиБ\n"), ata_model(d), ata_size_mb(d));
@@ -220,9 +222,9 @@ skip_hw:
                 step(T("Disk: KvFS mounted (applications persist)", "Диск: KvFS подключён (приложения сохраняются)"));
                 settings_load();   /* 2.0: language & co. survive reboots */
             } else if (m == -3) {
-                step(T("Disk: found but not formatted (format command)", "Диск: найден, но не размечен (команда format)"));
+                step(T("Disk: no KvFS signature; existing data may be present", "Диск: нет подписи KvFS; данные могут существовать"));
             } else {
-                kprintf(T("       code %d: %s\n", "       код %d: %s\n"), m, kvfs_error(m));
+                kprintf(T("       KvFS mount refused (code %d); disk may contain data\n", "       KvFS не подключена (код %d); на диске могут быть данные\n"),m);
                 step(T("Disk: found, filesystem not mounted", "Диск: найден, ФС не подключена"));
             }
         } else {

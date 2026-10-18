@@ -15,6 +15,7 @@ typedef int8_t   i8;
 typedef int32_t  i32;
 
 #define T(en, ru) (en)
+#define KV_VERSION "host-test"
 
 typedef struct { u8 sec, min, hour, day, month; u16 year; } rtc_time_t;
 void rtc_read(rtc_time_t *t);
@@ -27,12 +28,35 @@ u32  ata_sectors(int i);
 
 int blk_read(int disk, u32 lba, u8 count, void *buf);
 int blk_write(int disk, u32 lba, u8 count, const void *buf);
+int blk_sync(int disk);
+int ata_sync(int disk);
+int usb_write(int disk,u32 lba,u8 count,const void *buf);
+int usb_sync(int disk);
 int blk_count(void);
 u32 blk_sectors(int disk);
 int blk_is_usb(int disk);
+int blk_is_ahci(int disk);
+u32 blk_generation(int disk);
+int blk_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void blk_fat_revoke(int disk);
+u32 ahci_generation(int disk);
+void ahci_rescan(void);
+int ahci_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void ahci_fat_revoke(int disk);
+int ahci_write(int disk,u32 lba,u8 count,const void *buf);
+int ahci_sync(int disk);
+#define BLK_USB_BASE 4
+#define BLK_AHCI_BASE 12
+int ahci_count(void);
+u32 ahci_sectors(int disk);
+int ahci_read(int disk,u32 lba,u8 count,void *buf);
 void usb_rescan(void);
 int usb_count(void);
 u32 usb_sectors(int disk);
+u32 usb_generation(int disk);
+int usb_fat_authorize(int disk,u32 start,u32 count,u32 generation);
+void usb_fat_revoke(int disk);
+void kputs(const char *s);
 int usb_read(int disk, u32 lba, u8 count, void *buf);
 void ksnprintf(char *buf, size_t size, const char *fmt, ...);
 void *kmalloc(size_t s);
@@ -44,7 +68,9 @@ typedef struct { char name[24]; char *data; u32 size; int used; } rfile_t;
 rfile_t *ramfs_table(void);
 rfile_t *ramfs_find(const char *n);
 int ramfs_create(const char *n, const char *d, u32 s);
+int ramfs_write(const char *n, const char *d, u32 s);
 int ramfs_delete(const char *n);
+int ramfs_rename(const char *from,const char *to);
 
 int kvfs_mounted(void);
 int kvfs_exists(const char *n);
@@ -52,6 +78,7 @@ u32 kvfs_size(const char *n);
 int kvfs_read(const char *n, void *b, u32 m);
 int kvfs_write(const char *n, const void *d, u32 s, int e);
 int kvfs_delete(const char *n);
+int kvfs_rename(const char *from,const char *to);
 int kvfs_list(int i, char *n, u32 *s, int *e);
 void kvfs_stats(u32 *mb, u32 *kb, u32 *f);
 #endif

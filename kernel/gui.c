@@ -6,6 +6,7 @@
 #include "kernel.h"
 #include "vfs.h"
 #include "filemgr.h"
+#include "gui_store_policy.h"
 #include "mcc.h"
 
 #define MAX_WIN 8
@@ -30,6 +31,10 @@ static int      win_count = 0;
 static int      dragging = -1;
 static i32      drag_dx, drag_dy;
 static int      running = 0;
+static int store_format_confirm;
+static store_format_request_t store_format_request;
+/* Acknowledged input state for bounded emulator acceptance tests. */
+static volatile int gui_mouse_seen;
 static u32     *backbuf = NULL;
 static u32     *desktop_cache = NULL; /* wallpaper, logo and desktop icons */
 static int      desktop_cache_valid = 0;
@@ -254,6 +259,9 @@ static int win_open(const char *title, int app, i32 x, i32 y, i32 w, i32 h, u32 
 
 static void win_close(int id) {
     if (id < 0 || id >= MAX_WIN || !wins[id].used) return;
+    if (wins[id].app == APP_USER) kapp_unload();
+    if(wins[id].app==APP_FILES && fm_input_active())fm_input_cancel();
+    if(wins[id].app==APP_STORE)store_format_confirm=0;
     hit_remove_window(id);
     wins[id].used = 0;
     int pos = -1;
@@ -369,6 +377,9 @@ static void app_sysmon(window_t *v, i32 cx, i32 cy, i32 cw) {
 #define W_FM_VIEWCLS 716
 #define W_FM_YES     717
 #define W_FM_NO      718
+#define W_FM_RENAME  719
+#define W_FM_APPLY   720
+#define W_FM_CANCEL  721
 
 static i32 fm_rows_visible(window_t *v) {
     i32 body = v->h - TITLE_H - 34 - 30 - 26;   /* toolbar, path, footer */
@@ -441,7 +452,7 @@ static void fm_draw_pane(window_t *v, int win, int idx, i32 px, i32 py, i32 pw, 
     if (name_chars < 6) name_chars = 6;
 
     if (!count) {
-        fb_text(px + 10, y + 6, T("(empty)", "(пусто)"), C_TEXT_DIM, 0xFFFFFFFF);
+        fb_text(px + 10, y + 6, fm_listing_current(idx)?T("(empty)", "(пусто)"):T("Listing unavailable; refresh", "Список недоступен; обновите"), C_TEXT_DIM, 0xFFFFFFFF);
     }
 
     for (int r = 0; r < rows; r++) {
@@ -595,6 +606,23 @@ static void fm_draw_confirm(int win, i32 cx, i32 cy, i32 cw, i32 ch) {
     widget_chip(win, W_FM_NO,  x + w / 2 + 10,  y + h - 34, 100, 26, T("Cancel", "Отмена"), 0);
 }
 
+/* Mouse-first name entry, shared by rename and new-folder actions. */
+static void fm_draw_input(int win,i32 cx,i32 cy,i32 cw,i32 ch) {
+    i32 w=460,h=174;if(w>cw-20)w=cw-20;
+    i32 x=cx+(cw-w)/2,y=cy+(ch-h)/2;
+    fb_fill(x+4,y+4,w,h,C_BLACK);fb_fill(x,y,w,h,C_WHITE);fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x,y,w,22,C_ACCENT);fb_text_center(x,y+3,w,fm_input_title(),C_WHITE,0xFFFFFFFF);
+    char text[VFS_MAX_PATH];fit_name(text,sizeof(text),fm_input_original(),(u32)((w-24)/8));
+    fb_text(x+12,y+32,text,C_TEXT_DIM,0xFFFFFFFF);
+    u32 bg=fm_input_selected()?C_ACCENT:C_WHITE,fg=fm_input_selected()?C_WHITE:C_TEXT;
+    fb_fill(x+12,y+54,w-24,28,bg);fb_rect(x+12,y+54,w-24,28,C_ACCENT);
+    fit_name(text,sizeof(text),fm_input_text(),(u32)((w-36)/8));fb_text(x+18,y+60,text,fg,0xFFFFFFFF);
+    fit_name(text,sizeof(text),fm_status_text(),(u32)((w-24)/8));
+    fb_text(x+12,y+98,text,fm_status_colour()?fm_status_colour():C_TEXT_DIM,0xFFFFFFFF);
+    widget_chip(win,W_FM_APPLY,x+w/2-110,y+h-36,100,26,T("Apply", "Применить"),1);
+    widget_chip(win,W_FM_CANCEL,x+w/2+10,y+h-36,100,26,T("Cancel", "Отмена"),0);
+}
+
 static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
     int win = (int)(v - wins);
     i32 ch = v->h - TITLE_H - 2;
@@ -605,10 +633,11 @@ static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 tx = cx + 8, ty = cy + 6;
     widget_chip(win, W_FM_UP,      tx,       ty, 46, 24, T("Up", "Вверх"), 0);
     widget_chip(win, W_FM_VOLUME,  tx + 52,  ty, 74, 24, T("Volume", "Том"), 0);
-    widget_chip(win, W_FM_COPY,    tx + 132, ty, 92, 24, T("Copy F5", "Копир. F5"), 0);
-    widget_chip(win, W_FM_MKDIR,   tx + 230, ty, 92, 24, T("Folder F7", "Каталог F7"), 0);
-    widget_chip(win, W_FM_DEL,     tx + 328, ty, 92, 24, T("Delete F8", "Удалить F8"), 0);
-    widget_chip(win, W_FM_REFRESH, tx + 426, ty, 76, 24, T("Refresh", "Обновить"), 0);
+    widget_chip(win, W_FM_COPY,    tx + 132, ty, 84, 24, T("Copy", "Копировать"), 0);
+    widget_chip(win, W_FM_MKDIR,   tx + 222, ty, 84, 24, T("Folder", "Каталог"), 0);
+    widget_chip(win, W_FM_DEL,     tx + 312, ty, 84, 24, T("Delete", "Удалить"), 0);
+    widget_chip(win, W_FM_RENAME, tx + 402, ty, 104, 24, T("Rename", "Переимен."), 0);
+    widget_chip(win, W_FM_REFRESH, tx + 512, ty, 76, 24, T("Refresh", "Обновить"), 0);
 
     /* the two panes */
     i32 top = cy + 36;
@@ -623,18 +652,12 @@ static void app_files(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 sy = cy + ch - 22;
     fb_fill(cx + 1, sy, cw - 2, 21, fb_rgb(240, 242, 247));
 
-    if (fm_input_active()) {
-        char line[160];
-        ksnprintf(line, sizeof(line), T("New folder name: %s_", "Имя нового каталога: %s_"),
-                  fm_input_text());
-        fb_text(cx + 10, sy + 3, line, C_ACCENT, 0xFFFFFFFF);
-    } else {
-        u32 col = fm_status_colour();
-        fb_text(cx + 10, sy + 3, fm_status_text(), col ? col : C_TEXT_DIM, 0xFFFFFFFF);
-    }
+    u32 col=fm_status_colour();
+    fb_text(cx+10,sy+3,fm_status_text(),col?col:C_TEXT_DIM,0xFFFFFFFF);
 
     if (fm_view_is_open())      fm_draw_view(v, win, cx, cy, cw, ch);
     if (fm_confirm_pending())   fm_draw_confirm(win, cx, cy, cw, ch);
+    if(fm_input_active())fm_draw_input(win,cx,cy,cw,ch);
 }
 
 /* a mini terminal: shows the output of the last command */
@@ -991,13 +1014,47 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
  *  Shows which disk was found, whether it is formatted, and the list
  *  of installed programs. They are launched and removed from here too.
  * ============================================================ */
-static char store_msg[80];
+static char store_msg[160];
 static u64  store_msg_until = 0;
 
 static void store_say(const char *m) {
     strncpy(store_msg, m, sizeof(store_msg));
     store_msg[sizeof(store_msg) - 1] = 0;
     store_msg_until = timer_ticks() + timer_hz() * 4;
+}
+
+/* Explicit validation only: no writes, retries or unrelated USB/AHCI rescan. */
+static void store_mount_check(void) {
+    int r=kvfs_mount();
+    if(!r && !vfs_find("kv"))kvfs_vfs_register();
+    if(!r)store_say(T("KvFS checked and mounted", "KvFS проверена и подключена"));
+    else if(r==-1)store_say(T("No boot ATA disk; no writes", "Нет загрузочного ATA диска; записи нет"));
+    else if(r==-2)store_say(T("KvFS read I/O error; do not format", "Ошибка чтения KvFS; не форматируйте"));
+    else if(r==-3)store_say(T("No KvFS signature; other data may exist", "Нет подписи KvFS; другие данные возможны"));
+    else store_say(T("KvFS validation refused; no writes", "Проверка KvFS отказала; записи нет"));
+}
+static void store_format_apply(void) {
+    store_format_confirm=0;
+    int d=ata_boot_drive();
+    if(!ata_present() || !store_format_valid(&store_format_request,d,d<0?0:ata_sectors(d),vfs_generation())) {
+        store_say(T("Disk/namespace changed; format cancelled", "Диск/namespace изменился; формат отменён"));return;
+    }
+    int r=kvfs_format();
+    if(!r && !vfs_find("kv"))kvfs_vfs_register();
+    store_say(!r?T("KvFS formatted", "KvFS размечена"):T("Format failed; disk state uncertain", "Ошибка форматирования; состояние диска неизвестно"));
+}
+static void store_draw_format(int win,i32 cx,i32 cy,i32 cw,i32 ch) {
+    i32 w=460,h=188;if(w>cw-20)w=cw-20;
+    i32 x=cx+(cw-w)/2,y=cy+(ch-h)/2;
+    fb_fill(x+4,y+4,w,h,C_BLACK);fb_fill(x,y,w,h,C_WHITE);fb_rect(x,y,w,h,C_RED);
+    fb_fill(x,y,w,22,C_RED);fb_text_center(x,y+3,w,T("Confirm destructive format", "Подтвердите стирание"),C_WHITE,0xFFFFFFFF);
+    char disk[96];ksnprintf(disk,sizeof(disk),T("Boot ATA disk %u (%u MiB)", "Загрузочный ATA диск %u (%u МиБ)"),(u32)store_format_request.drive,store_format_request.sectors>>11);
+    fb_text_center(x,y+35,w,disk,C_TEXT,0xFFFFFFFF);
+    fb_text_center(x,y+60,w,T("All KvFS file records will be erased.", "Все записи файлов KvFS будут стёрты."),C_RED,0xFFFFFFFF);
+    fb_text_center(x,y+83,w,T("This is NOT a recovery operation.", "Это НЕ операция восстановления."),C_TEXT,0xFFFFFFFF);
+    fb_text_center(x,y+104,w,T("Cancel unless erasing this disk is intended.", "Отмените, если не намерены стереть диск."),C_TEXT_DIM,0xFFFFFFFF);
+    widget_chip(win,W_ST_FORMAT_YES,x+w/2-110,y+h-36,100,26,T("Erase", "Стереть"),1);
+    widget_chip(win,W_ST_FORMAT_NO,x+w/2+10,y+h-36,100,26,T("Cancel", "Отмена"),0);
 }
 
 /* The list of applications that reached ramfs from the boot image.
@@ -1040,6 +1097,7 @@ static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
     int wid = (int)(v - wins);
     i32 x = cx + 12, y = cy + 10;
     char line[96];
+    if(store_format_confirm){store_draw_format(wid,cx,cy,cw,v->h-TITLE_H-2);return;}
 
     /* --- disk information --- */
     if (!ata_present()) {
@@ -1080,14 +1138,12 @@ static void app_store(window_t *v, i32 cx, i32 cy, i32 cw) {
     }
 
     if (!kvfs_mounted()) {
-        fb_text(x, y, T("No filesystem on the disk.", "Файловая система не размечена."), C_YELLOW, 0xFFFFFFFF);
-        y += 24;
-        fb_round_fill(x, y, 210, 26, C_ACCENT);
-        fb_text(x + 12, y + 5, T("Format disk (KvFS)", "Разметить диск (KvFS)"), C_WHITE, 0xFFFFFFFF);
-        hit_add(wid, W_ST_FORMAT, x, y, 210, 26);
-        y += 32;
-        fb_text(x, y, T("All data on the disk will be lost.", "Данные на диске будут потеряны."), C_TEXT_DIM, 0xFFFFFFFF);
-        y += 26;
+        fb_text(x,y,T("KvFS is not mounted.", "KvFS не подключена."),C_YELLOW,0xFFFFFFFF);y+=20;
+        fb_text(x,y,T("Data may exist; formatting is not recovery.", "Данные могут быть; форматирование не восстановление."),C_TEXT_DIM,0xFFFFFFFF);y+=26;
+        widget_chip(wid,W_ST_REFRESH,x,y,230,26,T("Check / mount KvFS", "Проверить / подключить"),0);
+        widget_chip(wid,W_ST_FORMAT,x+238,y,240,26,T("Erase / format...", "Стереть / разметить..."),0);y+=34;
+        if(store_msg[0] && timer_ticks()<store_msg_until)fb_text(x,y,store_msg,C_ACCENT,0xFFFFFFFF);
+        y+=24;
 
         /* With no disk the programs still run straight from the image.
            They do not need installing - only saving files does. */
@@ -1192,6 +1248,10 @@ static void app_user(window_t *v, i32 cx, i32 cy, i32 cw) {
         fb_fill(cx, cy + uh, cw, sh, fb_rgb(238, 242, 248));
         fb_fill(cx, cy + uh, cw, 1, fb_rgb(200, 208, 220));
         const char *st = kapp_status();
+        char trust[192];
+        ksnprintf(trust,sizeof(trust),kapp_isolated()?T("ABI4/CPL3 | %s","ABI4/CPL3 | %s"):
+                  T("Trusted/kernel | %s","Доверенное/ядро | %s"),st && st[0]?st:kapp_name());
+        st=trust;
         fb_text(cx + 8, cy + uh + 2, (st && st[0]) ? st : kapp_name(),
                 C_TEXT_DIM, 0xFFFFFFFF);
     }
@@ -1211,12 +1271,12 @@ static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
         T("Notepad and C Workshop:", "Блокнот и C-мастерская:"),
         T("Click to position the text cursor.", "Щелчок ставит текстовый курсор."),
         T("Drag across text to select it.", "Протяжка мышью выделяет текст."),
-        T("Use Copy / Cut / Paste / Undo buttons.", "Кнопки: Копия / Вырезать / Вставить / Отмена."),
+        T("Use Copy / Cut / Paste / Undo / Redo buttons.", "Кнопки: Копия / Вырезать / Вставить / Отмена / Повтор."),
         T("Scroll with the wheel or draggable scrollbars.", "Колесо мыши и полосы прокручивают текст."),
         T("Open and Save as show clickable file dialogs.", "Открыть и Сохранить как — диалоги с файлами."),
         T("Unsaved changes require confirmation.", "Несохранённый текст защищён подтверждением."),
         T("Workshop: click Build, Run, Help.", "Мастерская: кнопки Собрать, Запуск, Справка."),
-        T("Ctrl+C/V/X/A/Z/S are optional shortcuts.", "Ctrl+C/V/X/A/Z/S — необязательные сочетания."),
+        T("Ctrl+C/V/X/A/Z/Y/S are optional shortcuts.", "Ctrl+C/V/X/A/Z/Y/S — необязательные сочетания."),
         "",
         T("Optional pointer control without a mouse:", "Если мыши нет — необязательный NumPad:"),
         T("Enable MouseKeys in KVANT or with NumLock.", "Включите мышь с NumPad в КВАНТ или NumLock."),
@@ -1813,13 +1873,13 @@ static void dev_new(void) {
     ed_name_mode = dev_help = 0;
     strncpy(ed_name, "hello.c", sizeof(ed_name));
     text_set(&editor->doc,dev_template,(u32)strlen(dev_template));
-    ed_dirty=1;
+    ed_dirty=1; text_history_reset(&editor->doc,&editor->undo);
     ed_msg(T("Click Build or Run. Save to disk before reboot.", "Нажмите Собрать или Запуск. Сохраните на диск до перезапуска."));
 }
 
 static char dev_output[24];
 static int dev_build(void) {
-    static u8 binary[MCC_OUTPUT_MAX];
+    static u8 binary[MCC_ISOLATED_OUTPUT_MAX];
     u32 size = 0, len = (u32)strlen(ed_name);
     if (len < 3 || len > 20 || strcmp(ed_name + len - 2, ".c")) {
         ed_msg(T("Name: up to 18 characters + .c", "Имя: до 18 символов и расширение .c")); return 0;
@@ -1831,7 +1891,7 @@ static int dev_build(void) {
                    "Исходник: %u байт; компилятор до %u. Текст оставлен, редактирование и сохранение доступны."),source_size,MCC_SOURCE_MAX);
         ed_msg(message); return 0;
     }
-    if (mcc_compile(editor_text, ed_name, binary, sizeof(binary), &size) < 0) {
+    if (mcc_compile_target(editor_text, ed_name, binary, sizeof(binary), &size, dev_isolated) < 0) {
         char message[96];
         int row = mcc_error_line() - 1;
         ed_cy = row < 0 ? 0 : row >= ed_lines ? ed_lines - 1 : row;
@@ -1994,9 +2054,18 @@ static void settings_apply(void) {
 
 /* A click inside the file manager */
 static int files_click(int id, i32 mx, i32 my) {
+    static u64 last_tick;
+    static int last_row=-1,last_pane=-1;
+    static u32 last_listing,last_namespace;
     int w = hit_test(id, mx, my);
+    if(w<W_FM_ROW0)last_row=last_pane=-1; /* toolbar/background interrupts a double click */
     if (w < 0) return 0;
 
+    if(fm_input_active()) {
+        if(w==W_FM_APPLY)fm_input_submit();
+        else if(w==W_FM_CANCEL)fm_input_cancel();
+        return 1; /* toolbar/panes may not retarget an open name dialog */
+    }
     /* the modal question comes first: nothing else may be touched */
     if (fm_confirm_pending()) {
         if (w == W_FM_YES) { fm_confirm_yes(); return 1; }
@@ -2013,6 +2082,7 @@ static int files_click(int id, i32 mx, i32 my) {
         case W_FM_VOLUME:  fm_next_volume(); return 1;
         case W_FM_COPY:    fm_do_copy();     return 1;
         case W_FM_MKDIR:   fm_ask_mkdir();   return 1;
+        case W_FM_RENAME:  fm_ask_rename();  return 1;
         case W_FM_DEL:     fm_ask_delete();  return 1;
         case W_FM_REFRESH: fm_refresh(); fm_say(T("Refreshed", "Обновлено"), 0); return 1;
         case W_FM_PANE0:   fm_set_active(0); return 1;
@@ -2025,15 +2095,16 @@ static int files_click(int id, i32 mx, i32 my) {
         int pane = rel / 512;
         int row  = rel % 512;
 
-        static u64 last_tick = 0;
-        static int last_row = -1, last_pane = -1;
-
+        if(pane>1 || !fm_pane_item(pane,row))return 1;
+        u32 listing=fm_listing_epoch(),namespace=vfs_generation();
         fm_set_active(pane);
         fm_pane_set_sel(pane, row);
 
         u64 now = timer_ticks();
-        if (row == last_row && pane == last_pane && now - last_tick < 400)
-            fm_activate();
+        if (row == last_row && pane == last_pane && listing==last_listing &&
+            namespace==last_namespace && now - last_tick < 400)fm_activate();
+        /* Capture the pre-activate identity: entering a directory changes it. */
+        last_listing=listing;last_namespace=namespace;
         last_tick = now; last_row = row; last_pane = pane;
         return 1;
     }
@@ -2155,6 +2226,11 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                 if (mx < ht->x || mx >= ht->x + ht->w) continue;
                 if (my < ht->y || my >= ht->y + ht->h) continue;
 
+                if(store_format_confirm) {
+                    if(ht->id==W_ST_FORMAT_NO){store_format_confirm=0;store_say(T("Format cancelled", "Форматирование отменено"));}
+                    else if(ht->id==W_ST_FORMAT_YES)store_format_apply();
+                    return;
+                }
                 if (ht->id == W_ST_SETUP || ht->id == W_ST_SETUP_KEEP) {
                     /* Installation takes seconds: the message is drawn
                        beforehand, otherwise the screen freezes with no
@@ -2166,16 +2242,13 @@ static void handle_click(i32 mx, i32 my, int pressed) {
                     if (rc == 0) { beep(880, 60); beep(1320, 90); }
                     return;
                 }
-                if (ht->id == W_ST_FORMAT) {
-                    int rc = kvfs_format();
-                    store_say(rc == 0 ? T("Disk formatted, KvFS ready", "Диск размечен, KvFS готова") : kvfs_error(rc));
-                    return;
+                if(ht->id==W_ST_FORMAT) {
+                    int d=ata_boot_drive();
+                    if(!ata_present() || d<0 || !ata_sectors(d)) {store_say(T("No boot ATA disk", "Нет загрузочного ATA диска"));return;}
+                    store_format_request=(store_format_request_t){d,ata_sectors(d),vfs_generation()};
+                    store_format_confirm=1;return;
                 }
-                if (ht->id == W_ST_REFRESH) {
-                    kvfs_mount();
-                    store_say(T("List refreshed", "Список обновлён"));
-                    return;
-                }
+                if(ht->id==W_ST_REFRESH){store_mount_check();return;}
                 if (ht->id >= W_ST_RAM0) {
                     rfile_t *tbl = ramfs_table();
                     int ri = ht->id - W_ST_RAM0;
@@ -2272,8 +2345,14 @@ static void handle_drag(i32 mx, i32 my) {
     if (v->y > (i32)scr_h - PANEL_H - TITLE_H) v->y = (i32)scr_h - PANEL_H - TITLE_H;
 }
 
-static void handle_key(int c) {
+static void handle_key(kbd_event_t event) {
+    int c=event.key;
+    if(c==KEY_LAYOUT) { damage_full(); return; }
     int top = top_window();
+    if(top>=0 && wins[top].app==APP_STORE && store_format_confirm) {
+        if(c==27){store_format_confirm=0;store_say(T("Format cancelled", "Форматирование отменено"));}
+        return; /* Enter never confirms an erase. */
+    }
 
     if(launcher_open) {
         if(c==27) { launcher_open=0; damage_full(); }
@@ -2299,6 +2378,8 @@ static void handle_key(int c) {
         int rows = fm_rows_visible(v);
         if (c == 27 && !fm_view_is_open() && !fm_confirm_pending() && !fm_input_active()) {
             /* No editor/viewer dialog: Escape leaves the window open. */
+        } else if(fm_input_active() && event.codepoint>=128) {
+            fm_input_codepoint(event.codepoint);return;
         } else if (fm_key(c, rows)) {
             return;
         }
@@ -2306,7 +2387,7 @@ static void handle_key(int c) {
 
     if(top>=0 && (wins[top].app==APP_EDIT || wins[top].app==APP_DEV)) {
         editor=wins[top].app==APP_DEV?&dev_editor:&note_editor;
-        ed_key(top,c); return;
+        ed_key(top,c,event.codepoint,event.modifiers,event.physical); return;
     }
 
     /* when the terminal is open and on top, input goes there */
@@ -2499,13 +2580,15 @@ int gui_run(void) {
 
     open_app(APP_ABOUT);
 
+    gui_mouse_seen=0;
     running = 1;
     int prev_btn = 0;
 
     while (running) {
         /* keyboard input */
-        int c;
-        while ((c = kbd_getchar_nb()) >= 0) {
+        kbd_event_t event;
+        while(kbd_getevent_nb(&event)) {
+            int c=event.key;
             gui_snapshot_t before;
             gui_snapshot_take(&before);
 
@@ -2526,7 +2609,7 @@ int gui_run(void) {
             }
 
             int content_win = top_window();
-            handle_key(c);
+            handle_key(event);
             gui_damage_after_input(&before, content_win);
         }
 
@@ -2577,6 +2660,7 @@ int gui_run(void) {
         int wheel=mouse_wheel_delta();
         if(wheel && !launcher_open) ed_wheel(mx,my,wheel);
         prev_btn = btn;
+        gui_mouse_seen=btn;
         seen_mx = mx; seen_my = my;
 
         /* Apps receive one elapsed-time update per rendered frame, while
@@ -2667,6 +2751,9 @@ int gui_run(void) {
         }
     }
 
+    store_format_confirm=0;
+    if(fm_input_active())fm_input_cancel();
+    kapp_unload(); /* releases isolated pages/grants even on GUI exit */
     fb_clear_clip();
     fb_set_target(NULL);
     if (desktop_cache) { kfree(desktop_cache); desktop_cache = NULL; }

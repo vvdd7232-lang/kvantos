@@ -1,0 +1,23 @@
+name: Предложение
+description: Полезное изменение с явными границами и проверками
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какая задача решается
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Предлагаемый scope и что в него не входит
+      description: Укажите связь с ROADMAP и существующую функциональность, чтобы не реализовывать её повторно.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Как проверить готовность
+      description: Ожидаемые сценарии BIOS32/UEFI64, негативные случаи и ограничения. Hardware qualification — отдельно от QEMU proof.
+    validations:
+      required: true

@@ -1,0 +1,172 @@
+--- a/hw/usb/dev-hub.c
++++ b/hw/usb/dev-hub.c
+@@ -48,0 +49 @@
++    uint32_t lab_fs_ports; /* test-only forced FS ports; never stock defaults */
+@@ -155,0 +157,31 @@
++/* Test-only HS routing model, NOT a transaction translator. The stock
++ * usb-hub type remains FS-only; select this explicit lab type for HS tests. */
++static const USBDescIface desc_iface_hub_hs = {
++    .bInterfaceNumber = 0, .bNumEndpoints = 1, .bInterfaceClass = USB_CLASS_HUB,
++    .eps = (USBDescEndpoint[]) {{
++        .bEndpointAddress = USB_DIR_IN | 1,
++        .bmAttributes = USB_ENDPOINT_XFER_INT,
++        .wMaxPacketSize = 2, .bInterval = 12,
++    }},
++};
++static const USBDescDevice desc_device_hub_hs = {
++    .bcdUSB = 0x0200, .bDeviceClass = USB_CLASS_HUB, .bDeviceProtocol = 1,
++    .bMaxPacketSize0 = 64, .bNumConfigurations = 1,
++    .confs = (USBDescConfig[]) {{
++        .bNumInterfaces = 1, .bConfigurationValue = 1,
++        .bmAttributes = USB_CFG_ATT_ONE | USB_CFG_ATT_SELFPOWER,
++        .nif = 1, .ifs = &desc_iface_hub_hs,
++    }},
++};
++static const USBDescStrings desc_strings_hs = {
++    [STR_MANUFACTURER] = "KvantOS test fixture",
++    [STR_PRODUCT] = "LAB HS-only hub (NO TT)",
++    [STR_SERIALNUMBER] = "M35B",
++};
++static const USBDesc desc_hub_hs = {
++    .id = { .idVendor = 0x0409, .idProduct = 0x55ab, .bcdDevice = 0x0100,
++            .iManufacturer = STR_MANUFACTURER, .iProduct = STR_PRODUCT,
++            .iSerialNumber = STR_SERIALNUMBER },
++    .full = &desc_device_hub, .high = &desc_device_hub_hs, .str = desc_strings_hs,
++};
++
+@@ -203,0 +236,5 @@
++        if (port->port.dev->speed == USB_SPEED_HIGH) {
++            usb_hub_port_set(port, PORT_STAT_HIGH_SPEED);
++        } else {
++            usb_hub_port_clear(port, PORT_STAT_HIGH_SPEED);
++        }
+@@ -508 +545,2 @@
+-            limit = limit + DIV_ROUND_UP(s->num_ports, 8);
++            limit = limit + DIV_ROUND_UP(s->num_ports +
++                    (usb_device_get_usb_desc(dev)->high ? 1 : 0), 8);
+@@ -590,0 +629,15 @@
++/* Isolated LAB helper; this is routing validation, not a physical TT. */
++int usb_kvantos_lab_tt_route(USBDevice *dev, unsigned hub, unsigned port)
++{
++    USBPort *p = dev->port;
++    if (!p || p->ops != &usb_hub_port_ops) {
++        return 0;
++    }
++    USBHubState *s = p->opaque;
++    if (!object_dynamic_cast(OBJECT(s), "kvantos-lab-async-tt-hub")) {
++        return 0;
++    }
++    return s->dev.speed == USB_SPEED_HIGH && s->dev.addr == hub &&
++           p->index + 1 == port && (s->ports[p->index].wPortStatus & PORT_STAT_ENABLE) ? 1 : -1;
++}
++
+@@ -617 +670,2 @@
+-                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL);
++                          USB_SPEED_MASK_LOW | USB_SPEED_MASK_FULL |
++                          (usb_device_get_usb_desc(dev)->high && !(s->lab_fs_ports & (1u << i)) ? USB_SPEED_MASK_HIGH : 0));
+@@ -698,0 +753,27 @@
++static void usb_lab_hs_hub_class_init(ObjectClass *klass, void *data)
++{
++    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
++    uc->usb_desc = &desc_hub_hs;
++    uc->handle_attach = usb_desc_attach;
++    uc->product_desc = "KvantOS LAB HS-only hub (NO TT)";
++}
++static const TypeInfo lab_hs_hub_info = {
++    .name = "kvantos-lab-hs-hub", .parent = TYPE_USB_HUB,
++    .class_init = usb_lab_hs_hub_class_init,
++};
++
++/* TD-level SS/CS model only; no packet bandwidth, TT wire or migration proof. */
++static const Property usb_lab_tt_properties[] = {
++    DEFINE_PROP_UINT32("lab-fs-ports", USBHubState, lab_fs_ports, 1),
++};
++static void usb_lab_tt_class_init(ObjectClass *klass, void *data)
++{
++    USBDeviceClass *uc = USB_DEVICE_CLASS(klass);
++    uc->product_desc = "KvantOS LAB async TT (TD model)";
++    device_class_set_props(DEVICE_CLASS(klass), usb_lab_tt_properties);
++}
++static const TypeInfo lab_tt_info = {
++    .name = "kvantos-lab-async-tt-hub", .parent = "kvantos-lab-hs-hub",
++    .class_init = usb_lab_tt_class_init,
++};
++
+@@ -701,0 +783,2 @@
++    type_register_static(&lab_hs_hub_info);
++    type_register_static(&lab_tt_info);
+--- a/hw/usb/hcd-ehci.c
++++ b/hw/usb/hcd-ehci.c
+@@ -1281,0 +1282,12 @@
++    if (p->lab_tt_phase == 3) {
++        if (p->packet.status == USB_RET_SUCCESS || p->packet.status == USB_RET_NAK) {
++            q->qh.token &= ~QTD_TOKEN_SPLITXSTATE;
++        }
++        trace_usb_ehci_lab_tt(q->dev->addr, get_field(q->qh.epcap, QH_EPCAP_HUBADDR),
++                             get_field(q->qh.epcap, QH_EPCAP_PORTNUM),
++                             get_field(q->qh.epchar, QH_EPCHAR_EP), "CS result");
++        if (p->packet.status == USB_RET_NAK) {
++            p->lab_tt_phase = 0;
++        }
++    }
++
+@@ -1382,0 +1395,42 @@
++    }
++
++    if (p->queue->dev->speed == USB_SPEED_FULL) {
++        EHCIQueue *q = p->queue;
++        unsigned hub = get_field(q->qh.epcap, QH_EPCAP_HUBADDR);
++        unsigned port = get_field(q->qh.epcap, QH_EPCAP_PORTNUM);
++        int route = usb_kvantos_lab_tt_route(q->dev, hub, port);
++        if (route) {
++            unsigned mps = get_field(q->qh.epchar, QH_EPCHAR_MPLEN);
++            bool valid = route > 0 && q->async &&
++                get_field(q->qh.epchar, QH_EPCHAR_EPS) == 0 &&
++                !!(q->qh.epchar & QH_EPCHAR_C) == (endp == 0) &&
++                (q->qh.epcap & 0xffff) == 0 &&
++                get_field(q->qh.epcap, QH_EPCAP_MULT) == 1 &&
++                (endp ? mps == ep->max_packet_size :
++                        (mps == 8 || mps == 16 || mps == 32 || mps == 64));
++            if (!valid) {
++                trace_usb_ehci_lab_tt(q->dev->addr, hub, port, endp, "BAD route/QH");
++                p->packet.status = USB_RET_IOERROR;
++                return 1;
++            }
++            if (!p->lab_tt_phase) {
++                p->lab_tt_phase = 1;
++                p->lab_tt_frame = q->ehci->frindex;
++                q->qh.token |= QTD_TOKEN_SPLITXSTATE;
++                trace_usb_ehci_lab_tt(q->dev->addr, hub, port, endp, "SS ACK");
++                p->packet.status = USB_RET_NAK;
++                return 1;
++            }
++            if (p->lab_tt_phase == 1) {
++                p->lab_tt_phase = 2;
++                trace_usb_ehci_lab_tt(q->dev->addr, hub, port, endp, "CS NYET");
++                p->packet.status = USB_RET_NAK;
++                return 1;
++            }
++            if (p->lab_tt_phase == 2 &&
++                ((q->ehci->frindex - p->lab_tt_frame) & 0x3fff) < 8) {
++                p->packet.status = USB_RET_NAK;
++                return 1;
++            }
++            p->lab_tt_phase = 3;
++        }
+--- a/hw/usb/hcd-ehci.h
++++ b/hw/usb/hcd-ehci.h
+@@ -228,0 +229,2 @@
++    uint8_t lab_tt_phase;
++    uint32_t lab_tt_frame;
+--- a/include/hw/usb.h
++++ b/include/hw/usb.h
+@@ -594,0 +595,3 @@
++/* Optional KvantOS LAB fixture, not a general QEMU TT API. */
++int usb_kvantos_lab_tt_route(USBDevice *dev, unsigned hub, unsigned port);
++
+--- a/hw/usb/trace-events
++++ b/hw/usb/trace-events
+@@ -370,0 +371,3 @@
++
++# Explicit KvantOS async TT LAB (TD-level, not wire emulation)
++usb_ehci_lab_tt(unsigned dev, unsigned hub, unsigned port, unsigned ep, const char *phase) "dev %u hub %u port %u ep %u %s"

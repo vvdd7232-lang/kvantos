@@ -153,3 +153,153 @@ across 128 rows, and 25000 randomized edits. The maximum empty-row case is
 not an extra line cap: it follows from the byte pool and one byte per newline.
 `text_model.py` shares the guest layout with both Python GUI helpers.
 Historical RELEASE/AUDIT descriptions refer to their original tagged builds.
+
+
+## Editor history development (3.1.4-dev)
+
+`editor-smoke.py` now checks separate Undo (widget 77) and Redo (100), multiple
+steps, Ctrl+Z/Y, saved/dirty checkpoint restoration, a new edit after Undo,
+independent Workshop/Notepad histories, reset on open and actual KvFS bytes.
+The host model covers the 64-entry/128-KiB budgets, full-document exchanges,
+eviction, failed edits preserving redo, revision rollover and 25000 edits.
+The shared ctypes history layout is in `text_model.py`.
+
+PR workflow additionally installs QEMU/OVMF and runs the model/RAMFS sanitizers,
+image validation and BIOS/UEFI main-ISO boot. Running these commands locally
+is not evidence of a successful remote Actions run; the development branch
+has not been pushed or published.
+
+
+### M1.2: Russian input, find/replace and truthful storage status
+
+```
+make -C tests/mcc CC=gcc-12 input editors ramfs
+python3 tests/boot/editor-input-smoke.py
+USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
+```
+
+Input smoke needs Pillow in addition to QEMU/OVMF. Each script runs both kernels
+unless `MCC_ARCH64=0` / `1` is set. It uses measured widget input, disposable image
+files only and actual scan-code delivery, not guest-memory injection. EN/RU,
+Alt+Shift, Caps/Shift, ё/Ё/№, Ctrl+H versus Ctrl+Backspace, physical filename/shell
+compatibility, UTF-8 fields, forward/backward/wrap, one/all replacement, Undo/Redo,
+independent editors, clipboard, diskless/full-directory saves, 640x480 atomic
+line-limit failure and reboot/reopen are covered. BIOS additionally installs with
+`setup --yes --keep` on its private disk and reboots without the CD, validating
+the embedded installed GRUB path. No physical disk is touched. No-disk and disk-full
+paths must not claim successful persistent storage. USB smoke covers explicit
+Keep: KvFS, its no-disk refusal, deferred writes and unchanged source hashes.
+
+These tests do not prove KvFS crash consistency, real USB hardware, or VirtualBox
+compatibility. Normal-kernel FAT/USB remains read-only. New PR workflow is local configuration,
+not evidence of a completed remote Actions run.
+
+
+### M2.1 storage groundwork (not FAT32 save completion)
+
+See [storage status and reproduction](../../docs/STORAGE-M2.md).
+`make -C tests/mcc CC=gcc-12 storage` runs ASan/UBSan BOT/COW tests. The normal
+image also supports `python3 tests/boot/kvfs-write-smoke.py`: injected backend
+flush/metadata errors, GUI dirty/history preservation, mount fencing and old-file
+readback after reboot. `STORAGE_LAB=1` is only for explicitly marked disposable images: transport
+scratch or the FAT-file lab below. Release packaging refuses that mode; PR lab
+jobs retain logs only. Production USB/FAT writes and editor destination selection
+are not enabled. GUI test clicks await actual press/release acknowledgement,
+not an assumed 100 ms pulse. Each click is sent once at measured coordinates;
+there are no blind retry clicks.
+
+### M2.2b actual FAT-file/recovery lab (not physical USB support)
+
+`make CC=gcc-12 STORAGE_LAB=1 iso` creates a deliberately non-installable image.
+Run `python3 tests/boot/fat-write-smoke.py`, then repeat with
+`USB_CONTROLLER=uhci USB_LAYOUT=mbr`. Both architectures run by default.
+The script owns regular-file MBR/GPT images, a CRC-bound manifest and preformatted
+external WAL; recovery must finish before the namespace is registered in VFS.
+It tests cold guest cuts, backend EIO/replay failure, actual unplug/replug, stale
+mount generations, full/RO media, independent namespace/fsck and unchanged GPT.
+`FAT_LAB_GENERATION_ONLY=1` selects just the fresh-grant/stale-mount regression;
+`FAT_LAB_QUICK=1` is a development subset, not the full acceptance matrix.
+Normal kernels refuse marked experimental volumes and keep unmarked USB RO.
+Always restore `make CC=gcc-12 STORAGE_LAB=0 release` after laboratory testing.
+Only logs may be published from lab builds. See [boundaries](../../docs/STORAGE-M2.md).
+
+The prepared CI lab matrix separates EHCI/GPT from UHCI/MBR (both kernels in
+each job, 25-minute limit); it retains transcripts, not experimental images.
+Local passes do not imply a remote Actions run.
+
+### M2.3a shared editor Save As
+
+`python3 tests/boot/save-as-smoke.py` checks normal RAM/KvFS-only destinations,
+replace/cancel, bound Save, Undo/Redo, both editors, Build, stale rescan refusal,
+cold KvFS readback, full-directory failure without RAM fallback, and RO USB
+hash preservation, including diskless 640x480. Both kernels run by default.
+On the unpublishable lab ISO, `GUI_SAVE_LAB=1` tests real GUI FAT writes,
+65535-byte text (>128 lines), folders, Russian LFN, cold GUI readback and USB
+unplug after an observed directory-publication cut, followed by cold recovery
+and independent namespace/fsck/outside-range checks. Repeat for UHCI/MBR.
+`make -C tests/mcc CC=gcc-12 vfs` runs native adapter contract sanitizers.
+No physical-media support or remote Actions result is implied.
+
+
+## Normal owned-file FAT WAL (M2.4)
+
+`make CC=gcc-12 STORAGE_LAB=0 iso`, then:
+
+```sh
+USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/fat-owned-smoke.py
+GUI_SAVE_OWNED=1 USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/save-as-smoke.py
+# Repeat with USB_CONTROLLER=uhci USB_LAYOUT=mbr.
+```
+
+Both commands run BIOS32 + UEFI64 by default. Use `MCC_ARCH64=0|1` for one kernel.
+Private regular-file images only, never mounts/raw host devices. `mkfatowned.py`
+uses the real staged provisioner, no lab manifest/spare extent. The normal kernel
+must have no lab pause/test-journal symbols. `qemu_break.py` uses QEMU's Unix RSP
+breakpoints at ordinary function entries, not patched kernel RAM or storage hooks.
+The GUI suite performs real device_del during an uncommitted normal save and
+checks the document/Undo/binding before cold recovery; the console suite checks
+power cuts, EIO/RO/replay errors, reconnect fresh opt-in, full media and fsck.
+Artifacts live under excluded `build/fat-owned-guest` and `build/save-as/owned`;
+CI uploads logs/screenshots only. No physical qualification is implied.
+
+Полная `make release` также проверяет запасной floppy: `qemu-smoke.sh` при
+наличии `release/kvantos-floppy.img` загружает его именно через контроллер FDC.
+`check-images.py` проверяет лимит core, три меню, boot signature и совпадение
+ELF load segments после распаковки gzip. ISO-only сборки не требуют floppy.
+
+### M3.1 AHCI (normal read-only kernels)
+
+`python3 tests/boot/ahci-smoke.py` checks actual ICH9 AHCI DMA, raw/MBR/GPT,
+SATA+IDE coexistence, VFS byte equality, both GUI imports, default RO,
+read EIO/fencing/cold restart and source integrity. M3.2 updates the former
+write/pending-WAL refusal checks as described below.
+`python3 tests/boot/ahci-usb-smoke.py` checks SATA/USB coexistence with independent
+WAL create/overwrite/cold/fsck for UHCI and EHCI, both kernels. Both use private
+regular-file images under `build/`; no real SATA or VBox qualification.
+See `docs/STORAGE-M3.md`; model checks: `make -C tests/mcc ahci`.
+
+### M3.2 ordinary AHCI WAL writes
+
+Set `STORAGE_CONTROLLER=ahci STORAGE_LAYOUT=mbr|gpt` for `fat-owned-smoke.py`,
+and add `GUI_SAVE_OWNED=1` for `save-as-smoke.py`. Both architectures run by
+default. No new kernel instrumentation: power kills at normal STX symbols,
+real blkdebug write/flush/read errors, full volume, cold recovery and fsck.
+AHCI QEMU IDE bus rejects hotplug, so GUI failure uses a real suspended host
+flush at commit + bounded device timeout/late completion instead. A valid
+late-committed NEW view is not mistaken for false save success: text and Undo
+remain dirty; after reboot the entire expected old OR committed-new namespace
+is checked according to the CRC-valid WAL header, then external fsck.
+`ahci-usb-smoke.py` now checks dual SATA/USB WAL writes, rescan RO, cold/warm
+restarts. `ahci-smoke.py` keeps read-only source checks via enable/disable and
+checks recovery of an empty valid pending transaction. See STORAGE-M3.2.md.
+
+### M3.3 OHCI USB 1.1
+
+`USB_CONTROLLER=ohci USB_LAYOUT=mbr usb-import-smoke.py` explicitly checks native
+OHCI enumeration + actual 12 Mb/s, read-only hashes, GUI import and native apps.
+`STORAGE_CONTROLLER=ohci STORAGE_LAYOUT=mbr|gpt fat-owned-smoke.py` reuses the
+normal owned-WAL power-cut/EIO/RO/full/unplug matrix; `GUI_SAVE_OWNED=1` with
+`save-as-smoke.py` checks real GUI saves/unplug retention. Both kernels by default.
+`ahci-usb-smoke.py` now includes OHCI/GPT + SATA, alongside its EHCI and UHCI cells;
+`USB_CONTROLLER=ohci` selects just this new mixed-bus pair for debugging.
+See `docs/STORAGE-M3.3.md`. Host backend model: `make -C tests/mcc ohci`.

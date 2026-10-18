@@ -190,7 +190,7 @@ int ata_read(int idx, u32 lba, u8 count, void *buf) {
     if (idx < 0 || idx >= drive_count || !drives[idx].present) return -1;
     if (!count) return 0;
     ata_drive_t *d = &drives[idx];
-    if (lba + count > d->sectors) return -1;
+    if (lba>=d->sectors || count>d->sectors-lba) return -1;
 
     kv_flags_t fl = irq_save();
     int rc = 0;
@@ -212,7 +212,7 @@ int ata_write(int idx, u32 lba, u8 count, const void *buf) {
     if (idx < 0 || idx >= drive_count || !drives[idx].present) return -1;
     if (!count) return 0;
     ata_drive_t *d = &drives[idx];
-    if (lba + count > d->sectors) return -1;
+    if (lba>=d->sectors || count>d->sectors-lba) return -1;
 
     kv_flags_t fl = irq_save();
     int rc = 0;
@@ -226,8 +226,21 @@ int ata_write(int idx, u32 lba, u8 count, const void *buf) {
         for (int i = 0; i < 256; i++) outw(d->io + REG_DATA, *p++);
     }
 
-    outb(d->io + REG_COMMAND, CMD_FLUSH);
-    ata_wait_busy(d->io);
+    if(ata_wait_busy(d->io)<0 || (inb(d->io+REG_STATUS)&(ST_ERR|ST_DF))) rc=-1;
+    if(!rc && ata_sync(idx)<0) rc=-1;
     irq_restore(fl);
     return rc;
+}
+
+/* Report cache-flush errors, including DF/ERR after BSY clears. */
+int ata_sync(int idx) {
+    if(idx<0 || idx>=drive_count || !drives[idx].present) return -1;
+    ata_drive_t *d=&drives[idx]; kv_flags_t fl=irq_save();
+    if(ata_wait_busy(d->io)<0) { irq_restore(fl); return -1; }
+    outb(d->io+REG_DRIVE,(u8)(0xE0|(d->slave<<4))); ata_delay(d->ctrl);
+    outb(d->io+REG_COMMAND,CMD_FLUSH); ata_delay(d->ctrl);
+    int rc=ata_wait_busy(d->io);
+    u8 status=inb(d->io+REG_STATUS);
+    if(!status || status==0xff || (status&(ST_ERR|ST_DF))) rc=-1;
+    irq_restore(fl); return rc;
 }

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Authorized user action: push the prepared 3.1.3 refs; CI validates/publishes.
+# Authorized user action: push the prepared 3.1.4 refs; CI validates/publishes.
 # No tokens are accepted as arguments or stored by this script.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo=vvdd7232-lang/kvantos
 url=https://github.com/$repo.git
-tag=v3.1.3
-expected_main=672d5ebaa57af36625af7f57dc153ff96f071498
+tag=v3.1.4
+expected_main=95c38674b3f22182317fe307214677c239a206e8
 command -v gh >/dev/null || { echo 'Install GitHub CLI and run gh auth login first.' >&2; exit 1; }
 gh auth status --hostname github.com >/dev/null
 permission=$(gh repo view "$repo" --json viewerPermission --jq .viewerPermission)

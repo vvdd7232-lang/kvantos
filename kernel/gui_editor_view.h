@@ -1,10 +1,11 @@
 /* Private editor geometry and painting, included by gui.c. */
+#define ED_SEARCH_HEIGHT 218
 typedef struct { i32 x,y,w,h,tx; int rows,cols,max_top,max_left; } ed_layout_t;
 static int ed_clamp(int v,int low,int high) { return v<low?low:v>high?high:v; }
 static ed_layout_t ed_layout(window_t *v) {
     ed_layout_t g;
     g.x=v->x+11; g.y=v->y+TITLE_H+1+96; g.w=v->w-22;
-    g.rows=(v->y+v->h-g.y-62)/16;
+    g.rows=(v->y+v->h-g.y-62-(ed_name_mode==ED_SEARCH_DIALOG?ED_SEARCH_HEIGHT:0))/16;
     if(g.rows<1) g.rows=1;
     g.h=g.rows*16+8; g.tx=g.x+(ed_lines>9999?52:36);
     g.cols=(g.w-(g.tx-g.x)-20)/8; if(g.cols<1) g.cols=1;
@@ -49,11 +50,14 @@ static int ed_file(int index,char *name,u32 *size) {
     return 0;
 }
 #include "gui_editor_import.h"
+#include "gui_editor_search.h"
+#include "gui_editor_save.h"
 static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
                          int value,int maximum,int visible) {
     i32 w=vertical?16:length,h=vertical?length:16;
     fb_fill(x,y,w,h,fb_rgb(232,236,243));
     fb_rect(x,y,w,h,fb_rgb(190,199,214));
+    if(length<48) { hit_add(win,widget,x,y,w,h); return; }
     fb_text(x+4,y+1,vertical?"^":"<",C_TEXT_DIM,0xFFFFFFFF);
     fb_text(vertical?x+4:x+length-12,vertical?y+length-17:y+1,vertical?"v":">",C_TEXT_DIM,0xFFFFFFFF);
     int track=length-32;
@@ -65,7 +69,8 @@ static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
     hit_add(win,widget,x,y,w,h);
 }
 static void ed_dialog(window_t *v,i32 cy) {
-    if(ed_name_mode==ED_IMPORT_DIALOG) { ed_import_view(v,cy); return; }
+    if(ed_name_mode==ED_SEARCH_DIALOG) { ed_search_view(v); return; }
+    if(ed_name_mode==ED_IMPORT_DIALOG || ed_destination()) { ed_import_view(v,cy); return; }
     int win=(int)(v-wins), file_mode=ed_name_mode<=ED_OPEN_DIALOG;
     i32 x=v->x+25,w=v->w-50,y=cy+(file_mode?8:65);
     i32 h=file_mode?v->h-TITLE_H-18:190;
@@ -73,27 +78,29 @@ static void ed_dialog(window_t *v,i32 cy) {
     fb_fill(x-4,y-4,w+8,h+8,fb_rgb(215,223,237));
     fb_fill(x,y,w,h,C_WHITE); fb_rect(x,y,w,h,C_ACCENT);
     const char *title=ed_name_mode==ED_OPEN_DIALOG?T("Open a file", "Открыть файл"):
-                      ed_name_mode==ED_SAVE_DIALOG?T("Save as", "Сохранить как"):
+                      ed_name_mode==ED_SAVE_DIALOG?(kvfs_mounted()?T("Save as: RAM + KvFS", "Сохранить как: RAM + KvFS"):T("Save as: RAM only", "Сохранить как: только RAM")):
                       ed_name_mode==ED_DIRTY_DIALOG?T("Save changes?", "Сохранить изменения?"):
-                      (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?T("Replace existing file?", "Заменить существующий файл?"):
+                      (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE || ed_name_mode==ED_DEST_REPLACE)?T("Replace existing file?", "Заменить существующий файл?"):
                       T("Delete file from RAM and disk?", "Удалить файл из RAM и с диска?");
     ed_label(x+12,y+12,w-24,title,C_TEXT);
     if(!file_mode) {
-        ed_label(x+12,y+46,w-24,(ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?ed_name_in:ed_name,C_ACCENT);
+        ed_label(x+12,y+46,w-24,(ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE || ed_name_mode==ED_DEST_REPLACE)?(ed_name_mode==ED_DEST_REPLACE?editor->import_file:ed_name_in):ed_name,C_ACCENT);
         ed_label(x+12,y+74,w-24,T("Your document is kept if you cancel.", "При отмене документ останется нетронутым."),C_TEXT_DIM);
         if(ed_status[0]) ed_label(x+12,y+100,w-24,ed_status,C_TEXT_DIM);
         int bw=(w-40)/3;
         widget_chip(win,W_ED_ACCEPT,x+10,y+h-40,bw,28,
                     ed_name_mode==ED_DIRTY_DIALOG?T("Save", "Сохранить"):
-                    (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE)?T("Replace", "Заменить"):T("Delete", "Удалить"),1);
+                    (ed_name_mode==ED_OVERWRITE_DIALOG || ed_name_mode==ED_IMPORT_REPLACE || ed_name_mode==ED_DEST_REPLACE)?T("Replace", "Заменить"):T("Delete", "Удалить"),1);
         if(ed_name_mode==ED_DIRTY_DIALOG)
             widget_chip(win,W_ED_DISCARD,x+20+bw,y+h-40,bw,28,T("Don't save", "Не сохранять"),0);
         widget_chip(win,W_ED_CANCEL,x+w-bw-10,y+h-40,bw,28,T("Cancel", "Отмена"),0);
         return;
     }
-    widget_chip(win,W_ED_RAM,x+12,y+38,120,26,T("RAM (temporary)", "RAM (временно)"),!editor->file_disk);
-    widget_chip(win,W_ED_DISK,x+140,y+38,100,26,T("Disk / KvFS", "Диск / KvFS"),editor->file_disk);
-    ed_label(x+252,y+43,w-264,ed_name_mode==ED_SAVE_DIALOG?
+    widget_chip(win,W_ED_RAM,x+12,y+38,120,26,ed_name_mode==ED_SAVE_DIALOG?T("List: RAM", "Список RAM"):T("RAM (temporary)", "RAM (временно)"),!editor->file_disk);
+    widget_chip(win,W_ED_DISK,x+140,y+38,100,26,ed_name_mode==ED_SAVE_DIALOG?T("List: KvFS", "Список KvFS"):T("Disk / KvFS", "Диск / KvFS"),editor->file_disk);
+    if(ed_name_mode==ED_SAVE_DIALOG)
+        widget_chip(win,W_ED_VOLUME,x+252,y+38,w-264,26,T("Destination...", "Том / папка..."),0);
+    else ed_label(x+252,y+43,w-264,ed_name_mode==ED_SAVE_DIALOG?
              (kvfs_mounted()?T("Save to RAM + disk", "Запись в RAM и на диск"):T("No disk: RAM only", "Нет диска: только RAM")):
              T("Select a file below", "Выберите файл ниже"),C_TEXT_DIM);
     i32 ly=y+72,lh=h-178;
@@ -134,25 +141,29 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
     editor=workshop?&dev_editor:&note_editor;
     struct { int id; const char *label; } file[]={
         {W_ED_NEW,T("New", "Создать")},{W_ED_OPEN,T("Open", "Открыть")},
-        {W_ED_IMPORT,T("Import", "Импорт")},{W_ED_SAVE,T("Save", "Сохранить")},{W_ED_SAVEAS,T("Save as", "Сохр. как")},
+        {W_ED_FIND,T("Find", "Поиск")},{W_ED_IMPORT,T("Import", "Импорт")},{W_ED_SAVE,T("Save", "Сохранить")},{W_ED_SAVEAS,T("Save as", "Сохр. как")},
         {workshop?W_DEV_HELP:W_ED_DEL,workshop?T("Help", "Справка"):T("Delete", "Удалить")}
     }, edit[]={
-        {W_ED_UNDO,T("Undo/redo", "Отмена/повтор")},{W_ED_COPY,T("Copy", "Копия")},
+        {W_ED_UNDO,T("Undo", "Отмена")},{W_ED_REDO,T("Redo", "Повтор")},{W_ED_COPY,T("Copy", "Копия")},
         {W_ED_CUT,T("Cut", "Вырезать")},{W_ED_PASTE,T("Paste", "Вставить")},
         {W_ED_ALL,T("Select all", "Всё")},{W_DEV_BUILD,T("Build", "Собрать")},{W_DEV_RUN,T("Run", "Запуск")}
     };
-    int bw=(cw-20)/6;
-    for(int i=0;i<6;i++) widget_chip(win,file[i].id,cx+10+i*bw,cy+7,bw-4,25,file[i].label,0);
-    int count=workshop?7:5; bw=(cw-20)/count;
+    int bw=(cw-20)/7;
+    for(int i=0;i<7;i++) widget_chip(win,file[i].id,cx+10+i*bw,cy+7,bw-4,25,file[i].label,0);
+    int count=workshop?8:6; bw=(cw-20)/count;
     /* A short label also fits a 640x480 desktop. */
     edit[0].label=T("Undo", "Отмена");
-    for(int i=0;i<count;i++) widget_chip(win,edit[i].id,cx+10+i*bw,cy+38,bw-4,25,edit[i].label,i>=5);
+    for(int i=0;i<count;i++) widget_chip(win,edit[i].id,cx+10+i*bw,cy+38,bw-4,25,edit[i].label,i>=6);
     char name[192];
-    const char *store=kvfs_mounted()?T("RAM + disk", "RAM и диск"):T("RAM: temporary", "RAM: временно");
-    ksnprintf(name,sizeof(name),"%s%s  |  %s",ed_name,ed_dirty?" *":"",store);
+    char storage[192]; ed_storage_status(storage,sizeof(storage));
+    ksnprintf(name,sizeof(name),"%s%s",editor->target[0]?editor->target:ed_name,ed_dirty?" *":"");
     if(ed_lines>ED_WARN_LINES)
-        ksnprintf(name,sizeof(name),T("%s%s | %d lines (>128): warning only | %s", "%s%s | %d строк (>128): только предупреждение | %s"),ed_name,ed_dirty?" *":"",ed_lines,store);
-    ed_label(cx+12,cy+73,cw-24,name,ed_lines>ED_WARN_LINES?fb_rgb(160,100,0):ed_dirty?C_RED:C_TEXT_DIM);
+        ksnprintf(name,sizeof(name),T("%s%s | %d lines (>128): warning only", "%s%s | %d строк (>128): только предупреждение"),ed_name,ed_dirty?" *":"",ed_lines);
+    widget_chip(win,W_ED_LAYOUT,cx+cw-66,cy+68,54,24,kbd_layout()?"RU":"EN",0);
+    int keep=editor->imported;
+    if(workshop)widget_chip(win,W_DEV_ISOLATE,cx+cw-(keep?298:182),cy+68,110,24,dev_isolated?"ABI4/CPL3":"ABI3/kernel",dev_isolated);
+    if(keep) widget_chip(win,W_ED_KEEP,cx+cw-182,cy+68,110,24,T("Keep: KvFS", "На KvFS"),kvfs_mounted());
+    ed_label(cx+12,cy+73,cw-(keep?208:92)-(workshop?116:0),name,ed_lines>ED_WARN_LINES?fb_rgb(160,100,0):ed_dirty?C_RED:C_TEXT_DIM);
     ed_layout_t g=ed_layout(v);
     fb_fill(g.x,g.y,g.w,g.h,C_WHITE); fb_rect(g.x,g.y,g.w,g.h,fb_rgb(190,201,219));
     fb_fill(g.x+1,g.y+1,g.tx-g.x-4,g.h-2,fb_rgb(244,247,252));
@@ -187,24 +198,13 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
     ed_scrollbar(win,W_ED_VSCROLL,g.x+g.w-17,g.y,g.h,1,ed_top,g.max_top,g.rows);
     ed_scrollbar(win,W_ED_HSCROLL,g.tx,g.y+g.h+2,g.w-(g.tx-g.x)-18,0,ed_left,g.max_left,g.cols);
     i32 sy=v->y+v->h-38;
-    if(ed_status[0] && timer_ticks()<ed_status_until) {
-        const char *p=ed_status; char part[192]; int n=0,cols=(cw-24)/8;
-        for(int line=0;line<2;line++) {
-            int count=0; n=0;
-            while(*p && count++<cols && n<(int)sizeof(part)-5) {
-                const char *begin=p; utf8_next(&p);
-                int bytes=(int)(p-begin); memcpy(part+n,begin,(u32)bytes); n+=bytes;
-            }
-            part[n]=0; fb_text(cx+12,sy+line*16,part,C_ACCENT,0xFFFFFFFF);
-        }
-    } else {
-        ksnprintf(name,sizeof(name),T("Line %d/%d, column %d  |  %s", "Строка %d/%d, столбец %d  |  %s"),
-                  ed_cy+1,ed_lines,text_column(ed_line(ed_cy),ed_cx)+1,
-                  text_selected(&editor->doc)?T("selection", "выделение"):T("click and drag to select", "выделение мышью"));
+    if(ed_status[0] && timer_ticks()<ed_status_until) ed_label(cx+12,sy,cw-24,ed_status,C_ACCENT);
+    else {
+        ksnprintf(name,sizeof(name),T("Line %d/%d, column %d | Click/drag: select; wheel: scroll.", "Строка %d/%d, столбец %d | Протяжка: выделить; колесо: прокрутить."),
+                  ed_cy+1,ed_lines,text_column(ed_line(ed_cy),ed_cx)+1);
         ed_label(cx+12,sy,cw-24,name,C_TEXT_DIM);
-        ed_label(cx+12,sy+16,cw-24,T("Click: cursor. Drag: select. Wheel or scrollbars: scroll.",
-                                      "Клик: курсор. Протяжка: выделение. Колесо и полосы: прокрутка."),C_TEXT_DIM);
     }
+    ed_label(cx+12,sy+16,cw-24,storage,ed_dirty?C_RED:C_TEXT_DIM);
     if(ed_name_mode) ed_dialog(v,cy);
 }
 static void app_dev(window_t *v,i32 cx,i32 cy,i32 cw) {
@@ -217,15 +217,17 @@ static void app_dev(window_t *v,i32 cx,i32 cy,i32 cw) {
         T("C Workshop: edit, build, run", "C-мастерская: редактируйте, собирайте, запускайте"),
         T("Use the New / Open / Save buttons above the text.", "Файлы: кнопки Создать / Открыть / Сохранить."),
         T("Build creates a .kapp; Run builds and starts it.", "Собрать создаёт .kapp; Запуск собирает и запускает."),
-        T("RAM is temporary; KvFS files survive reboot.", "RAM временна; файлы на KvFS переживают перезапуск."),
+        T("Save as: Destination...; .kapp output stays in RAM/KvFS.", "Сохр. как: Том / папка...; .kapp остаётся в RAM/KvFS."),
         "void draw(void) { clear(rgb(20,30,50)); }",
         "void click(int x,int y,int b) { /* mouse */ }",
         "void key(int k) { /* keyboard */ }",
         "int, char, pointers; if/else; while; for; functions;",
         "rgb clear fill rect line text status ticks seconds",
-        T("Optional: Ctrl+S/C/V/X/A/Z, F5 build, F6 run.", "Необязательно: Ctrl+S/C/V/X/A/Z, F5 сборка, F6 пуск."),
-        T("No includes, structs, arrays, casts, floats or libc.", "Нет include, структур, массивов, cast, float и libc."),
-        T("Native ring-0 code can hang the OS. Save first!", "Код в ring 0 может повесить ОС. Сначала сохраните!"),
+        T("Optional: Ctrl+S/C/V/X/A/Z/Y, F5 build, F6 run.", "Необязательно: Ctrl+S/C/V/X/A/Z/Y, F5 сборка, F6 пуск."),
+        T("Fixed arrays/sizeof, object #define, bounded struct/typedef.", "Массивы/sizeof, object #define, ограниченные struct/typedef."),
+        T("No include/casts/VLA/float/full C/libc.", "Нет include/cast/VLA/float/полного C/libc."),
+        T("ABI4: private RAM; no clock/beep/log.", "ABI4: приватная RAM; нет clock/beep/log."),
+        T("ABI3=trusted/kernel; click ABI4/CPL3 for isolation.", "ABI3=доверенное/ядро; ABI4/CPL3 — изолированный режим."),
         T("Full reference: sdk/WORKSHOP.md", "Полное описание: sdk/WORKSHOP.ru.md")
     };
     for(unsigned i=0;i<sizeof(lines)/sizeof(lines[0]);i++)

@@ -47,7 +47,7 @@ typedef struct {
    is left NULL and the VFS reports "not supported" instead of crashing:
    NTFS, for instance, is deliberately read-only here. */
 typedef struct vfs_ops {
-    /* List entry `index` of directory `path`. Returns 1 when filled. */
+    /* List entry: 1 filled, 0 clean EOF, -1 unavailable/invalid/read error. */
     int (*readdir)(void *fs, const char *path, int index, vfs_dirent_t *out);
     /* Read up to `max` bytes of `path` starting at `off`. Returns count. */
     int (*read)(void *fs, const char *path, u32 off, void *buf, u32 max);
@@ -61,6 +61,10 @@ typedef struct vfs_ops {
     int (*mkdir)(void *fs, const char *path);
     /* Free and total space in KiB. */
     void (*space)(void *fs, u32 *total_kb, u32 *free_kb);
+    /* Optional bounded batch listing; count 1..128, returns count or -1. */
+    int (*readdir_many)(void *fs,const char *path,int first,vfs_dirent_t *out,int count);
+    /* Optional no-replace same-volume file rename. Never copy-delete fallback. */
+    int (*rename)(void *fs,const char *from,const char *to);
 } vfs_ops_t;
 
 /* A mounted volume. */
@@ -79,6 +83,8 @@ typedef struct {
 
 /* ---- volume management ---- */
 void         vfs_init(void);
+u32          vfs_generation(void); /* Namespace reset or native remount/fence. */
+void         vfs_namespace_changed(void); /* Bump only; no I/O, rescan or reset. */
 int          vfs_mount(const char *name, fs_kind_t kind, const vfs_ops_t *ops,
                        void *fs, int disk, u32 lba_start, u32 lba_count,
                        const char *label, int writable);
@@ -94,11 +100,16 @@ const char  *vfs_scan_status(void);
 
 /* ---- path operations (the same for every filesystem) ---- */
 int  vfs_readdir(const char *path, int index, vfs_dirent_t *out);
+int  vfs_readdir_many(const char *path,int first,vfs_dirent_t *out,int count);
 int  vfs_read(const char *path, u32 off, void *buf, u32 max);
 u32  vfs_size(const char *path);
 int  vfs_stat(const char *path);
 int  vfs_write(const char *path, const void *data, u32 size);
 int  vfs_remove(const char *path);
+/* rename:0 success,-1 unavailable,-2 RO/unsupported,-3 missing,-4 bad name,
+   -5 target exists,-6 outcome uncertain (remount),-7 cross-volume unsupported. */
+int  vfs_rename(const char *from,const char *to);
+int  vfs_can_rename(const char *path);
 int  vfs_mkdir(const char *path);
 void vfs_space(const char *path, u32 *total_kb, u32 *free_kb);
 int  vfs_writable(const char *path);
@@ -118,12 +129,17 @@ static inline int disk_write(int disk, u32 lba, u8 count, const void *buf) {
     return blk_write(disk, lba, count, buf) == 0;
 }
 
+/* A successful write alone is not a persistence barrier on USB. */
+static inline int disk_sync(int disk) { return blk_sync(disk)==0; }
+
 /* ---- individual drivers ---- */
 void fat_reset_mounts(void);
 void ntfs_reset_mounts(void);
 void ramfs_vfs_register(void);
 void kvfs_vfs_register(void);
 int  fat_probe(int disk, u32 lba_start, u32 lba_count, char *label, fs_kind_t *kind);
+/* Explicit opt-in; normal FAT mounts are RO, only owned/recovered FAT32 may RW. */
+int  fat_write_mode(const char *name,int enable);
 int  fat_mount(const char *name, int disk, u32 lba_start, u32 lba_count);
 int  ntfs_probe(int disk, u32 lba_start, u32 lba_count, char *label);
 int  ntfs_mount(const char *name, int disk, u32 lba_start, u32 lba_count);

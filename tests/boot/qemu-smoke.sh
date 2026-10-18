@@ -89,6 +89,14 @@ run_case "BIOS 32-bit (${BOOT_MEDIA:-cd})" "" \
     -machine pc,accel=tcg -cpu pentium -m 128 \
     -vga std "${media[@]}"
 
+# Full releases also retain a bare-system floppy fallback. Test the real FDC
+# path, not a floppy image attached as a hard disk. ISO-only CI has no floppy.
+if [[ ${BOOT_MEDIA:-cd} == cd && -f release/kvantos-floppy.img ]]; then
+    run_case "BIOS 32-bit (floppy)" "" \
+        -machine pc,accel=tcg -cpu pentium -m 128 -vga std \
+        -drive if=floppy,format=raw,readonly=on,file=release/kvantos-floppy.img -boot a
+fi
+
 # Find a matching OVMF CODE/VARS pair. CI installs the standard Ubuntu package.
 ovmf_code=${OVMF_CODE:-}
 ovmf_vars_template=${OVMF_VARS:-}

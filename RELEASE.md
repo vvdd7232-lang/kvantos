@@ -1,90 +1,145 @@
-# KvantOS 3.1.3 — USB import, GPT and non-blocking line warnings
+# KvantOS 3.1.4 — controlled writes, SATA/OHCI and stricter read-only NTFS
 
-October 16, 2026. Separate **BIOS/i386 and UEFI/x86-64** release;
-previous release tags and assets are not overwritten.
+October 18, 2026. Release for **BIOS/i386** and **UEFI/x86-64**. Existing 3.1.3
+tags and downloads remain unchanged.
 
-## Changes
+## At a glance
 
-* Read-only USB mass-storage import in Notepad and C Workshop: mouse folder/file
-  picker, Refresh, editable local name and overwrite/unsaved-change guards.
-  No PC-side KvFS image is needed for source transfer.
-* UHCI and high-speed EHCI, FAT16/FAT32 on MBR/raw media and **GPT + FAT32**,
-  including an MSR before the data partition. Bounded GPT header/array CRC
-  verification and backup fallback; no format, conversion, repair or writes.
-* **128 lines is a warning only**, not an editor ceiling. Import/edit/clipboard,
-  undo/redo/save and native Build/Run continue within their separate byte limits.
-  Packed text, live-prefix copies, cached width and five-digit line gutters.
-* Kept mouse-first editors, optional NumPad MouseKeys, independent documents,
-  RAM/KvFS persistence, both native compiler backends and all 11 apps/backend.
+3.1.4 combines editor and C Workshop updates, tightly gated FAT32 writes through
+an explicitly provisioned owned-file journal, AHCI SATA and OHCI USB backends,
+and additional fail-closed NTFS read bounds. Disks do not become writable by
+default: opt-in requires a prepared FAT32 volume, a valid owned WAL, verified
+flush capability and a separate per-session enable. NTFS remains read-only.
 
-## Getting started
+## Changes since 3.1.3
 
-Boot the new `kvantos.iso`, enter `guimenu`, open C Workshop or Notepad.
-In VirtualBox select **USB 2.0 (OHCI + EHCI)** and capture the drive.
-Use **Import → Refresh → folder → file → Import**, then Save/Build/Run.
-There is no need to reformat or convert GPT to MBR. Boot the new ISO explicitly;
-changing the ISO does not update an older installed kernel automatically.
+### Editors and C Workshop
 
-Import copies into RAM; only Save/Build persists to mounted KvFS. RAM is lost
-on reboot without KvFS. FAT32 remains read-only.
+- EN/RU keyboard input, Alt+Shift and visible layout state; literal UTF-8
+  forward/backward search with wrap, Replace One and atomic Replace All as one
+  undoable operation.
+- USB import remains a copy into RAM. Explicit RAM/KvFS persistence state and a
+  post-import KvFS offer clarify when a document will survive reboot; no
+  automatic writes occur.
+- Both editors share a mouse-first Save As browser: choose volume/folder, confirm
+  replacement and bind subsequent saves to the destination. Namespace/device
+  generation changes must not silently redirect a save.
+- Read-only/error status and old-file preservation are explicit. Shell copy and
+  file manager check exact byte counts, namespace generations and no-replace
+  behavior; I/O failure is not silently treated as EOF.
+- The bounded native C subset adds fixed one-dimensional local/global arrays
+  (including pointer elements), decay/indexing and unevaluated `sizeof`.
+  Existing source/data/stack budgets remain; no VLAs, array initializers, full
+  ISO C or runtime index checking are claimed.
+- The BIOS floppy image uses a compact GRUB memdisk and stays within the core
+  limit; the separate direct BIOS/UEFI ISO remains available.
 
-## Limits
+### Storage and write policy
 
-Editor input and normalized text **<64 KiB**, **120 bytes/line**, no independent
-row-count ceiling. Native compiler source remains **<=16000 bytes**; larger
-text can be imported, edited and saved, while Build reports the limit without
-changing text/undo. This is still a limited C subset, not GCC/C99.
-UTF-8/BOM and CRLF work; tabs become four spaces; binary/UTF-16/overflow is
-rejected atomically. Picker: 128 matches from the first 512 directory entries.
+- **All ordinary FAT volumes mount read-only.** FAT16, unprepared FAT32, unknown
+  or damaged WALs never become writable automatically.
+- Writes to prepared FAT32 use the exclusive owned-file `KVANTWAL.SYS` format,
+  bound to validated geometry and volume identity. Valid recovery happens
+  **before namespace publication**; then the operator separately enables the
+  volume for the current session with `fatwrite VOLUME enable`. Disable, rescan
+  or reboot removes the grant. See [docs/STORAGE-M2.md](docs/STORAGE-M2.md);
+  the kernel never creates or resets the journal.
+- USB BOT includes UHCI, EHCI with OHCI companions and a separate full-speed OHCI
+  backend. AHCI/SATA supports reads; SATA WRITE/FLUSH EXT is gated by the shared
+  generation-checked lease and owned-WAL path. Missing FLUSH support, I/O errors,
+  timeouts and uncertain completions fail closed.
+- GPT is read-only: header/array CRCs, bounds and backup fallback are checked.
+  GPT, the MSR and gaps are not journal space. There is no automatic format,
+  MBR/GPT conversion or repair.
 
-EHCI high-speed root-port BOT and UHCI only; no standalone OHCI driver,
-xHCI/USB 3, hubs, split transactions or UAS. VirtualBox USB 1.1 is OHCI, not
-UHCI. Current block layer uses 512-byte sectors and 32-bit sector addresses;
-GPT is bounded to 1024 entries and is never repaired or written.
+### NTFS: read-only
 
-[USB guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.3/USB-IMPORT.md)
-· [Workshop guide](https://github.com/vvdd7232-lang/kvantos/blob/v3.1.3/sdk/WORKSHOP.md).
+- Private ntfs-3g image coverage uses logical sectors of 512/1024/2048/4096 bytes,
+  resident/nonresident `$DATA`, Unicode names, MBR start offsets, partial reads,
+  EOF and a fragmented stream.
+- Reads zero-fill exactly at NTFS Initialized Size, including a boundary inside a
+  cluster. Poisoned `0xA5` suffix bytes are not returned.
+- BPB total sectors with a nonzero high DWORD and `$DATA` sizes beyond the 32-bit
+  VFS range are refused, not truncated to low-word aliases. **Files above 4 GiB
+  and volumes beyond the current block-addressing range are unsupported.**
+- NTFS write/repair, compressed/encrypted streams and Windows journal recovery
+  are not supported.
 
-![517 lines: successful build, non-blocking warning](https://raw.githubusercontent.com/vvdd7232-lang/kvantos/v3.1.3/screenshots/68_workshop_lines_warning_uefi64.png)
+## Using the system
 
-## Validation
+1. Boot the new `kvantos.iso`; an older installed kernel does not update itself.
+2. USB import selects a file with the mouse and copies it to RAM. The source is
+   unchanged; persistence requires KvFS or an explicitly selected/writable FAT32
+   destination.
+3. FAT remains read-only by default. On a pre-provisioned owned-WAL FAT32 volume,
+   inspect status/recovery first; then, if needed, run `fatwrite VOLUME enable`
+   for this session. Use the actual volume name. Rescan requires a new enable.
+4. After uncertain FAT I/O, recover the journal in KvantOS before external writes
+   or `fsck` repair. Other operating systems' FAT drivers do not understand this
+   WAL.
 
-Release workflow runs GCC 12 builds; 73 code-generation checks/backend;
-40000 sanitizer mutations/backend; RAMFS/OOM; ASan/UBSan text model with
-25000 edits, full byte pool, 65536 empty rows, undo/redo and atomic Tab overflow.
-The empty-row maximum follows from the byte budget, not a new separate row cap.
+See [STORAGE-M2.md](docs/STORAGE-M2.md), [M3.2 AHCI](docs/STORAGE-M3.2.md),
+[USB guide](USB-IMPORT.md), [C Workshop](sdk/WORKSHOP.md), and [installation](INSTALL.md).
 
-23 GPT/MBR/raw checks cover CRCs, backup fallback and bounds. On both kernels,
-USB 2.0/EHCI with OHCI companions is tested on GPT and MBR: folders, BOM/CRLF,
-rename, import/edit/build/run, 12 rescans, unplug/replug, KvFS persistence and
-full reboot. Source USB SHA-256 hashes must remain unchanged.
+## Validation and evidence limits
 
-A 517-line source (512 comment lines plus a working app) is edited beyond row
-128, undone/redone with the mouse, built/run and reopened/run after reboot.
-An >16000-byte source may be edited/saved but is refused clearly by Build,
-without changing text/undo. Notepad uses independent 2049- and 10001-line
-UTF-8 documents, persistence and five-digit gutters.
+The local release gate completed with **GCC 12.4.0, QEMU 10.0.13 and OVMF
+2025.02**:
 
-Mouse/clipboard/dialog/scroll/wheel/MouseKeys/Russian/640x480 regressions,
-desktop/Maze 3D, native ABI/heap, BIOS/UEFI CD, firmware USB and direct ISO
-checks are retained. Tests run in **QEMU**, with measured pointer coordinates;
-physical hardware and VirtualBox itself have not been independently tested.
+- `make CC=gcc-12 release` and `tests/boot/check-images.py`: BIOS32, UEFI64,
+  EFI, GRUB ISO, direct ISO, floppy, 11 apps per architecture, empty KvFS,
+  firmware entries and SHA-256 manifests — PASS.
+- QEMU BIOS32/UEFI64 boot from CD, direct ISO and firmware USB reached `kvsh`;
+  BIOS floppy fallback — PASS.
+- GUI/native app, C Workshop, mouse editors, EN/RU input/search/replace,
+  reboot and KvFS persistence — PASS on both architectures.
+- EHCI+OHCI USB Import on GPT and MBR — BIOS32 + UEFI64, with unchanged source
+  image SHA-256. AHCI read-only/EIO, mixed AHCI+USB owned-WAL saves and GUI Save
+  As to enrolled FAT32 — PASS; recovery and independent fsck were included.
+- EHCI per-controller isolation/detach fencing — PASS on both architectures.
+- MCC native compiler + ASan/UBSan parser/VFS/controller suites, GPT, FAT/WAL
+  fault/performance, NTFS actual-image suite, and separate M6.20 ASan/UBSan run
+  — PASS. NTFS fixtures include an exact 4-GiB `$DATA` and a poisoned fragmented
+  Initialized-Size tail; all images remain unchanged.
+- Test images were temporary regular files: **zero physical devices and host
+  mounts**. QEMU/software results do not qualify physical USB/SATA media or
+  VirtualBox.
 
-## Downloads and running
+## Honest limitations
 
-- **`kvantos.iso`**: recommended BIOS/UEFI ISO and raw-USB hybrid.
-- **`kvantos-direct.iso`**: GRUB-free BIOS/UEFI CD/DVD fallback, not a raw-USB hybrid.
-- **`kvantos-3.1.3.tar.gz`**: full distribution with both ISOs, floppy, kernels, EFI, ESP, empty KvFS disk, apps, docs and SHA256SUMS.
-- **`kvantos-3.1.3-source.tar.gz`**: matching sources; **`kvantos-3.1.3-SHA256SUMS.txt`**: download checksums.
+- Experimental OS. Keep backups; do not store the only copy of important data.
+  FAT writes assume one writer, truthful flushes and a correctly provisioned WAL.
+  Torn/corrupt journals may intentionally block mounting; this is fail-closed, not
+  automatic repair.
+- AHCI hotplug, xHCI/USB 3, UAS, NVMe and ATAPI are unsupported. EHCI hub/TT
+  routing remains limited and experimental; arbitrary hub trees, split bandwidth,
+  multi-TT behavior and physical interoperability are not claimed.
+- Physical hardware, VirtualBox passthrough, physical 4Kn and concurrent external
+  writers are unqualified. One cause of an earlier parallel x64 Save As refusal
+  remains open; stress reliability is not claimed.
+- Native C Workshop is a limited language subset and not a security sandbox; do
+  not run untrusted code. Full app isolation, GCC/ISO C, full Unicode case-folding
+  and NTFS write/repair are outside this release.
+- FAT filesystem repair, GPT repair and automatic WAL provisioning are absent.
 
-Extract the full distribution. BIOS example:
+## Release files
+
+- `kvantos.iso` — primary BIOS/UEFI ISO and firmware USB-boot image.
+- `kvantos-direct.iso` — GRUB-free BIOS/UEFI ISO fallback; not a raw USB hybrid.
+- `kvantos-floppy.img`, `kvantos-disk.img` (empty KvFS), `kvant.bin`,
+  `kvant64.bin`, `kvantefi.efi`, and `esp.img`.
+- `kvantos-3.1.4.tar.gz` — full bundle with applications, docs and SHA256SUMS;
+  `kvantos-3.1.4-source.tar.gz` — source snapshot;
+  `kvantos-3.1.4-SHA256SUMS.txt` — checksums for individual assets.
+
+BIOS/QEMU:
 
 ```sh
 qemu-system-i386 -m 256 -boot d -cdrom kvantos.iso \
   -drive file=kvantos-disk.img,format=raw,if=ide
 ```
 
-UEFI example (OVMF, Secure Boot disabled):
+UEFI/QEMU (OVMF, Secure Boot disabled):
 
 ```sh
 cp /usr/share/OVMF/OVMF_VARS_4M.fd OVMF_VARS.fd
@@ -97,10 +152,9 @@ qemu-system-x86_64 -machine q35 -m 256 \
   -device ide-hd,bus=kvide.0,drive=kvdata
 ```
 
-Persistence requires supported **IDE/ATA PIO**, not AHCI/SATA/NVMe. q35's default `-drive if=ide` is unsupported AHCI; use the separate PIIX3 controller above. Diskless compilation and execution still work in RAM. Use `lang ru` for Russian. Inside the full distribution run `sha256sum -c SHA256SUMS`; for release downloads use `sha256sum -c kvantos-3.1.3-SHA256SUMS.txt`.
+On q35, plain `-drive if=ide` normally binds to unsupported AHCI; the example
+uses the explicit PIIX3/IDE controller. BIOS/QEMU persistence uses ATA PIO. In the
+full bundle verify `sha256sum -c SHA256SUMS`; for standalone assets use
+`sha256sum -c kvantos-3.1.4-SHA256SUMS.txt`.
 
-## Limitations
-
-Experimental OS: apps run in **ring 0 without full isolation** and can corrupt memory or hang the machine. Workshop implements a limited C subset, not GCC/full ISO C: no preprocessing, structures, typedefs, floating point, libc, array declarations or complete type checking. Source can be moved between architectures and rebuilt; generated binaries are architecture-specific. Clipboard is internal, not shared with the host OS; undo is one-step. A Russian keyboard layout and direct editor writes to FAT32/NTFS were not added in this release.
-
-Back up data and read INSTALL.md before installing to a real disk. License: MIT.
+License: MIT. Read `INSTALL.md` and back up data before installing.

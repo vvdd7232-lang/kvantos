@@ -87,6 +87,7 @@ void isr_install_handler(u8 n, isr_t h) { isr_handlers[n] = h; }
 void irq_install_handler(u8 irq, isr_t h) { isr_handlers[32 + irq] = h; }
 
 void isr_handler(registers_t *r) {
+    if(ku_mode_trap(r))return;
     isr_t h = isr_handlers[r->int_no & 0xFF];
     if (h) { h(r); return; }
     /* Exception inside an application: kill it, keep the system alive */

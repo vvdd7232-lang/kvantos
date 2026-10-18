@@ -14,7 +14,7 @@
 static int rfs_readdir(void *fs, const char *path, int index, vfs_dirent_t *out) {
     (void)fs;
     /* flat storage: only the root has entries */
-    if (path[0] != '/' || path[1] != 0) return 0;
+    if(path[0]!='/' || path[1]!=0)return -1;
 
     rfile_t *tbl = ramfs_table();
     int n = 0;
@@ -62,15 +62,17 @@ static int rfs_read(void *fs, const char *path, u32 off, void *buf, u32 max) {
 static int rfs_write(void *fs, const char *path, const void *data, u32 size) {
     (void)fs;
     const char *name = strip(path);
-    if (ramfs_find(name)) ramfs_delete(name);
-    return ramfs_create(name, (const char *)data, size) ? (int)size : -1;
+    return ramfs_write(name, size ? (const char *)data : NULL, size) == 0 ? (int)size : -1;
 }
 
 static int rfs_remove(void *fs, const char *path) {
     (void)fs;
-    return ramfs_delete(strip(path)) ? 0 : -1;
+    return ramfs_delete(strip(path)) == 0 ? 0 : -1;
 }
 
+static int rfs_rename(void *fs,const char *from,const char *to) {
+    (void)fs;return ramfs_rename(strip(from),strip(to));
+}
 static void rfs_space(void *fs, u32 *total_kb, u32 *free_kb) {
     (void)fs;
     rfile_t *tbl = ramfs_table();
@@ -87,7 +89,7 @@ static void rfs_space(void *fs, u32 *total_kb, u32 *free_kb) {
 static const vfs_ops_t ramfs_ops = {
     rfs_readdir, rfs_read, rfs_size, rfs_stat,
     rfs_write, rfs_remove, NULL,          /* no directories in ramfs */
-    rfs_space
+    rfs_space, NULL, rfs_rename
 };
 
 void ramfs_vfs_register(void) {
@@ -98,12 +100,12 @@ void ramfs_vfs_register(void) {
 
 static int kfs_readdir(void *fs, const char *path, int index, vfs_dirent_t *out) {
     (void)fs;
-    if (path[0] != '/' || path[1] != 0) return 0;
+    if(!kvfs_mounted() || path[0]!='/' || path[1]!=0)return -1;
 
     char name[64];
     u32  size;
     int  is_exec;
-    if (!kvfs_list(index, name, &size, &is_exec)) return 0;
+    if (kvfs_list(index, name, &size, &is_exec) < 0) return 0;
 
     memset(out, 0, sizeof(*out));
     strncpy(out->name, name, VFS_MAX_NAME);
@@ -126,7 +128,7 @@ static int kfs_read(void *fs, const char *path, u32 off, void *buf, u32 max) {
     (void)fs;
     const char *name = strip(path);
     u32 total = kvfs_size(name);
-    if (!total) return -1;
+    if (!kvfs_exists(name)) return -1;
     if (off >= total) return 0;
 
     /* KvFS reads whole files, so a partial read goes through a bounce
@@ -134,7 +136,7 @@ static int kfs_read(void *fs, const char *path, u32 off, void *buf, u32 max) {
     u8 *tmp = (u8 *)kmalloc(total);
     if (!tmp) return -1;
     int r = kvfs_read(name, tmp, total);
-    if (r < 0) { kfree(tmp); return -1; }
+    if (r < 0 || (u32)r != total) { kfree(tmp); return -1; }
 
     u32 n = total - off;
     if (n > max) n = max;
@@ -158,6 +160,9 @@ static int kfs_remove(void *fs, const char *path) {
     return kvfs_delete(strip(path)) == 0 ? 0 : -1;
 }
 
+static int kfs_rename(void *fs,const char *from,const char *to) {
+    (void)fs;return kvfs_rename(strip(from),strip(to));
+}
 static void kfs_space(void *fs, u32 *total_kb, u32 *free_kb) {
     (void)fs;
     u32 total_mb = 0, used_kb = 0, files = 0;
@@ -169,7 +174,7 @@ static void kfs_space(void *fs, u32 *total_kb, u32 *free_kb) {
 static const vfs_ops_t kvfs_ops = {
     kfs_readdir, kfs_read, kfs_size, kfs_stat,
     kfs_write, kfs_remove, NULL,
-    kfs_space
+    kfs_space, NULL, kfs_rename
 };
 
 void kvfs_vfs_register(void) {

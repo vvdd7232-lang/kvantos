@@ -92,6 +92,7 @@ isr_common:
     mov es, ax
     mov fs, ax
     mov gs, ax
+    cld
     push esp
     call isr_handler
     add esp, 4
@@ -113,6 +114,7 @@ irq_common:
     mov es, ax
     mov fs, ax
     mov gs, ax
+    cld
     push esp
     call irq_handler
     add esp, 4

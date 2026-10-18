@@ -44,6 +44,7 @@ static void gdt_set(int i, u32 base, u32 limit, u8 access, u8 gran) {
 }
 
 void set_kernel_stack(kv_addr_t rsp0) { tss.rsp0 = rsp0; }
+kv_addr_t get_kernel_stack(void) {return tss.rsp0;}
 
 void gdt_init(void) {
     gp.limit = sizeof(gdt) - 1;
@@ -112,6 +113,7 @@ static void gdt_set(int i, u32 base, u32 limit, u8 access, u8 gran) {
 }
 
 void set_kernel_stack(kv_addr_t esp0) { tss.esp0 = (u32)esp0; }
+kv_addr_t get_kernel_stack(void) {return tss.esp0;}
 
 void gdt_init(void) {
     gp.limit = sizeof(gdt) - 1;
@@ -127,7 +129,7 @@ void gdt_init(void) {
     tss.ss0  = 0x10;
     tss.esp0 = (u32)&kernel_stack_top;
     tss.iomap_base = sizeof(tss);
-    gdt_set(5, (u32)&tss, sizeof(tss) - 1, 0xE9, 0x00);  /* TSS 0x28 */
+    gdt_set(5, (u32)&tss, sizeof(tss) - 1, 0x89, 0x00);  /* TSS 0x28 */
 
     gdt_flush((u32)&gp);
     tss_flush();

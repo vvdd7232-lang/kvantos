@@ -16,6 +16,8 @@
  *  All numbers are little-endian, exactly as the CPU stores them.
  * ============================================================ */
 #include "kernel.h"
+#include "vfs.h"
+#include "native_name.h"
 
 #define KVFS_MAGIC     0x5346564Bu     /* "KVFS" */
 #define KVFS_VERSION   2
@@ -91,6 +93,7 @@ static int write_super(void) {
 
 /* Mount an existing filesystem. Returns 0 when the disk holds KvFS. */
 int kvfs_mount(void) {
+    vfs_namespace_changed();
     mounted = 0;
     dev = ata_boot_drive();
     if (dev < 0) return -1;
@@ -99,7 +102,27 @@ int kvfs_mount(void) {
     memcpy(&super, secbuf, sizeof(super));
     if (super.magic != KVFS_MAGIC) return -3;      /* a foreign or empty disk */
     if (super.version != KVFS_VERSION) return -4;
+    if (super.data_start!=DATA_START || super.total_sectors<DATA_START+64 ||
+        super.total_sectors>ata_sectors(dev)) return -4;
     if (read_dir() < 0) return -2;
+    /* Reject bad extents before first-fit arithmetic or string lookup. */
+    for(int i=0;i<KVFS_MAX_FILES;i++) {
+        kvfs_dirent_t *e=&dir[i];
+        if(!(e->flags&1)) continue;
+        int terminated=0;
+        for(unsigned j=0;j<sizeof(e->name);j++) if(!e->name[j]) { terminated=1; break; }
+        if(!terminated || !e->name[0] || (e->flags&~3u) || !e->sectors ||
+           e->start<DATA_START || e->start>=super.total_sectors ||
+           e->sectors>super.total_sectors-e->start ||
+           e->size/512+(e->size%512!=0)>e->sectors || e->size>0x7fffffffu) return -4;
+        for(int j=0;j<i;j++) if(dir[j].flags&1) {
+            if(!strcmp(e->name,dir[j].name) ||
+               (e->start<dir[j].start+dir[j].sectors && dir[j].start<e->start+e->sectors)) return -4;
+        }
+    }
+    /* v2 file_count is advisory; directory entries are authoritative. */
+    super.file_count=0;
+    for(int i=0;i<KVFS_MAX_FILES;i++) if(dir[i].flags&1) super.file_count++;
 
     mounted = 1;
     return 0;
@@ -109,6 +132,8 @@ int kvfs_mount(void) {
    the data: the sectors holding file bodies simply stop being
    referenced by anyone. */
 int kvfs_format(void) {
+    vfs_namespace_changed();
+    mounted=0;
     dev = ata_boot_drive();
     if (dev < 0) return -1;
 
@@ -142,6 +167,7 @@ static int find_entry(const char *name) {
 static u32 find_space(u32 need_sectors) {
     u32 candidate = super.data_start;
     u32 limit = super.total_sectors;
+    if(candidate>limit || need_sectors>limit-candidate) return 0;
 
     for (int guard = 0; guard < KVFS_MAX_FILES + 1; guard++) {
         u32 next = 0;
@@ -156,11 +182,11 @@ static u32 find_space(u32 need_sectors) {
             }
         }
         if (!clash) {
-            if (candidate + need_sectors > limit) return 0;   /* no room */
+            if (candidate>limit || need_sectors>limit-candidate) return 0;   /* no room */
             return candidate;
         }
         candidate = next;
-        if (candidate + need_sectors > limit) return 0;
+        if (candidate>limit || need_sectors>limit-candidate) return 0;
     }
     return 0;
 }
@@ -192,7 +218,7 @@ int kvfs_list(int index, char *name, u32 *size, int *is_exec) {
 
 int kvfs_exists(const char *name) {
     if (!mounted) return 0;
-    return find_entry(name) >= 0;
+    return mounted && find_entry(name) >= 0;
 }
 
 u32 kvfs_size(const char *name) {
@@ -201,58 +227,45 @@ u32 kvfs_size(const char *name) {
     return i < 0 ? 0 : dir[i].size;
 }
 
-/* Write a whole file. An existing file with the same name is replaced. */
-int kvfs_write(const char *name, const void *data, u32 size, int is_exec) {
-    if (!mounted) return -1;
-    if (!name || !name[0]) return -4;
-    if (strlen(name) >= 40) return -5;
-
-    u32 need = (size + SECTOR_SIZE - 1) / SECTOR_SIZE;
-    if (need == 0) need = 1;
-
-    int slot = find_entry(name);
-    if (slot >= 0) {
-        /* Rewrite: if the new file fits in the old place, reuse it */
-        if (need <= dir[slot].sectors) {
-            dir[slot].size  = size;
-            dir[slot].flags = 1 | (is_exec ? 2 : 0);
-        } else {
-            dir[slot].flags = 0;          /* release it and search again */
-            slot = -1;
-        }
-    }
-
-    if (slot < 0) {
-        for (int i = 0; i < KVFS_MAX_FILES; i++)
-            if (!(dir[i].flags & 1)) { slot = i; break; }
-        if (slot < 0) return -6;          /* the directory is full */
-
-        u32 start = find_space(need);
-        if (!start) return -7;            /* no contiguous space */
-
-        memset(&dir[slot], 0, sizeof(dir[slot]));
-        strncpy(dir[slot].name, name, 40);
-        dir[slot].name[39] = 0;
-        dir[slot].start   = start;
-        dir[slot].sectors = need;
-        dir[slot].size    = size;
-        dir[slot].flags   = 1 | (is_exec ? 2 : 0);
-    }
-
-    /* Written sector by sector: the last one is zero padded */
-    const u8 *p = (const u8 *)data;
-    for (u32 s = 0; s < need; s++) {
-        u32 chunk = size - s * SECTOR_SIZE;
-        if (chunk > SECTOR_SIZE) chunk = SECTOR_SIZE;
-        memset(secbuf, 0, SECTOR_SIZE);
-        if (chunk > 0 && chunk <= SECTOR_SIZE) memcpy(secbuf, p + s * SECTOR_SIZE, chunk);
-        if (ata_write(dev, dir[slot].start + s, 1, secbuf) < 0) return -2;
-    }
-
-    super.file_count = (u32)kvfs_file_count();
-    if (write_dir() < 0) return -2;
-    if (write_super() < 0) return -2;
+/* Publish just the affected directory sector, after the new body is durable.
+ * No later superblock write may turn a committed save into a reported failure.
+ * v2's on-disk file_count is advisory, recalculated on mount by all our readers.
+ * A failed metadata write has an unknown outcome: fence the mount rather than
+ * let a later save flush stale RAM metadata over it. No torn-sector guarantee. */
+static int commit_entry(int slot,const kvfs_dirent_t *entry) {
+    unsigned group=(unsigned)slot/8;
+    memcpy(secbuf,(u8 *)dir+group*512,512);
+    memcpy(secbuf+(slot%8)*sizeof(*entry),entry,sizeof(*entry));
+    if(ata_write(dev,DIR_SECTOR+group,1,secbuf)<0) { mounted=0;vfs_namespace_changed();return -2; }
+    dir[slot]=*entry;
+    super.file_count=(u32)kvfs_file_count();
     return 0;
+}
+/* Copy-on-write: never release/reuse the old extent before publication.
+ * Even a shorter replacement requires spare contiguous space. */
+int kvfs_write(const char *name,const void *data,u32 size,int is_exec) {
+    if(!mounted) return -1;
+    if(!name || !name[0]) return -4;
+    if(strlen(name)>=40) return -5;
+    if((size && !data) || size>0x7fffffffu) return -8;
+    u32 need=size/512+(size%512!=0);
+    if(!need) need=1;
+    int slot=find_entry(name);
+    if(slot<0) for(int i=0;i<KVFS_MAX_FILES;i++) if(!(dir[i].flags&1)) { slot=i; break; }
+    if(slot<0) return -6;
+    u32 start=find_space(need);
+    if(!start) return -7;
+    kvfs_dirent_t next;
+    memset(&next,0,sizeof(next)); strncpy(next.name,name,sizeof(next.name));
+    next.start=start; next.sectors=need; next.size=size; next.flags=1|(is_exec?2:0);
+    for(u32 s=0;s<need;s++) {
+        u32 at=s*512,bytes=size>at?size-at:0;
+        if(bytes>512) bytes=512;
+        memset(secbuf,0,512);
+        if(bytes) memcpy(secbuf,(const u8 *)data+at,bytes);
+        if(ata_write(dev,start+s,1,secbuf)<0) return -2;
+    }
+    return commit_entry(slot,&next);
 }
 
 /* Read a file into a buffer. Returns the number of bytes read, or < 0. */
@@ -279,11 +292,21 @@ int kvfs_delete(const char *name) {
     if (!mounted) return -1;
     int i = find_entry(name);
     if (i < 0) return -3;
-    dir[i].flags = 0;
-    super.file_count = (u32)kvfs_file_count();
-    if (write_dir() < 0) return -2;
-    if (write_super() < 0) return -2;
-    return 0;
+    kvfs_dirent_t next=dir[i]; next.flags=0;
+    return commit_entry(i,&next);
+}
+
+/* Rename one existing directory entry, retaining its extent/size/flags.
+   A failed metadata write is uncertain, and commit_entry fences the mount. */
+int kvfs_rename(const char *from,const char *to) {
+    if(!mounted)return -1;
+    int length=native_name_length(to,sizeof(dir[0].name));
+    if(length<0 || native_name_length(from,sizeof(dir[0].name))<0)return -4;
+    int slot=find_entry(from);if(slot<0)return -3;
+    if(!strcmp(from,to))return 0;
+    if(find_entry(to)>=0)return -5;
+    kvfs_dirent_t next=dir[slot];memset(next.name,0,sizeof(next.name));memcpy(next.name,to,(u32)length);
+    return commit_entry(slot,&next)?-6:0;
 }
 
 /* Usage information for the df command and the installer window */
@@ -308,7 +331,8 @@ const char *kvfs_error(int code) {
         case -4: return T("empty file name", "пустое имя файла");
         case -5: return T("name longer than 39 characters", "имя длиннее 39 символов");
         case -6: return T("directory is full (64 files maximum)", "каталог переполнен (максимум 64 файла)");
-        case -7: return T("not enough contiguous space on the disk", "не хватает непрерывного места на диске");
+        case -7: return T("not enough spare contiguous space (safe replacement)", "не хватает свободного непрерывного места для безопасной замены");
+        case -8: return T("invalid data buffer or file size", "неверный буфер данных или размер файла");
         default: return T("unknown error", "неизвестная ошибка");
     }
 }
