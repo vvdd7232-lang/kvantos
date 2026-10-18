@@ -59,6 +59,11 @@ static int ehci_dma_address(const void *p,u32 size,u32 alignment,u32 *out) {
 #ifndef EHCI_DMA
 #define EHCI_DMA ehci_dma_address
 #endif
+/* Optional one-line serial dump of the fault snapshot on a fenced
+ * transfer (kernel build only; host harness keeps this a no-op). */
+#ifndef EHCI_DIAG
+#define EHCI_DIAG(...) ((void)0)
+#endif
 static int ehci_wait(hc_t *h,unsigned reg,u32 mask,u32 value) {
     u64 end=clock_now()+1000000000ULL;
     for(unsigned n=1000000;n && clock_now()<end;n--) {
@@ -103,6 +108,9 @@ static int ehci_failed(usb_disk_t *d,ehci_fault_t *f,unsigned reason) {
     f->post_frame=(ehci_reg(h,0xC)>>3)&2047;f->current=s->qh.current;f->next=s->qh.overlay.next;
     f->endpoint=s->qh.endpoint;f->caps=s->qh.caps;f->address=d->address;f->generation=d->generation;
     ehci_faults[h->pool]=*f;
+    EHCI_DIAG("[ehci] transfer fenced: reason %u len %u ret %u iter %u td %08x ovl %08x cur %08x next %08x cmd %08x sts %08x port %08x frame %u->%u\n",
+        f->reason,f->len,f->retired,f->iterations,f->post_td,f->post_overlay,f->current,f->next,
+        f->command,f->status,f->port,f->start_frame,f->stop_frame);
     return ehci_fence(h);
 }
 static int ehci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,unsigned len) {

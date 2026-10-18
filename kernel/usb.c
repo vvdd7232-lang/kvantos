@@ -54,6 +54,7 @@ static u64 clock_now(void) {
 }
 static int frames_wait(hc_t *h, unsigned n);
 static int usb_tt_route(usb_disk_t *d,u32 *caps);
+#define EHCI_DIAG(...) kprintf(__VA_ARGS__)
 #include "usb_ehci.h"
 #include "usb_ohci.h"
 static unsigned frame_number(hc_t *h) {
