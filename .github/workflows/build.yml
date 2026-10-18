@@ -113,7 +113,7 @@ jobs:
               tail -c 3000 "$f" | tr -d '\r' | tail -60
               echo '```'
             done
-          } >> "$GITHUB_STEP_SUMMARY" || true
+          } | tee -a "$GITHUB_STEP_SUMMARY" || true
 
   fat-host:
     runs-on: ubuntu-24.04
@@ -227,7 +227,7 @@ jobs:
               tail -c 3000 "$f" | tr -d '\r' | tail -60
               echo '```'
             done
-          } >> "$GITHUB_STEP_SUMMARY" || true
+          } | tee -a "$GITHUB_STEP_SUMMARY" || true
 
   storage-ahci-wal:
     runs-on: ubuntu-24.04
@@ -327,7 +327,7 @@ jobs:
               tail -c 3000 "$f" | tr -d '\r' | tail -60
               echo '```'
             done
-          } >> "$GITHUB_STEP_SUMMARY" || true
+          } | tee -a "$GITHUB_STEP_SUMMARY" || true
 
   storage-fs-hubs:
     runs-on: ubuntu-24.04
@@ -445,4 +445,4 @@ jobs:
               tail -c 3000 "$f" | tr -d '\r' | tail -60
               echo '```'
             done
-          } >> "$GITHUB_STEP_SUMMARY" || true
+          } | tee -a "$GITHUB_STEP_SUMMARY" || true
