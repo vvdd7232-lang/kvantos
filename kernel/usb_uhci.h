@@ -35,8 +35,11 @@ static int uhci_transfer(usb_disk_t *d,u8 pid,u8 ep,u16 mps,
     q->element = physical(tds);
     unsigned start = inw(d->hc->io + 6) & 2047, done = 0;
     int result = -1, total = 0;
-    u64 until = clock_now() + 1000000000ULL;
-    while (((inw(d->hc->io + 6) - start) & 2047u) < 250 && clock_now() < until) {
+    /* Bounded by frames + TSC, widened for emulator completion latency
+     * (QEMU usb-storage WRITE finishes via async block I/O; a loaded TCG
+     * host can exceed 250 frames). See EHCI_POLL_* in usb_ehci.h. */
+    u64 until = clock_now() + 8000000000ULL;
+    while (((inw(d->hc->io + 6) - start) & 2047u) < 2000 && clock_now() < until) {
         u32 port=port_status(d->hc,d->port);
         if((port&5)!=5 || (d->generation && (port&0xA))) break;
         while (done < count) {
