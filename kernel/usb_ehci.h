@@ -222,9 +222,9 @@ static int ehci_ownership(pci_dev_t *p,u32 caps) {
 static int ehci_init_fail(hc_t *h,const char *why) {
     ehci_fence(h);return ehci_fail(why);
 }
-static int ehci_init(pci_dev_t *p,hc_t *h) {
+static int ehci_init_pool(pci_dev_t *p,hc_t *h,int pool) {
     u32 bar=pci_read32(p->bus,p->slot,p->func,0x10),base=bar&~15u;
-    if((bar&1) || ((bar&6)!=0 && (bar&6)!=4) || base<0x10000 || base>0xFFFFF000u || ehci_used>=HC_MAX)
+    if((bar&1) || ((bar&6)!=0 && (bar&6)!=4) || base<0x10000 || base>0xFFFFF000u || (pool<0 && ehci_used>=HC_MAX))
         return ehci_fail("USB: invalid EHCI BAR/pool full");
     if((bar&6)==4 && pci_read32(p->bus,p->slot,p->func,0x14)) return ehci_fail("USB: EHCI BAR above 4 GiB");
     if(paging_map_mmio(base,4096)<0) return ehci_fail("USB: EHCI MMIO map failed");
@@ -236,7 +236,7 @@ static int ehci_init(pci_dev_t *p,hc_t *h) {
         return ehci_fail("USB: invalid EHCI capabilities");
     if(!ehci_ownership(p,cap[2])) return ehci_fail("USB: EHCI firmware handoff failed");
     memset(h,0,sizeof(*h));h->kind=1;h->ports=(u8)ports;h->op=EHCI_MMIO(base+len);
-    h->bus=p->bus;h->slot=p->slot;h->func=p->func;h->pool=(u8)ehci_used++;
+    h->bus=p->bus;h->slot=p->slot;h->func=p->func;h->pool=(u8)(pool<0?ehci_used++:(unsigned)pool);
     pci_write32(p->bus,p->slot,p->func,4,(cmd|2)&~4u);
     (void)pci_read32(p->bus,p->slot,p->func,4);
     ehci_write(h,8,0);ehci_write(h,0,0);
@@ -259,3 +259,4 @@ static int ehci_init(pci_dev_t *p,hc_t *h) {
     if(!ehci_frames_wait(h,100)) return ehci_init_fail(h,"USB: EHCI frames stopped");
     return 1;
 }
+static int ehci_init(pci_dev_t *p,hc_t *h) { return ehci_init_pool(p,h,-1); }
