@@ -107,6 +107,7 @@ jobs:
         run: |
           {
             echo '## Guest/test log tails (storage-lab)'
+            grep -rn '\[ehci\]\|\[fat\]\|M2LAB\|result=-' build tests --include='*.log' 2>/dev/null | head -40 || true
             find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
               echo "### $f"
               echo '```'
@@ -221,6 +222,7 @@ jobs:
         run: |
           {
             echo '## Guest/test log tails (storage-ahci)'
+            grep -rn '\[ehci\]\|\[fat\]\|M2LAB\|result=-' build tests --include='*.log' 2>/dev/null | head -40 || true
             find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
               echo "### $f"
               echo '```'
@@ -321,6 +323,7 @@ jobs:
         run: |
           {
             echo '## Guest/test log tails (storage-ohci)'
+            grep -rn '\[ehci\]\|\[fat\]\|M2LAB\|result=-' build tests --include='*.log' 2>/dev/null | head -40 || true
             find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
               echo "### $f"
               echo '```'
@@ -439,6 +442,7 @@ jobs:
         run: |
           {
             echo '## Guest/test log tails (compiler-isolation)'
+            grep -rn '\[ehci\]\|\[fat\]\|M2LAB\|result=-' build tests --include='*.log' 2>/dev/null | head -40 || true
             find build tests -type f -name '*.log' 2>/dev/null | sort | head -30 | while read -r f; do
               echo "### $f"
               echo '```'
