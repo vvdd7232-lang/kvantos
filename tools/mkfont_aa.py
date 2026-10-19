@@ -97,7 +97,7 @@ def emit(name, glyphs, out):
 
 
 def preview(glyphs, path):
-    sample = ('KvantOS 3.1.4 "Photon" 0123456789\n'
+    sample = ('KvantOS "Photon" 0123456789\n'
               'Графическая среда: окна, иконки, меню\n'
               'АБВГДЕЖЗ абвгдежз Ёё № § <> [] {} ()\n'
               'The quick brown fox -> C:\\KvantOS\\sdk\n'
