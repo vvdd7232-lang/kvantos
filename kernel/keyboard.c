@@ -60,7 +60,10 @@ static void kbd_cb(registers_t *r) {
             case 0x51: mouse_move_rel( step,  step); return; /* 3 */
             case 0x4C:                                     /* 5 - click */
                 mouse_set_button(0, 1);
-                mk_release = timer_ticks()+timer_hz()*60/1000+1;
+                /* 180 ms: a human click lasts about this long, and a
+                   busy GUI (or slow real hardware) still gets a full
+                   input sample inside the pressed window. */
+                mk_release = timer_ticks()+timer_hz()*180/1000+1;
                 return;
             case 0x52: mk_release=0; mouse_set_button(0, 1); return;     /* 0 - hold */
             case 0x53: mk_release=0; mouse_set_button(0, 0); return;     /* . - release */

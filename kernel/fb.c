@@ -316,21 +316,45 @@ void fb_round_fill_aa(i32 x, i32 y, i32 w, i32 h, i32 r, u32 c) {
     }
 }
 
-/* Soft drop shadow: layered rounded rects with growing blur and alpha */
+/* Soft drop shadow: layered rings with growing blur and alpha.
+   The 32-bit path blends in place with plain channel arithmetic -
+   this runs for every window in every frame, so it has to be cheap. */
 void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 r) {
     if (!fb_ok) return;
     u32 black = fb_rgb(0, 0, 0);
     if (!fb_aa) { fb_fill(x + 4, y + 4, w, h, black); return; }
-    for (i32 i = 7; i >= 1; i--) {
+    (void)r;
+    if (fb_bpp == 32 && r_size == 8 && g_size == 8 && b_size == 8) {
+        for (i32 i = 5; i >= 1; i--) {
+            i32 ex = x - i, ey = y - i + 3, ew = w + 2 * i, eh = h + 2 * i;
+            u32 ia = 255u - (u32)(30 - i * 3);
+            if (ex < 0) { ew += ex; ex = 0; }
+            if (ey < 0) { eh += ey; ey = 0; }
+            if (ex + ew > (i32)fb_w) ew = (i32)fb_w - ex;
+            if (ey + eh > (i32)fb_h) eh = (i32)fb_h - ey;
+            if (ew <= 0 || eh <= 0) continue;
+            for (i32 yy = ey; yy < ey + eh; yy++) {
+                u32 *p = (u32 *)(fb_draw + (u32)yy * fb_pitch + (u32)ex * 4);
+                for (i32 xx = ex; xx < ex + ew; xx++, p++) {
+                    if (xx >= x && xx < x + w && yy >= y && yy < y + h) continue;
+                    if (!clip_has_pixel(xx, yy)) continue;
+                    u32 bgc = *p;
+                    *p = (((bgc >> 16) & 255) * ia / 255 << 16) |
+                         (((bgc >> 8) & 255) * ia / 255 << 8) |
+                         ((bgc & 255) * ia / 255);
+                }
+            }
+        }
+        return;
+    }
+    for (i32 i = 5; i >= 1; i--) {
         i32 ex = x - i, ey = y - i + 3, ew = w + 2 * i, eh = h + 2 * i;
-        u32 alpha = (u32)(26 - i * 2);
-        /* blend only the visible ring; the body covers the middle */
+        u32 alpha = (u32)(30 - i * 3);
         for (i32 yy = ey; yy < ey + eh; yy++)
             for (i32 xx = ex; xx < ex + ew; xx++) {
                 if (xx >= x && xx < x + w && yy >= y && yy < y + h) continue;
                 fb_blend_pixel(xx, yy, black, alpha);
             }
-        (void)r;
     }
 }
 
@@ -425,14 +449,14 @@ void fb_round_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
 
 /* ---------- text ---------- */
 
-/* Coverage 0..255 of glyph pixel (r,c). Bold is synthesized from the
-   regular face by smearing ink one pixel to the right. */
+/* Coverage level 0..15 of glyph pixel (r,c). Bold is synthesized from
+   the regular face by smearing ink one pixel to the right. */
 static inline u32 cov_at(const u8 *g, i32 r, i32 c, int bold) {
     u8 packed = g[r * 4 + (c >> 1)];
-    u32 a = ((c & 1) ? (packed & 0x0F) : (packed >> 4)) * 17u;
+    u32 a = (c & 1) ? (packed & 0x0F) : (packed >> 4);
     if (bold && c > 0) {
         u8 prev = g[r * 4 + ((c - 1) >> 1)];
-        u32 pa = (((c - 1) & 1) ? (prev & 0x0F) : (prev >> 4)) * 17u;
+        u32 pa = ((c - 1) & 1) ? (prev & 0x0F) : (prev >> 4);
         if (pa > a) a = pa;
     }
     return a;
@@ -443,38 +467,57 @@ static inline u32 cov_at(const u8 *g, i32 r, i32 c, int bold) {
 static void glyph_cov(i32 x, i32 y, u8 ch, int bold, u32 fg, u32 bg, i32 scale) {
     const u8 *cov = &kv_font_aa[(u32)ch * 64];
     if (fb_bpp == 32 && scale == 1 && bg != 0xFFFFFFFFu &&
-        x >= 0 && y >= 0 && x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h &&
-        clip_contains_box(x, y, 8, 16)) {
-        /* fast path: solid background in the 32-bit back buffer */
+        x >= 0 && y >= 0 && x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h) {
+        /* solid background in the 32-bit buffer; the per-pixel clip test
+           keeps this fast even when damage splits the glyph box. The 16
+           coverage levels are pre-blended once per glyph into a LUT, so
+           the inner loop is just loads and stores. */
         u8 *row = fb_draw + (u32)y * fb_pitch + (u32)x * 4;
-        int fr, fgr, fbb, br, bgr, bbb;
-        unpack_rgb(fg, &fr, &fgr, &fbb);
-        unpack_rgb(bg, &br, &bgr, &bbb);
+        u32 lut[16];
+        int full = clip_contains_box(x, y, 8, 16);
+        for (int i = 0; i < 16; i++) lut[i] = blend_rgb(fg, bg, (u32)i * 17u);
         for (i32 r = 0; r < 16; r++, row += fb_pitch) {
             u32 *p = (u32 *)row;
             for (i32 c = 0; c < 8; c++) {
-                u32 a = cov_at(cov, r, c, bold);
-                if (a == 0) p[c] = bg;
-                else if (a == 255) p[c] = fg;
-                else {
-                    u32 ia = 255 - a;
-                    p[c] = fb_rgb((u8)((fr * (int)a + br * (int)ia) / 255),
-                                  (u8)((fgr * (int)a + bgr * (int)ia) / 255),
-                                  (u8)((fbb * (int)a + bbb * (int)ia) / 255));
-                }
+                if (!full && !clip_has_pixel(x + c, y + r)) continue;
+                p[c] = lut[cov_at(cov, r, c, bold)];
+            }
+        }
+        return;
+    }
+    if (fb_bpp == 32 && scale == 1 && bg == 0xFFFFFFFFu &&
+        r_size == 8 && g_size == 8 && b_size == 8 &&
+        x >= 0 && y >= 0 && x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h) {
+        /* transparent background: blend ink over the pixels below.
+           Only ink pixels are touched, with plain channel arithmetic. */
+        int full = clip_contains_box(x, y, 8, 16);
+        int fr = (int)((fg >> 16) & 255), fg_ = (int)((fg >> 8) & 255),
+            fb_ = (int)(fg & 255);
+        u8 *row = fb_draw + (u32)y * fb_pitch + (u32)x * 4;
+        for (i32 r = 0; r < 16; r++, row += fb_pitch) {
+            u32 *p = (u32 *)row;
+            for (i32 c = 0; c < 8; c++) {
+                u32 a = cov_at(cov, r, c, bold) * 17u;
+                if (!a) continue;
+                if (!full && !clip_has_pixel(x + c, y + r)) continue;
+                if (a == 255) { p[c] = fg; continue; }
+                u32 bgc = p[c], ia = 255 - a;
+                p[c] = fb_rgb((u8)((fr * (int)a + (int)((bgc >> 16) & 255) * (int)ia) / 255),
+                              (u8)((fg_ * (int)a + (int)((bgc >> 8) & 255) * (int)ia) / 255),
+                              (u8)((fb_ * (int)a + (int)(bgc & 255) * (int)ia) / 255));
             }
         }
         return;
     }
     for (i32 r = 0; r < 16 * scale; r++) {
         for (i32 c = 0; c < 8 * scale; c++) {
-            u32 a = cov_at(cov, r / scale, c / scale, bold);
+            u32 a = cov_at(cov, r / scale, c / scale, bold) * 17u;
             if (!a) {
                 if (bg != 0xFFFFFFFFu && scale == 1) fb_pixel((u32)(x + c), (u32)(y + r), bg);
                 continue;
             }
             if (bg != 0xFFFFFFFFu && a == 255) {
-                fb_fill(x + c, y + r, 1, 1, fg);
+                fb_pixel((u32)(x + c), (u32)(y + r), fg);
             } else if (bg != 0xFFFFFFFFu) {
                 fb_pixel((u32)(x + c), (u32)(y + r), blend_rgb(fg, bg, a));
             } else {

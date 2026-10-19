@@ -1543,10 +1543,8 @@ static void draw_desktop(void) {
         i32 x = icons[i].x, y = icons[i].y;
         if (i == sel_icon)
             fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(52, 84, 136));
-        else if (i == hover_icon)
-            fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(38, 56, 92));
         draw_icon_glyph(icons[i].app, x + ICON_W / 2 - 24, y);
-        if (i == sel_icon || i == hover_icon) {
+        if (i == sel_icon) {
             const char *n = app_name(icons[i].app);
             i32 tw = (i32)utf8_len(n) * 8;
             fb_text_bold(x - 6 + (ICON_W - tw) / 2, y + 44, n, C_WHITE, 0xFFFFFFFF);
@@ -1641,6 +1639,17 @@ static void damage_tooltip(int i) {
 }
 
 static void draw_tooltip(void) {
+    /* the hover pill lives in the overlay, NOT in the cached desktop:
+       invalidating that 3 MB cache on every pointer move would stall
+       the whole GUI under a moving mouse */
+    if (hover_icon >= 0 && !launcher_open) {
+        i32 x = icons[hover_icon].x, y = icons[hover_icon].y;
+        fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(38, 56, 92));
+        draw_icon_glyph(icons[hover_icon].app, x + ICON_W / 2 - 24, y);
+        const char *n = app_name(icons[hover_icon].app);
+        i32 tw = (i32)utf8_len(n) * 8;
+        fb_text_bold(x - 6 + (ICON_W - tw) / 2, y + 44, n, C_WHITE, 0xFFFFFFFF);
+    }
     if (hover_icon < 0 || launcher_open) return;
     i32 tx, ty, tw;
     tooltip_rect(hover_icon, &tx, &ty, &tw);
@@ -2817,7 +2826,6 @@ int gui_run(void) {
             int hov = (!launcher_open && dragging < 0 &&
                        window_at(mx, my) < 0) ? icon_at(mx, my) : -1;
             if (hov != hover_icon) {
-                desktop_cache_valid = 0;
                 damage_icon(hover_icon);
                 damage_icon(hov);
                 damage_tooltip(hover_icon);
