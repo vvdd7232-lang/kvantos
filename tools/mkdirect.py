@@ -131,7 +131,10 @@ def main():
         img += data
         if padded > len(data):
             img += b"\0" * (padded - len(data))
-    if bounce > 0x78000:
+    # The bounce area ends 8 KiB below the Multiboot info block
+    # (MBI at 0x90000 in boot/direct.asm); conventional memory and the
+    # BIOS data area live far below BOUNCE_BASE, the EBDA far above.
+    if bounce > 0x8E000:
         print(f"mkdirect: bounce area grew to {bounce:#x}, out of room")
         return 1
 

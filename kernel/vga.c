@@ -171,6 +171,9 @@ void vga_status(const char *left, const char *right, u8 cl) {
 
     kv_flags_t fl = irq_save();
     if (gfx) {
+        /* The GUI owns the framebuffer: the kvsh status line must not
+           scribble over the desktop every half second. */
+        if (gui_active()) { irq_restore(fl); return; }
         u32 bg = bg_rgb(cl), fg = fg_rgb(cl);
         fb_fill(0, 0, (i32)fb_width(), 16, bg);
         for (u32 x = 0; x < ln && x < cols; x++)

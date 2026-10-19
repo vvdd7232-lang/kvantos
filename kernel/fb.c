@@ -5,6 +5,7 @@
 #include "kernel.h"
 
 extern const u8 kv_font8x16[256 * 16];
+extern const u8 kv_font_aa[256 * 16 * 4];   /* 4-bit coverage, nibble-packed */
 
 static u8  *fb_hw    = NULL;      /* the physical adapter buffer */
 static u8  *fb_draw  = NULL;      /* current drawing target */
@@ -173,6 +174,191 @@ void fb_pixel(u32 x, u32 y, u32 c) {
     put_raw(x, y, c);
 }
 
+/* ---------- anti-aliasing core ---------- */
+
+static int fb_aa = 1;
+void fb_set_aa(int on) { fb_aa = !!on; }
+int  fb_aa_on(void)    { return fb_aa; }
+
+static u32 get_raw(u32 x, u32 y) {
+    const u8 *p = fb_draw + y * fb_pitch + x * (fb_bpp >> 3);
+    switch (fb_bpp) {
+        case 32: return *(const u32 *)p;
+        case 24: return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16);
+        default: return *(const u16 *)p;
+    }
+}
+
+static void unpack_rgb(u32 c, int *r, int *g, int *b) {
+    int rm = (1 << r_size) - 1, gm = (1 << g_size) - 1, bm = (1 << b_size) - 1;
+    *r = (int)(((c >> r_pos) & (u32)rm) * 255u / (u32)rm);
+    *g = (int)(((c >> g_pos) & (u32)gm) * 255u / (u32)gm);
+    *b = (int)(((c >> b_pos) & (u32)bm) * 255u / (u32)bm);
+}
+
+/* fg over bg with coverage alpha 0..255, all in packed fb colours */
+static u32 blend_rgb(u32 fg, u32 bg, u32 alpha) {
+    if (alpha == 0) return bg;
+    if (alpha >= 255) return fg;
+    int fr, fg_, fb_, br, bg_, bb;
+    unpack_rgb(fg, &fr, &fg_, &fb_);
+    unpack_rgb(bg, &br, &bg_, &bb);
+    u32 ia = 255 - alpha;
+    return fb_rgb((u8)((fr * (int)alpha + br * (int)ia) / 255),
+                  (u8)((fg_ * (int)alpha + bg_ * (int)ia) / 255),
+                  (u8)((fb_ * (int)alpha + bb * (int)ia) / 255));
+}
+
+void fb_blend_pixel(i32 x, i32 y, u32 c, u32 alpha) {
+    if (!fb_ok || x < 0 || y < 0 || x >= (i32)fb_w || y >= (i32)fb_h) return;
+    if (!alpha) return;
+    if (!clip_has_pixel(x, y)) return;
+    if (alpha >= 255) { put_raw((u32)x, (u32)y, c); return; }
+    put_raw((u32)x, (u32)y, blend_rgb(c, get_raw((u32)x, (u32)y), alpha));
+}
+
+static u32 isqrt32(u32 v) {
+    u32 r = 0, bit = 1u << 30;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+
+/* Xiaolin Wu anti-aliased line */
+void fb_line_aa(i32 x0, i32 y0, i32 x1, i32 y1, u32 c) {
+    if (!fb_ok) return;
+    int steep = 0;
+    i32 dx = x1 - x0, dy = y1 - y0;
+    if (dy < 0 ? -dy > (dx < 0 ? -dx : dx) : dy > (dx < 0 ? -dx : dx)) steep = 1;
+    if (steep) {
+        i32 t;
+        t = x0; x0 = y0; y0 = t;
+        t = x1; x1 = y1; y1 = t;
+    }
+    if (x0 > x1) {
+        i32 t;
+        t = x0; x0 = x1; x1 = t;
+        t = y0; y0 = y1; y1 = t;
+    }
+    dx = x1 - x0; dy = y1 - y0;
+    if (!dx) { fb_blend_pixel(x0, y0, c, 255); return; }
+    /* y in 16.16 fixed point, gradient step per column */
+    i32 grad = dy * 65536 / dx;
+    i32 y = y0 * 65536 + grad / 2;
+    for (i32 x = x0; x <= x1; x++, y += grad) {
+        i32 yi = y >> 16;
+        u32 frac = ((u32)y >> 8) & 0xFF;
+        if (steep) {
+            fb_blend_pixel(yi, x, c, 255 - frac);
+            fb_blend_pixel(yi + 1, x, c, frac);
+        } else {
+            fb_blend_pixel(x, yi, c, 255 - frac);
+            fb_blend_pixel(x, yi + 1, x, frac);
+        }
+    }
+}
+
+/* Filled circle with a supersampled (2x2) anti-aliased rim */
+void fb_disc_aa(i32 cx, i32 cy, i32 r, u32 c) {
+    if (!fb_ok || r <= 0) return;
+    i32 r2 = r * r * 4;               /* radius squared in half-pixel units */
+    for (i32 y = cy - r; y <= cy + r; y++) {
+        for (i32 x = cx - r; x <= cx + r; x++) {
+            int inside = 0;
+            for (int sy = 0; sy < 2; sy++) {
+                for (int sx = 0; sx < 2; sx++) {
+                    i32 px = (x - cx) * 2 + sx, py = (y - cy) * 2 + sy;
+                    if (px * px + py * py <= r2) inside++;
+                }
+            }
+            if (inside) fb_blend_pixel(x, y, c, (u32)inside * 255 / 4);
+        }
+    }
+}
+
+/* Coverage of one pixel of a rounded-rect corner (2x2 supersampling) */
+static u32 corner_cov(i32 px, i32 py, i32 ccx, i32 ccy, i32 r) {
+    int inside = 0;
+    i32 r2 = r * r * 4;
+    for (int sy = 0; sy < 2; sy++) {
+        for (int sx = 0; sx < 2; sx++) {
+            i32 qx = (px - ccx) * 2 + sx, qy = (py - ccy) * 2 + sy;
+            if (qx * qx + qy * qy <= r2) inside++;
+        }
+    }
+    return (u32)inside * 255 / 4;
+}
+
+void fb_round_fill_aa(i32 x, i32 y, i32 w, i32 h, i32 r, u32 c) {
+    if (!fb_ok || w <= 0 || h <= 0) return;
+    if (r < 0) r = 0;
+    if (2 * r > w) r = w / 2;
+    if (2 * r > h) r = h / 2;
+    if (r == 0 || !fb_aa) { fb_fill(x, y, w, h, c); return; }
+    fb_fill(x + r, y, w - 2 * r, h, c);
+    fb_fill(x, y + r, r, h - 2 * r, c);
+    fb_fill(x + w - r, y + r, r, h - 2 * r, c);
+    for (i32 j = 0; j < r; j++) {
+        for (i32 i = 0; i < r; i++) {
+            u32 tl = corner_cov(x + i, y + j, x + r, y + r, r);
+            u32 tr = corner_cov(x + w - 1 - i, y + j, x + w - 1 - r, y + r, r);
+            u32 bl = corner_cov(x + i, y + h - 1 - j, x + r, y + h - 1 - r, r);
+            u32 br = corner_cov(x + w - 1 - i, y + h - 1 - j, x + w - 1 - r, y + h - 1 - r, r);
+            if (tl) fb_blend_pixel(x + i, y + j, c, tl);
+            if (tr) fb_blend_pixel(x + w - 1 - i, y + j, c, tr);
+            if (bl) fb_blend_pixel(x + i, y + h - 1 - j, c, bl);
+            if (br) fb_blend_pixel(x + w - 1 - i, y + h - 1 - j, c, br);
+        }
+    }
+}
+
+/* Soft drop shadow: layered rounded rects with growing blur and alpha */
+void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 r) {
+    if (!fb_ok) return;
+    u32 black = fb_rgb(0, 0, 0);
+    if (!fb_aa) { fb_fill(x + 4, y + 4, w, h, black); return; }
+    for (i32 i = 7; i >= 1; i--) {
+        i32 ex = x - i, ey = y - i + 3, ew = w + 2 * i, eh = h + 2 * i;
+        u32 alpha = (u32)(26 - i * 2);
+        /* blend only the visible ring; the body covers the middle */
+        for (i32 yy = ey; yy < ey + eh; yy++)
+            for (i32 xx = ex; xx < ex + ew; xx++) {
+                if (xx >= x && xx < x + w && yy >= y && yy < y + h) continue;
+                fb_blend_pixel(xx, yy, black, alpha);
+            }
+        (void)r;
+    }
+}
+
+/* Vertical gradient whose TOP corners are rounded (for title bars) */
+void fb_gradient_v_round(i32 x, i32 y, i32 w, i32 h, i32 r,
+                         u8 r1, u8 g1, u8 b1, u8 r2, u8 g2, u8 b2) {
+    if (h <= 0 || w <= 0) return;
+    if (2 * r > w) r = w / 2;
+    for (i32 j = 0; j < h; j++) {
+        u32 t = (u32)j * 256u / (u32)h;
+        u8 cr = (u8)(r1 + ((i32)(r2 - r1) * (i32)t) / 256);
+        u8 cg = (u8)(g1 + ((i32)(g2 - g1) * (i32)t) / 256);
+        u8 cb = (u8)(b1 + ((i32)(b2 - b1) * (i32)t) / 256);
+        u32 col = fb_rgb(cr, cg, cb);
+        if (j >= r || !fb_aa) {
+            fb_fill(x, y + j, w, 1, col);
+            continue;
+        }
+        i32 dy = r - 1 - j;
+        i32 half = (i32)isqrt32((u32)(r * r - dy * dy));
+        i32 inset = r - half;
+        fb_fill(x + inset, y + j, w - 2 * inset, 1, col);
+        /* soften the very edge pixel pair */
+        fb_blend_pixel(x + inset - 1, y + j, col, 110);
+        fb_blend_pixel(x + w - inset, y + j, col, 110);
+    }
+}
+
 static void fill_unclipped(i32 x, i32 y, i32 w, i32 h, u32 c) {
     for (i32 j = 0; j < h; j++) {
         u8 *row = fb_draw + (u32)(y + j) * fb_pitch + (u32)x * (fb_bpp >> 3);
@@ -232,28 +418,73 @@ void fb_gradient_v(i32 x, i32 y, i32 w, i32 h,
     }
 }
 
-/* Rounded rectangle (radius 4) */
+/* Rounded rectangle with anti-aliased corners (radius 6) */
 void fb_round_fill(i32 x, i32 y, i32 w, i32 h, u32 c) {
-    const i32 r = 4;
-    if (w < 2 * r || h < 2 * r) { fb_fill(x, y, w, h, c); return; }
-    fb_fill(x + r, y, w - 2 * r, h, c);
-    fb_fill(x, y + r, r, h - 2 * r, c);
-    fb_fill(x + w - r, y + r, r, h - 2 * r, c);
-    static const i32 off[4] = { 2, 1, 1, 0 };   /* corner profile */
-    for (i32 i = 0; i < r; i++) {
-        i32 o = off[i];
-        fb_fill(x + o, y + r - 1 - i, r - o, 1, c);
-        fb_fill(x + w - r, y + r - 1 - i, r - o, 1, c);
-        fb_fill(x + o, y + h - r + i, r - o, 1, c);
-        fb_fill(x + w - r, y + h - r + i, r - o, 1, c);
-    }
+    fb_round_fill_aa(x, y, w, h, 6, c);
 }
 
 /* ---------- text ---------- */
 
-/* A single CP866 character. bg = 0xFFFFFFFF means a transparent background */
-void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
-    if (!fb_ok) return;
+/* Coverage 0..255 of glyph pixel (r,c). Bold is synthesized from the
+   regular face by smearing ink one pixel to the right. */
+static inline u32 cov_at(const u8 *g, i32 r, i32 c, int bold) {
+    u8 packed = g[r * 4 + (c >> 1)];
+    u32 a = ((c & 1) ? (packed & 0x0F) : (packed >> 4)) * 17u;
+    if (bold && c > 0) {
+        u8 prev = g[r * 4 + ((c - 1) >> 1)];
+        u32 pa = (((c - 1) & 1) ? (prev & 0x0F) : (prev >> 4)) * 17u;
+        if (pa > a) a = pa;
+    }
+    return a;
+}
+
+/* Draw one glyph from the coverage font scaled by `scale` (1 = 8x16).
+   bg = 0xFFFFFFFF means a transparent background (blend over pixels). */
+static void glyph_cov(i32 x, i32 y, u8 ch, int bold, u32 fg, u32 bg, i32 scale) {
+    const u8 *cov = &kv_font_aa[(u32)ch * 64];
+    if (fb_bpp == 32 && scale == 1 && bg != 0xFFFFFFFFu &&
+        x >= 0 && y >= 0 && x + 8 <= (i32)fb_w && y + 16 <= (i32)fb_h &&
+        clip_contains_box(x, y, 8, 16)) {
+        /* fast path: solid background in the 32-bit back buffer */
+        u8 *row = fb_draw + (u32)y * fb_pitch + (u32)x * 4;
+        int fr, fgr, fbb, br, bgr, bbb;
+        unpack_rgb(fg, &fr, &fgr, &fbb);
+        unpack_rgb(bg, &br, &bgr, &bbb);
+        for (i32 r = 0; r < 16; r++, row += fb_pitch) {
+            u32 *p = (u32 *)row;
+            for (i32 c = 0; c < 8; c++) {
+                u32 a = cov_at(cov, r, c, bold);
+                if (a == 0) p[c] = bg;
+                else if (a == 255) p[c] = fg;
+                else {
+                    u32 ia = 255 - a;
+                    p[c] = fb_rgb((u8)((fr * (int)a + br * (int)ia) / 255),
+                                  (u8)((fgr * (int)a + bgr * (int)ia) / 255),
+                                  (u8)((fbb * (int)a + bbb * (int)ia) / 255));
+                }
+            }
+        }
+        return;
+    }
+    for (i32 r = 0; r < 16 * scale; r++) {
+        for (i32 c = 0; c < 8 * scale; c++) {
+            u32 a = cov_at(cov, r / scale, c / scale, bold);
+            if (!a) {
+                if (bg != 0xFFFFFFFFu && scale == 1) fb_pixel((u32)(x + c), (u32)(y + r), bg);
+                continue;
+            }
+            if (bg != 0xFFFFFFFFu && a == 255) {
+                fb_fill(x + c, y + r, 1, 1, fg);
+            } else if (bg != 0xFFFFFFFFu) {
+                fb_pixel((u32)(x + c), (u32)(y + r), blend_rgb(fg, bg, a));
+            } else {
+                fb_blend_pixel(x + c, y + r, fg, a);
+            }
+        }
+    }
+}
+
+static void glyph_bmp(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
     const u8 *g = &kv_font8x16[(u32)ch * 16];
 
     /* Fast path: the glyph fits entirely on screen and the mode is
@@ -310,13 +541,42 @@ void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
 }
 
 /* A UTF-8 string */
-void fb_text(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
+/* A single CP866 character. bg = 0xFFFFFFFF means a transparent background.
+   With anti-aliasing on, the coverage font is blended over the background;
+   the legacy bitmap path stays as the fallback (and for the AA-off mode). */
+void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg) {
+    if (!fb_ok) return;
+    if (fb_aa) {
+        glyph_cov(x, y, ch, 0, fg, bg, 1);
+        return;
+    }
+    glyph_bmp(x, y, ch, fg, bg);
+}
+
+static void text_impl(i32 x, i32 y, const char *s, u32 fg, u32 bg,
+                      int bold, i32 scale) {
     if (!fb_ok) return;
     while (*s) {
         u32 cp = utf8_next(&s);
-        fb_glyph(x, y, cp866_from_unicode(cp), fg, bg);
-        x += 8;
+        u8 ch = cp866_from_unicode(cp);
+        if (fb_aa || scale != 1) glyph_cov(x, y, ch, bold, fg, bg, scale);
+        else glyph_bmp(x, y, ch, fg, bg);
+        x += 8 * scale;
     }
+}
+
+void fb_text(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
+    text_impl(x, y, s, fg, bg, 0, 1);
+}
+
+void fb_text_bold(i32 x, i32 y, const char *s, u32 fg, u32 bg) {
+    text_impl(x, y, s, fg, bg, 1, 1);
+}
+
+/* Big smooth text for headings: the coverage cell is drawn scale x scale */
+void fb_text_scaled(i32 x, i32 y, const char *s, i32 scale, u32 fg, u32 bg) {
+    if (scale < 1) scale = 1;
+    text_impl(x, y, s, fg, bg, 0, scale);
 }
 
 /* A string centred inside an area of width w */

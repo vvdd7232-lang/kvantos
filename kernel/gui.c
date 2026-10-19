@@ -75,6 +75,25 @@ static const char *app_name(int i)
     return kv_pick(app_names_en[i], app_names_ru[i]);
 }
 
+/* One-line explanations shown as desktop tooltips: a new user should
+   not have to guess what an icon does. */
+static const char *app_descs_en[] = {
+    "What this system is", "Memory and tasks", "Disks and folders",
+    "The command line", "Draw with the mouse", "How to use KvantGUI",
+    "Screen and colours", "Notes and text files",
+    "Install and run apps", "Write C programs", "A running program"
+};
+static const char *app_descs_ru[] = {
+    "Что это за система", "Память и задачи", "Диски и папки",
+    "Командная строка", "Рисование мышью", "Как пользоваться",
+    "Экран, цвета и язык", "Заметки и тексты",
+    "Запуск программ", "Код и сборка на C", "Запущенная программа"
+};
+static const char *app_desc(int i)
+{
+    return kv_pick(app_descs_en[i], app_descs_ru[i]);
+}
+
 /* ---------- appearance settings, changed in Settings ---------- */
 static int  theme_accent = 0;      /* accent colour index */
 static int  theme_wall   = 0;      /* desktop background style */
@@ -199,6 +218,7 @@ static void damage_panel(void) {
 #define W_SECONDS  601
 #define W_SHADOWS  602
 #define W_QUIT     603
+#define W_AA       604    /* anti-aliased (smooth) text */
 
 /* ---------- housekeeping ---------- */
 
@@ -944,6 +964,8 @@ static void app_settings(window_t *v, i32 cx, i32 cy, i32 cw) {
         y += 26;
         widget_check(id, W_SECONDS, cx + 14, y, T("Seconds in the clock", "Секунды в часах"), opt_seconds);
         y += 26;
+        widget_check(id, W_AA, cx + 14, y, T("Smooth (anti-aliased) text", "Сглаженный текст"), fb_aa_on());
+        y += 26;
 
     } else {
         /* ---- the System tab ---- */
@@ -1259,9 +1281,11 @@ static void app_user(window_t *v, i32 cx, i32 cy, i32 cw) {
 
 static void app_help(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 y = cy + 10;
-    fb_text(cx + 12, y, T("KvantGUI controls", "Управление KvantGUI"), C_TEXT, 0xFFFFFFFF); y += 22;
+    fb_text_bold(cx + 12, y, T("KvantGUI controls", "Управление KvantGUI"), C_TEXT, 0xFFFFFFFF); y += 22;
     fb_fill(cx + 12, y, cw - 24, 1, fb_rgb(200, 206, 216)); y += 10;
     const char *rows[] = {
+        T("Hover the pointer over an icon: a tooltip explains it.", "Наведите курсор на значок — появится подсказка."),
+        T("Text too rough? Settings > Appearance > Smooth text.", "Текст грубый? Настройки > Внешний вид > Сглаженный текст."),
         T("Click an icon or the KVANT menu to open an app.", "Значок или меню КВАНТ — открыть приложение."),
         T("Drag title bars to move windows; X closes them.", "За заголовок — переместить; крестик — закрыть."),
         T("The bottom panel switches between windows.", "Панель снизу переключает окна."),
@@ -1295,34 +1319,33 @@ static void draw_window(int id, int active) {
     window_t *v = &wins[id];
     if (!v->used || !v->visible || v->minimized) return;
 
-    /* shadow */
-    if (opt_shadows) fb_fill(v->x + 4, v->y + 4, v->w, v->h, C_SHADOW);
-    /* body */
-    fb_fill(v->x, v->y, v->w, v->h, C_WIN);
-    fb_rect(v->x, v->y, v->w, v->h, C_WINBORDER);
+    /* soft shadow and a rounded, anti-aliased body */
+    if (opt_shadows) fb_shadow(v->x, v->y, v->w, v->h, 8);
+    fb_round_fill_aa(v->x, v->y, v->w, v->h, 8, C_WINBORDER);
+    fb_round_fill_aa(v->x + 1, v->y + 1, v->w - 2, v->h - 2, 7, C_WIN);
 
-    /* title bar with a gradient */
+    /* title bar with a gradient and rounded top corners */
     if (active) {
         u8 r = accents[theme_accent].r;
         u8 g = accents[theme_accent].g;
         u8 b = accents[theme_accent].b;
-        fb_gradient_v(v->x + 1, v->y + 1, v->w - 2, TITLE_H,
-                      r, g, b,
-                      (u8)(r + (255 - r) / 3),
-                      (u8)(g + (255 - g) / 3),
-                      (u8)(b + (255 - b) / 3));
+        fb_gradient_v_round(v->x + 1, v->y + 1, v->w - 2, TITLE_H, 7,
+                            r, g, b,
+                            (u8)(r + (255 - r) / 3),
+                            (u8)(g + (255 - g) / 3),
+                            (u8)(b + (255 - b) / 3));
     } else {
-        fb_fill(v->x + 1, v->y + 1, v->w - 2, TITLE_H, C_TITLE_IN);
+        fb_gradient_v_round(v->x + 1, v->y + 1, v->w - 2, TITLE_H, 7,
+                            120, 128, 142, 96, 103, 118);
     }
-    fb_text(v->x + 10, v->y + 4, v->title, C_WHITE, 0xFFFFFFFF);
+    fb_fill(v->x + 1, v->y + TITLE_H, v->w - 2, 1, C_WINBORDER);
+    fb_text_bold(v->x + 10, v->y + 4, v->title, C_WHITE, 0xFFFFFFFF);
 
-    /* close button */
-    i32 bx = v->x + v->w - 20, by = v->y + 5;
-    fb_fill(bx, by, 14, 13, active ? C_RED : fb_rgb(140, 146, 158));
-    for (int i = 0; i < 7; i++) {
-        fb_pixel((u32)(bx + 4 + i), (u32)(by + 3 + i), C_WHITE);
-        fb_pixel((u32)(bx + 10 - i), (u32)(by + 3 + i), C_WHITE);
-    }
+    /* round close button with an anti-aliased cross */
+    i32 bx = v->x + v->w - 14, by = v->y + 12;
+    fb_disc_aa(bx, by, 7, active ? C_RED : fb_rgb(140, 146, 158));
+    fb_line_aa(bx - 3, by - 3, bx + 3, by + 3, C_WHITE);
+    fb_line_aa(bx - 3, by + 3, bx + 3, by - 3, C_WHITE);
 
     /* client area */
     i32 cx = v->x + 1, cy = v->y + TITLE_H + 1, cw = v->w - 2;
@@ -1361,6 +1384,16 @@ static icon_t icons[] = {
 #define ICON_COUNT ((int)(sizeof(icons) / sizeof(icons[0])))
 
 static int  sel_icon = -1;
+static int  hover_icon = -1;   /* icon under the pointer (tooltip + pill) */
+
+static int icon_at(i32 mx, i32 my) {
+    for (int i = 0; i < ICON_COUNT; i++) {
+        i32 x = icons[i].x - 6, y = icons[i].y - 6;
+        if (mx >= x && mx < x + ICON_W && my >= y && my < y + ICON_H)
+            return i;
+    }
+    return -1;
+}
 
 static void layout_icons(void) {
     i32 dh = (i32)scr_h - PANEL_H;
@@ -1376,78 +1409,79 @@ static void layout_icons(void) {
 }
 
 static void draw_icon_glyph(int app, i32 x, i32 y) {
+    /* 48x40 canvas of smooth shapes: rounded tiles, discs and AA lines */
     switch (app) {
         case APP_ABOUT:
-            fb_fill(x + 8, y, 20, 36, C_CYAN);
-            fb_fill(x + 14, y + 6, 8, 4, fb_rgb(20, 30, 50));
-            fb_fill(x + 14, y + 14, 8, 16, fb_rgb(20, 30, 50));
+            fb_round_fill_aa(x + 8, y, 20, 36, 6, C_CYAN);
+            fb_disc_aa(x + 18, y + 8, 3, fb_rgb(20, 30, 50));
+            fb_fill(x + 15, y + 15, 6, 14, fb_rgb(20, 30, 50));
             break;
         case APP_SYSMON:
-            fb_fill(x, y + 2, 36, 26, fb_rgb(30, 40, 60));
-            fb_rect(x, y + 2, 36, 26, C_GREEN);
-            for (int i = 0; i < 8; i++)
-                fb_fill(x + 3 + i * 4, y + 24 - (i * 2 + 3) % 18, 3, (i * 2 + 3) % 18, C_GREEN);
+            fb_round_fill_aa(x, y + 2, 36, 26, 5, fb_rgb(30, 40, 60));
+            for (int i = 0; i < 7; i++) {
+                i32 x0 = x + 4 + i * 5, x1 = x + 9 + i * 5;
+                i32 y0 = y + 22 - (i * 7 + 3) % 15, y1 = y + 22 - (i * 7 + 8) % 15;
+                fb_line_aa(x0, y0, x1, y1, C_GREEN);
+            }
             fb_fill(x + 12, y + 30, 12, 4, fb_rgb(30, 40, 60));
             break;
         case APP_FILES:
-            fb_fill(x, y + 6, 16, 4, C_YELLOW);
-            fb_fill(x, y + 10, 36, 24, C_YELLOW);
+            fb_round_fill_aa(x + 1, y + 5, 15, 6, 2, fb_rgb(232, 186, 92));
+            fb_round_fill_aa(x, y + 9, 36, 24, 4, C_YELLOW);
             fb_fill(x + 3, y + 14, 30, 2, fb_rgb(200, 150, 40));
             break;
         case APP_DEV:
-            fb_fill(x, y + 2, 36, 30, fb_rgb(18, 36, 58));
-            fb_rect(x, y + 2, 36, 30, C_ACCENT);
-            fb_text(x + 6, y + 10, "C{}", C_CYAN, 0xFFFFFFFF);
+            fb_round_fill_aa(x, y + 2, 36, 30, 5, fb_rgb(18, 36, 58));
+            fb_text_bold(x + 5, y + 10, "C{}", C_CYAN, 0xFFFFFFFF);
             break;
         case APP_TERM:
-            fb_fill(x, y + 2, 36, 30, fb_rgb(18, 22, 30));
-            fb_rect(x, y + 2, 36, 30, fb_rgb(90, 100, 120));
-            fb_text(x + 4, y + 10, ">_", C_GREEN, 0xFFFFFFFF);
+            fb_round_fill_aa(x, y + 2, 36, 30, 5, fb_rgb(18, 22, 30));
+            fb_line_aa(x + 6, y + 10, x + 12, y + 15, C_GREEN);
+            fb_line_aa(x + 12, y + 15, x + 6, y + 20, C_GREEN);
+            fb_fill(x + 14, y + 22, 9, 3, C_GREEN);
             break;
         case APP_STORE:
             /* a box with a raised lid - "install a program" */
-            fb_fill(x + 2, y + 12, 32, 20, fb_rgb(206, 158, 84));
-            fb_fill(x + 2, y + 6,  32, 8,  fb_rgb(232, 186, 112));
+            fb_round_fill_aa(x + 2, y + 12, 32, 20, 4, fb_rgb(206, 158, 84));
+            fb_round_fill_aa(x + 2, y + 6,  32, 9, 4, fb_rgb(232, 186, 112));
             fb_fill(x + 14, y + 6, 8, 26, fb_rgb(170, 126, 62));
-            fb_fill(x + 6, y + 16, 24, 2, fb_rgb(150, 110, 54));
+            fb_fill(x + 6, y + 18, 24, 2, fb_rgb(150, 110, 54));
             break;
         case APP_USER:
             /* a window with a slider - "a running program" */
-            fb_fill(x + 2, y + 4, 32, 26, C_WHITE);
-            fb_rect(x + 2, y + 4, 32, 26, fb_rgb(150, 158, 175));
-            fb_fill(x + 2, y + 4, 32, 6, C_ACCENT);
-            fb_fill(x + 6, y + 16, 14, 3, fb_rgb(120, 130, 150));
-            fb_fill(x + 6, y + 22, 20, 3, fb_rgb(120, 130, 150));
+            fb_round_fill_aa(x + 2, y + 4, 32, 26, 4, C_WHITE);
+            fb_fill(x + 4, y + 6, 28, 5, C_ACCENT);
+            fb_line_aa(x + 7, y + 18, x + 29, y + 18, fb_rgb(150, 158, 175));
+            fb_disc_aa(x + 20, y + 18, 4, C_ACCENT);
+            fb_fill(x + 6, y + 24, 20, 3, fb_rgb(178, 186, 200));
             break;
         case APP_EDIT:
             /* a sheet of ruled paper with a pencil */
-            fb_fill(x + 4, y + 2, 26, 32, C_WHITE);
-            fb_rect(x + 4, y + 2, 26, 32, fb_rgb(150, 158, 175));
-            fb_fill(x + 8, y + 8,  18, 2, fb_rgb(120, 130, 150));
-            fb_fill(x + 8, y + 14, 18, 2, fb_rgb(120, 130, 150));
-            fb_fill(x + 8, y + 20, 12, 2, fb_rgb(120, 130, 150));
-            fb_fill(x + 22, y + 22, 10, 10, C_YELLOW);      /* pencil */
-            fb_fill(x + 29, y + 29, 4, 4, fb_rgb(60, 50, 40));
+            fb_round_fill_aa(x + 4, y + 2, 26, 32, 3, C_WHITE);
+            fb_line_aa(x + 9, y + 10, x + 25, y + 10, fb_rgb(150, 158, 175));
+            fb_line_aa(x + 9, y + 16, x + 25, y + 16, fb_rgb(150, 158, 175));
+            fb_line_aa(x + 9, y + 22, x + 20, y + 22, fb_rgb(150, 158, 175));
+            fb_disc_aa(x + 26, y + 27, 6, C_YELLOW);        /* pencil */
             break;
         case APP_PAINT:
-            fb_fill(x + 2, y + 4, 32, 26, C_WHITE);
-            fb_rect(x + 2, y + 4, 32, 26, fb_rgb(150, 158, 175));
-            fb_fill(x + 6, y + 20, 10, 6, C_RED);
-            fb_fill(x + 16, y + 12, 8, 14, C_ACCENT);
-            fb_fill(x + 24, y + 16, 6, 10, C_GREEN);
+            fb_round_fill_aa(x + 2, y + 4, 32, 26, 4, C_WHITE);
+            fb_disc_aa(x + 10, y + 13, 4, C_RED);
+            fb_disc_aa(x + 20, y + 19, 5, C_ACCENT);
+            fb_disc_aa(x + 28, y + 11, 3, C_GREEN);
             break;
         case APP_SETTINGS: {
             u32 c = fb_rgb(190, 198, 214);
-            fb_fill(x + 14, y + 4, 10, 28, c);      /* the cross base */
-            fb_fill(x + 4, y + 14, 28, 10, c);
-            fb_fill(x + 8, y + 8, 20, 20, c);       /* the gear body */
-            fb_fill(x + 13, y + 13, 10, 10, fb_rgb(30, 40, 60));  /* the hole */
+            fb_fill(x + 14, y + 3, 8, 30, c);       /* gear teeth, cross */
+            fb_fill(x + 3, y + 14, 30, 8, c);
+            fb_line_aa(x + 7, y + 7, x + 29, y + 29, c);
+            fb_line_aa(x + 7, y + 29, x + 29, y + 7, c);
+            fb_disc_aa(x + 18, y + 18, 12, c);      /* the gear body */
+            fb_disc_aa(x + 18, y + 18, 5, fb_rgb(30, 40, 60));  /* the hole */
             break;
         }
         case APP_HELP:
-            fb_fill(x + 6, y + 2, 24, 32, C_WHITE);
-            fb_rect(x + 6, y + 2, 24, 32, fb_rgb(150, 158, 175));
-            fb_text(x + 14, y + 10, "?", C_ACCENT, 0xFFFFFFFF);
+            fb_round_fill_aa(x + 6, y + 2, 24, 32, 3, C_WHITE);
+            fb_text_scaled(x + 13, y + 6, "?", 2, C_ACCENT, 0xFFFFFFFF);
             break;
     }
 }
@@ -1479,18 +1513,28 @@ static void draw_desktop(void) {
                           8, 12, 24);
     }
 
-    /* the logo in the centre */
-    const char *wm = "KvantOS";
-    i32 lx = (i32)scr_w / 2 - 100, ly = (i32)scr_h / 2 - 60;
-    for (int s = 0; s < 3; s++) {
-        const char *t = s == 0 ? "K V A N T" : (s == 1 ? T("desktop environment", "графическая среда") : KV_VERSION);
-        i32 tw = (i32)utf8_len(t) * 8;
-        fb_text((i32)scr_w / 2 - tw / 2, ly + s * 22, t,
-                s == 0 ? fb_rgb((u8)(ar / 2 + 40), (u8)(ag / 2 + 45), (u8)(ab / 2 + 60))
-                       : fb_rgb((u8)(ar / 2 + 20), (u8)(ag / 2 + 25), (u8)(ab / 2 + 40)),
-                0xFFFFFFFF);
-    }
-    (void)wm; (void)lx;
+    /* the logo in the centre: big, smooth letters */
+    i32 ly = (i32)scr_h / 2 - 90;
+    const char *logo = "K V A N T";
+    i32 lw = (i32)utf8_len(logo) * 8 * 3;
+    fb_text_scaled((i32)scr_w / 2 - lw / 2 + 2, ly + 2, logo, 3,
+                   fb_rgb(6, 10, 20), 0xFFFFFFFF);          /* soft logo shadow */
+    fb_text_scaled((i32)scr_w / 2 - lw / 2, ly, logo, 3,
+                   fb_rgb((u8)(ar / 2 + 90), (u8)(ag / 2 + 95), (u8)(ab / 2 + 110)),
+                   0xFFFFFFFF);
+    const char *sub = T("desktop environment", "графическая среда");
+    fb_text_center(0, ly + 56, (i32)scr_w, sub,
+                   fb_rgb((u8)(ar / 2 + 40), (u8)(ag / 2 + 45), (u8)(ab / 2 + 60)),
+                   0xFFFFFFFF);
+    fb_text_center(0, ly + 76, (i32)scr_w, KV_VERSION,
+                   fb_rgb((u8)(ar / 2 + 20), (u8)(ag / 2 + 25), (u8)(ab / 2 + 40)),
+                   0xFFFFFFFF);
+
+    /* a first-run hint so the desktop explains itself */
+    fb_text_center(0, dh - 26, (i32)scr_w,
+                   T("Hover an icon for a hint - click to open, KVANT (bottom left) lists everything",
+                     "Наведите курсор на значок - появится подсказка; КВАНТ слева внизу - все программы"),
+                   fb_rgb(120, 140, 175), 0xFFFFFFFF);
 
     /* Icon placement depends only on screen geometry; the cache keeps
        this whole layer until the selection, language, theme or mode changes. */
@@ -1498,9 +1542,17 @@ static void draw_desktop(void) {
     for (int i = 0; i < ICON_COUNT; i++) {
         i32 x = icons[i].x, y = icons[i].y;
         if (i == sel_icon)
-            fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(50, 80, 130));
+            fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(52, 84, 136));
+        else if (i == hover_icon)
+            fb_round_fill(x - 6, y - 6, ICON_W, ICON_H, fb_rgb(38, 56, 92));
         draw_icon_glyph(icons[i].app, x + ICON_W / 2 - 24, y);
-        fb_text_center(x - 6, y + 44, ICON_W, app_name(icons[i].app), C_WHITE, 0xFFFFFFFF);
+        if (i == sel_icon || i == hover_icon) {
+            const char *n = app_name(icons[i].app);
+            i32 tw = (i32)utf8_len(n) * 8;
+            fb_text_bold(x - 6 + (ICON_W - tw) / 2, y + 44, n, C_WHITE, 0xFFFFFFFF);
+        } else {
+            fb_text_center(x - 6, y + 44, ICON_W, app_name(icons[i].app), C_WHITE, 0xFFFFFFFF);
+        }
     }
 }
 
@@ -1542,19 +1594,64 @@ static int launcher_open;
 static void draw_launcher(void) {
     if(!launcher_open) return;
     i32 py=(i32)scr_h-PANEL_H,y=py-30-(ICON_COUNT+2)*26;
-    fb_fill(10,y+4,280,py-y,fb_rgb(8,12,22));
-    fb_fill(6,y,280,py-y,fb_rgb(239,244,252));
-    fb_rect(6,y,280,py-y,C_ACCENT);
-    fb_fill(7,y+1,278,28,C_TITLE);
-    fb_text(18,y+7,T("Applications", "Приложения"),C_WHITE,0xFFFFFFFF);
+    fb_shadow(6,y,280,py-y,8);
+    fb_round_fill_aa(6,y,280,py-y,8,C_ACCENT);
+    fb_round_fill_aa(7,y+1,278,py-y-2,7,fb_rgb(239,244,252));
+    fb_gradient_v_round(7,y+1,278,28,7,
+                        accents[theme_accent].r, accents[theme_accent].g, accents[theme_accent].b,
+                        (u8)(accents[theme_accent].r + (255 - accents[theme_accent].r) / 3),
+                        (u8)(accents[theme_accent].g + (255 - accents[theme_accent].g) / 3),
+                        (u8)(accents[theme_accent].b + (255 - accents[theme_accent].b) / 3));
+    fb_text_bold(18,y+7,T("Applications", "Приложения"),C_WHITE,0xFFFFFFFF);
+    i32 lmx = mouse_x(), lmy = mouse_y();
     for(int i=0;i<ICON_COUNT;i++) {
         i32 row=y+30+i*26;
+        if(lmx>=8 && lmx<284 && lmy>=row && lmy<row+26)
+            fb_round_fill_aa(10,row+1,272,24,5,fb_rgb(206,220,244));
         fb_text(18,row+5,app_name(icons[i].app),C_TEXT,0xFFFFFFFF);
+        /* keep the description inside the 280 px menu */
+        char dbuf[80];
+        fit_name(dbuf, sizeof(dbuf), app_desc(icons[i].app), 19);
+        fb_text(118,row+5,dbuf,fb_rgb(120,130,150),0xFFFFFFFF);
         fb_fill(16,row+25,260,1,fb_rgb(222,229,240));
     }
     fb_text(18,y+35+ICON_COUNT*26,kbd_mousekeys()?T("MouseKeys: ON", "Мышь с NumPad: ВКЛ"):
              T("MouseKeys: OFF", "Мышь с NumPad: ВЫКЛ"),C_ACCENT,0xFFFFFFFF);
     fb_text(18,y+35+(ICON_COUNT+1)*26,T("Exit to console", "Выйти в консоль"),C_RED,0xFFFFFFFF);
+    fb_text(196,y+7,T("Esc closes", "Esc - закрыть"),fb_rgb(190,205,235),0xFFFFFFFF);
+}
+
+/* Tooltip chip geometry for icon i (also used for damage tracking) */
+static void tooltip_rect(int i, i32 *tx, i32 *ty, i32 *tw) {
+    const char *n = app_name(icons[i].app);
+    const char *d = app_desc(icons[i].app);
+    *tw = (i32)(utf8_len(n) + 3 + utf8_len(d)) * 8 + 16;
+    *tx = icons[i].x + ICON_W + 4;
+    *ty = icons[i].y + 4;
+    if (*tx + *tw > (i32)scr_w - 4)
+        *tx = icons[i].x - *tw - 10;
+    if (*tx < 2) *tx = 2;
+}
+
+static void damage_tooltip(int i) {
+    if (i < 0 || i >= ICON_COUNT) return;
+    i32 tx, ty, tw;
+    tooltip_rect(i, &tx, &ty, &tw);
+    damage_add_rect(tx - 2, ty - 2, tw + 4, 28);
+}
+
+static void draw_tooltip(void) {
+    if (hover_icon < 0 || launcher_open) return;
+    i32 tx, ty, tw;
+    tooltip_rect(hover_icon, &tx, &ty, &tw);
+    fb_shadow(tx, ty, tw, 24, 6);
+    fb_round_fill_aa(tx, ty, tw, 24, 6, fb_rgb(18, 24, 40));
+    const char *n = app_name(icons[hover_icon].app);
+    fb_text_bold(tx + 8, ty + 4, n, C_WHITE, 0xFFFFFFFF);
+    i32 off = (i32)utf8_len(n) * 8;
+    char tail[96];
+    ksnprintf(tail, sizeof(tail), " - %s", app_desc(icons[hover_icon].app));
+    fb_text(tx + 8 + off, ty + 4, tail, fb_rgb(170, 190, 220), 0xFFFFFFFF);
 }
 
 static void draw_panel(void) {
@@ -1584,7 +1681,7 @@ static void draw_panel(void) {
 
     /* the Start button */
     fb_round_fill(6, py + 4, 78, PANEL_H - 8, C_TITLE);
-    fb_text(16, py + 10, T("KVANT", "КВАНТ"), C_WHITE, 0xFFFFFFFF);
+    fb_text_bold(16, py + 10, T("KVANT", "КВАНТ"), C_WHITE, 0xFFFFFFFF);
 
     /* window buttons */
     i32 bx = 94;
@@ -1615,15 +1712,20 @@ static void draw_panel(void) {
     /* the clock and statistics on the right */
     rtc_time_t tm;
     rtc_read(&tm);
-    char clock[32];
-    if (opt_seconds) ksnprintf(clock, sizeof(clock), "%02u:%02u:%02u", tm.hour, tm.min, tm.sec);
-    else             ksnprintf(clock, sizeof(clock), "%02u:%02u", tm.hour, tm.min);
+    char clock[48];
+    if (opt_seconds) ksnprintf(clock, sizeof(clock), "%02u.%02u  %02u:%02u:%02u", tm.day, tm.month, tm.hour, tm.min, tm.sec);
+    else             ksnprintf(clock, sizeof(clock), "%02u.%02u  %02u:%02u", tm.day, tm.month, tm.hour, tm.min);
+    /* right-aligned stack: clock+date, then RAM, then fps - no overlaps */
+    i32 rx = (i32)scr_w - 14;
     i32 clw = (i32)utf8_len(clock) * 8;
-    fb_text((i32)scr_w - clw - 14, py + 10, clock, C_WHITE, 0xFFFFFFFF);
+    fb_text_bold(rx - clw, py + 10, clock, C_WHITE, 0xFFFFFFFF);
+    rx -= clw + 18;
 
     char mem[32];
     ksnprintf(mem, sizeof(mem), T("RAM %u MiB", "ОЗУ %u МиБ"), pmm_used_frames() * 4096 / 1048576);
-    fb_text((i32)scr_w - 190, py + 10, mem, fb_rgb(160, 200, 240), 0xFFFFFFFF);
+    i32 mw = (i32)utf8_len(mem) * 8;
+    fb_text(rx - mw, py + 10, mem, fb_rgb(160, 200, 240), 0xFFFFFFFF);
+    rx -= mw + 18;
 
     /* Show throughput only while an application is animating; a quiet,
        event-driven desktop is idle, not a one-frame-per-second lag. */
@@ -1631,7 +1733,8 @@ static void draw_panel(void) {
     int animating = gui_has_animated_window();
     if (animating) ksnprintf(fps, sizeof(fps), T("%u fps", "%u к/с"), gui_fps);
     else            ksnprintf(fps, sizeof(fps), "%s", T("idle", "простой"));
-    fb_text((i32)scr_w - 260, py + 10, fps,
+    i32 fwid = (i32)utf8_len(fps) * 8;
+    fb_text(rx - fwid, py + 10, fps,
             animating && gui_fps >= 25 ? fb_rgb(140, 230, 150)
                                        : fb_rgb(160, 168, 184),
             0xFFFFFFFF);
@@ -1639,8 +1742,8 @@ static void draw_panel(void) {
 
 static void damage_window_rect(i32 x, i32 y, i32 w, i32 h) {
     if (w <= 0 || h <= 0) return;
-    /* Include the four-pixel drop shadow as well as the window body. */
-    damage_add_rect(x, y, w + 4, h + 4);
+    /* Include the soft shadow (up to 7 px around the body) as well. */
+    damage_add_rect(x - 8, y - 8, w + 18, h + 18);
 }
 
 static void damage_window(const window_t *v) {
@@ -1742,6 +1845,7 @@ static void render_damage(void) {
     }
     if (dirty_intersects_panel() || dirty_intersects_banner()) draw_panel();
     draw_launcher(); /* Same damage clip; always above windows. */
+    draw_tooltip();  /* ...and the icon tooltip above everything else. */
 
     fb_clear_clip();
     for (int i = 0; i < dirty_count; i++) {
@@ -2139,6 +2243,7 @@ static int settings_click(int id, i32 mx, i32 my) {
         case W_APPLY:    settings_apply(); return 1;
         case W_SHADOWS:  opt_shadows = !opt_shadows; return 1;
         case W_SECONDS:  opt_seconds = !opt_seconds; return 1;
+        case W_AA:       fb_set_aa(!fb_aa_on()); desktop_cache_valid = 0; damage_full(); return 1;
         case W_QUIT:     ed_request_quit(); return 1;
     }
     return 0;
@@ -2540,6 +2645,8 @@ static void gui_damage_after_input(const gui_snapshot_t *before, int content_win
 
 /* ---------- main loop ---------- */
 
+int gui_active(void) { return running; }
+
 int gui_run(void) {
     if (!fb_active()) return -1;
 
@@ -2696,6 +2803,27 @@ int gui_run(void) {
             damage_panel();
             if (revert_armed) damage_add_rect(0, 0, (i32)scr_w, 48);
             next_refresh = loop_now + refresh_period;
+        }
+
+        /* Launcher row hover highlight follows the pointer */
+        if (launcher_open && mouse_moved) {
+            i32 py = (i32)scr_h - PANEL_H, ly = py - 30 - (ICON_COUNT + 2) * 26;
+            damage_add_rect(6, ly, 280, py - ly);
+        }
+
+        /* Icon hover: pill + tooltip. The cached desktop is rebuilt only
+           when the hover target actually changes. */
+        {
+            int hov = (!launcher_open && dragging < 0 &&
+                       window_at(mx, my) < 0) ? icon_at(mx, my) : -1;
+            if (hov != hover_icon) {
+                desktop_cache_valid = 0;
+                damage_icon(hover_icon);
+                damage_icon(hov);
+                damage_tooltip(hover_icon);
+                damage_tooltip(hov);
+                hover_icon = hov;
+            }
         }
 
         /* Restore the old pointer and paint the new one from the clean scene. */
