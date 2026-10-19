@@ -240,7 +240,7 @@ static void split_tests(void) {
     frozen_clock=stop_frames=1;mode=TT_NYET;memset(b,0xA5,sizeof(b));t=1;
     unsigned start_reads=reads;
     assert(ehci_transfer(&d,IN,1,64,&t,b,512)<0 && hosts[0].dead && !(cmds[0]&4) && t==1);
-    assert(reads-start_reads<12000100);
+    assert(reads-start_reads<EHCI_POLL_ITERS*8u+2000002u);
     for(unsigned j=0;j<sizeof(b);j++) assert(b[j]==0xA5);
     reset();init(0,0);init(1,1);d=disk(0);d.speed=0;d.tt_hub=11;d.tt_port=7;
     mode=TT_NYET;t=1;assert(ehci_transfer(&d,IN,1,64,&t,b,512)<0);
@@ -260,11 +260,11 @@ static void diagnostic_tests(void) {
         assert(ehci_transfer(&d,i==3?OUT:IN,1,d.speed?512:64,&t,b,sizeof(b))<0);
         const volatile ehci_fault_t *f=&ehci_faults[0];
         assert(f->reason==reasons[i] && f->retired==1 && f->address==5 && f->generation==1 && f->len==512);
-        assert(f->stop_tsc>=f->start_tsc && f->iterations<=2000000 && !hosts[0].busy && hosts[0].dead && !(cmds[0]&4));
+        assert(f->stop_tsc>=f->start_tsc && f->iterations<=EHCI_POLL_ITERS && !hosts[0].busy && hosts[0].dead && !(cmds[0]&4));
         if(i>=5) assert(f->pre_td&0x80);
         if(i>=5) assert(f->pre_overlay&2);
-        if(i==6) assert(((f->stop_frame-f->start_frame)&2047)>=250);
-        if(i==7) assert(f->iterations==2000000);
+        if(i==6) assert(((f->stop_frame-f->start_frame)&2047)>=EHCI_POLL_FRAMES);
+        if(i==7) assert(f->iterations==EHCI_POLL_ITERS);
         for(unsigned j=0;j<sizeof(b);j++) assert(b[j]==0xA5);
         assert(t==1);
     }
@@ -328,7 +328,7 @@ int main(void) {
     u8 caller[512];memset(caller,0xA5,sizeof(caller));usb_disk_t d=disk(0);int toggle=1;
     mode=TIMEOUT;start_reads=reads;
     assert(ehci_transfer(&d,IN,1,512,&toggle,caller,sizeof(caller))<0 && hosts[0].dead && toggle==1);
-    assert(reads-start_reads<12000100);
+    assert(reads-start_reads<EHCI_POLL_ITERS*8u+2000002u);
     for(unsigned i=0;i<sizeof(caller);i++) assert(caller[i]==0xA5);
     reset();init(0,0);d=disk(0);bad_pa=1;
     assert(ehci_transfer(&d,IN,1,512,&toggle,caller,sizeof(caller))<0 && hosts[0].dead && !issues);

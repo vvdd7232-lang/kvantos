@@ -56,6 +56,14 @@ static int ohci_fence(hc_t *h) {
     (void)pci_read32(h->bus,h->slot,h->func,4);
     return -1;
 }
+/* Bounded completion poll, widened for emulator latency: QEMU
+ * usb-storage completes WRITE via async block I/O, and on a loaded TCG
+ * host the completion can legitimately take far longer than 250
+ * frames. Still finite on every axis, so a hung controller is fenced.
+ * (Same rationale as EHCI_POLL_* in usb_ehci.h.) */
+#define OHCI_POLL_FRAMES 2000u
+#define OHCI_POLL_TSC    8000000000ULL
+#define OHCI_POLL_ITERS  16000000u
 static int ohci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,unsigned len) {
     hc_t *h=d->hc;
     if(h->dead || h->pool>=ohci_used || !toggle || (mps!=8 && mps!=16 && mps!=32 && mps!=64) || ep>15 || d->address>127 || len>4096 || (len && !buf) ||
@@ -81,16 +89,16 @@ static int ohci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,uns
     if((port&3)!=3 || (d->generation && (port&0x1F0000)) || (OHCI_RD(h,0x0C)&16)) return ohci_fence(h);
     OHCI_WR(h,head,ed);OHCI_WR(h,4,OHCI_RD(h,4)|enable);OHCI_WR(h,8,kick);
     u32 start=OHCI_RD(h,0x3C)&2047;
-    u64 end=clock_now()+1000000000ULL;
+    u64 end=clock_now()+OHCI_POLL_TSC;
     int done=0;
-    for(unsigned n=2000000;n && clock_now()<end;n--) {
+    for(unsigned n=OHCI_POLL_ITERS;n && clock_now()<end;n--) {
         port=OHCI_RD(h,0x54+4*d->port);
         if((port&3)!=3 || (d->generation && (port&0x1F0000)) || (OHCI_RD(h,0x0C)&16)) break;
         /* CC may already be NoError after an intermediate OUT packet.
          * Only ED retirement (or halt), NOT CC alone, completes the TD. */
         u32 head_value=s->ed.head;
         if((head_value&1) || ((head_value&~15u)==td+16 && (s->td[0].flags>>28)!=15)) { done=1;break; }
-        if(((OHCI_RD(h,0x3C)-start)&2047)>=250) break;
+        if(((OHCI_RD(h,0x3C)-start)&2047)>=OHCI_POLL_FRAMES) break;
         OHCI_PAUSE();
     }
     __sync_synchronize();

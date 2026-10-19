@@ -21,6 +21,15 @@
 #include "vfs.h"
 #include "sector_tx.h"
 
+/* Serial-log diagnostics for refused/rolled-back owned writes. The host
+ * fault-injection harness (MCC_HOSTTEST) has no kprintf, so stay silent
+ * there; in the kernel these lines land on the serial console. */
+#ifdef MCC_HOSTTEST
+#define FAT_DIAG(...) ((void)0)
+#else
+#define FAT_DIAG(...) kprintf(__VA_ARGS__)
+#endif
+
 #define FAT_MAX_VOLS      4
 #define SECTOR_MAX        4096
 #define FAT_ATTR_RO       0x01
@@ -1111,13 +1120,14 @@ static int wal_clean_bit(fat_vol_t *v,int clean) {
 }
 static int write_begin(fat_vol_t *v) {
     if(!live(v)) fence(v);
-    if(v->fenced || v->writing) return 0;
+    if(v->fenced || v->writing) { FAT_DIAG("[fat] write refused: disk %d fenced %d writing %d\n",v->disk,v->fenced,v->writing);return 0; }
     v->error=0;fat_meta_begin(0);
-    if(v->file_wal && !wal_lease(v)) { fence(v);return 0; }
+    if(v->file_wal && !wal_lease(v)) { FAT_DIAG("[fat] write refused: disk %d WAL lease denied\n",v->disk);fence(v);return 0; }
     stx_io_t io=tx_io(v);
-    if(stx_begin(&fat_tx,&io)<0) { wal_release(v);fence(v);return 0; }
+    if(stx_begin(&fat_tx,&io)<0) { FAT_DIAG("[fat] write refused: disk %d WAL begin failed\n",v->disk);wal_release(v);fence(v);return 0; }
     v->writing=1;fat_meta_begin(v);
     if(!wal_clean_bit(v,0) || !fat_meta_flush(v)) {
+        FAT_DIAG("[fat] write refused: disk %d clean-bit/meta flush failed\n",v->disk);
         fat_meta_begin(0);
         if(stx_abort(&fat_tx)<0) fence(v);
         v->writing=0;wal_release(v);return 0;
@@ -1128,6 +1138,7 @@ static int write_end(fat_vol_t *v,int result) {
     if(result>=0 && !v->error && wal_clean_bit(v,1) && fat_meta_flush(v) && stx_commit(&fat_tx)==0) {
         fat_meta_begin(0);v->writing=0;wal_release(v);if(!live(v)) { fence(v);return -1; }return result;
     }
+    FAT_DIAG("[fat] write failed: disk %d result %d error %d (rolled back)\n",v->disk,result,v->error);
     fat_meta_begin(0);
     if(stx_abort(&fat_tx)<0) fence(v);
     v->writing=0;wal_release(v);return result<0?result:-1;

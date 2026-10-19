@@ -59,6 +59,11 @@ static int ehci_dma_address(const void *p,u32 size,u32 alignment,u32 *out) {
 #ifndef EHCI_DMA
 #define EHCI_DMA ehci_dma_address
 #endif
+/* Optional one-line serial dump of the fault snapshot on a fenced
+ * transfer (kernel build only; host harness keeps this a no-op). */
+#ifndef EHCI_DIAG
+#define EHCI_DIAG(...) ((void)0)
+#endif
 static int ehci_wait(hc_t *h,unsigned reg,u32 mask,u32 value) {
     u64 end=clock_now()+1000000000ULL;
     for(unsigned n=1000000;n && clock_now()<end;n--) {
@@ -103,8 +108,19 @@ static int ehci_failed(usb_disk_t *d,ehci_fault_t *f,unsigned reason) {
     f->post_frame=(ehci_reg(h,0xC)>>3)&2047;f->current=s->qh.current;f->next=s->qh.overlay.next;
     f->endpoint=s->qh.endpoint;f->caps=s->qh.caps;f->address=d->address;f->generation=d->generation;
     ehci_faults[h->pool]=*f;
+    EHCI_DIAG("[ehci] transfer fenced: reason %u len %u ret %u iter %u td %08x ovl %08x cur %08x next %08x cmd %08x sts %08x port %08x frame %u->%u\n",
+        f->reason,f->len,f->retired,f->iterations,f->post_td,f->post_overlay,f->current,f->next,
+        f->command,f->status,f->port,f->start_frame,f->stop_frame);
     return ehci_fence(h);
 }
+/* Completion poll bounds. All three stay finite so a hung controller is
+ * fenced, but the window must cover emulator completion latency: QEMU's
+ * usb-storage finishes WRITE via async block I/O, and on a loaded TCG
+ * host the CSW can legitimately take far longer than 250 frames. The
+ * old 250-frame/2M-iteration window fenced healthy controllers in CI. */
+#define EHCI_POLL_FRAMES 2000u
+#define EHCI_POLL_TSC    8000000000ULL
+#define EHCI_POLL_ITERS  16000000u
 static int ehci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,unsigned len) {
     hc_t *h=d->hc;u32 caps=1u<<30;
     if((d->speed!=0 && d->speed!=2) || (d->speed==0 && !usb_tt_route(d,&caps))) return -1;
@@ -133,15 +149,15 @@ static int ehci_run(usb_disk_t *d,u8 pid,u8 ep,u16 mps,int *toggle,void *buf,uns
     if(!ehci_wait(h,4,0x8000,0x8000)) return ehci_failed(d,&f,EHCI_START);
     u32 start=(ehci_reg(h,0xC)>>3)&2047;
     f.start_tsc=clock_now();f.start_frame=start;
-    u64 end=f.start_tsc+1000000000ULL;int done=0;unsigned left=2000000;
+    u64 end=f.start_tsc+EHCI_POLL_TSC;int done=0;unsigned left=EHCI_POLL_ITERS;
     for(;left && clock_now()<end;left--) {
         if(!ehci_link(d)) { f.reason=EHCI_LINK;break; }
         if(!(s->td.token&0x80)) { done=1;break; }
-        if((((ehci_reg(h,0xC)>>3)-start)&2047u)>=250) { f.reason=EHCI_FRAMES;break; }
+        if((((ehci_reg(h,0xC)>>3)-start)&2047u)>=EHCI_POLL_FRAMES) { f.reason=EHCI_FRAMES;break; }
         EHCI_PAUSE();
     }
     f.stop_tsc=clock_now();f.stop_frame=(ehci_reg(h,0xC)>>3)&2047;
-    f.iterations=2000000-left;f.pre_td=s->td.token;f.pre_overlay=s->qh.overlay.token;
+    f.iterations=EHCI_POLL_ITERS-left;f.pre_td=s->td.token;f.pre_overlay=s->qh.overlay.token;
     if(!done && !f.reason) f.reason=left?EHCI_TSC:EHCI_BUDGET;
     /* qTD writeback alone does not prove that the QH is no longer live. */
     f.retired=ehci_async_off(h);
@@ -206,9 +222,9 @@ static int ehci_ownership(pci_dev_t *p,u32 caps) {
 static int ehci_init_fail(hc_t *h,const char *why) {
     ehci_fence(h);return ehci_fail(why);
 }
-static int ehci_init(pci_dev_t *p,hc_t *h) {
+static int ehci_init_pool(pci_dev_t *p,hc_t *h,int pool) {
     u32 bar=pci_read32(p->bus,p->slot,p->func,0x10),base=bar&~15u;
-    if((bar&1) || ((bar&6)!=0 && (bar&6)!=4) || base<0x10000 || base>0xFFFFF000u || ehci_used>=HC_MAX)
+    if((bar&1) || ((bar&6)!=0 && (bar&6)!=4) || base<0x10000 || base>0xFFFFF000u || (pool<0 && ehci_used>=HC_MAX))
         return ehci_fail("USB: invalid EHCI BAR/pool full");
     if((bar&6)==4 && pci_read32(p->bus,p->slot,p->func,0x14)) return ehci_fail("USB: EHCI BAR above 4 GiB");
     if(paging_map_mmio(base,4096)<0) return ehci_fail("USB: EHCI MMIO map failed");
@@ -220,7 +236,7 @@ static int ehci_init(pci_dev_t *p,hc_t *h) {
         return ehci_fail("USB: invalid EHCI capabilities");
     if(!ehci_ownership(p,cap[2])) return ehci_fail("USB: EHCI firmware handoff failed");
     memset(h,0,sizeof(*h));h->kind=1;h->ports=(u8)ports;h->op=EHCI_MMIO(base+len);
-    h->bus=p->bus;h->slot=p->slot;h->func=p->func;h->pool=(u8)ehci_used++;
+    h->bus=p->bus;h->slot=p->slot;h->func=p->func;h->pool=(u8)(pool<0?ehci_used++:(unsigned)pool);
     pci_write32(p->bus,p->slot,p->func,4,(cmd|2)&~4u);
     (void)pci_read32(p->bus,p->slot,p->func,4);
     ehci_write(h,8,0);ehci_write(h,0,0);
@@ -243,3 +259,4 @@ static int ehci_init(pci_dev_t *p,hc_t *h) {
     if(!ehci_frames_wait(h,100)) return ehci_init_fail(h,"USB: EHCI frames stopped");
     return 1;
 }
+static int ehci_init(pci_dev_t *p,hc_t *h) { return ehci_init_pool(p,h,-1); }

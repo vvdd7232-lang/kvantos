@@ -54,6 +54,7 @@ static u64 clock_now(void) {
 }
 static int frames_wait(hc_t *h, unsigned n);
 static int usb_tt_route(usb_disk_t *d,u32 *caps);
+#define EHCI_DIAG(...) kprintf(__VA_ARGS__)
 #include "usb_ehci.h"
 #include "usb_ohci.h"
 static unsigned frame_number(hc_t *h) {
@@ -222,6 +223,20 @@ void usb_rescan(void) {
     disk_count = 0; memset(disks, 0, sizeof(disks));
     memset(cache, 0, sizeof(cache)); cache_next = 0;
     memset(hubs,0,sizeof(hubs));hub_count=hub_refused=0;
+    /* A fenced EHCI stopped its schedules and cleared PCI bus mastering;
+     * without re-initialisation no replugged device could ever enumerate
+     * again. Revive dead EHCI controllers in place, reusing the same DMA
+     * pool (its addresses stay pinned either way). Failure leaves the
+     * controller dead and its ports are skipped below, as before. */
+    for(int i=0;i<hc_count;i++) if(hcs[i].kind==1 && hcs[i].dead) {
+        for(u32 j=0;j<pci_count();j++) {
+            pci_dev_t *p=pci_get(j);
+            if(p->bus==hcs[i].bus && p->slot==hcs[i].slot && p->func==hcs[i].func) {
+                ehci_init_pool(p,&hcs[i],hcs[i].pool);
+                break;
+            }
+        }
+    }
     /* Global isolation pass BEFORE reusing any descendant address. Root
      * addresses are reserved; every accepted downstream reset disables its
      * children before the recursive allocator may reach their old addresses. */
