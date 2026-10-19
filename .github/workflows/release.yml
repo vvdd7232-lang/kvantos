@@ -1,20 +1,20 @@
-name: Release 3.1.4
+name: Release 3.2.0
 
 on:
   push:
-    tags: ['v3.1.4']
+    tags: ['v3.2.0']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.1.4
+        default: v3.2.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: kvantos-release-3.1.4
+  group: kvantos-release-3.2.0
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       - name: Verify release tag
-        run: test "$(git describe --exact-match --tags HEAD)" = v3.1.4
+        run: test "$(git describe --exact-match --tags HEAD)" = v3.2.0
       - name: Install toolchain and test firmware
         run: |
           sudo apt-get update
@@ -78,7 +78,7 @@ jobs:
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.1.4-release
+          name: kvantos-3.2.0-release
           path: packages/
       - name: Publish GitHub release
         env:
@@ -86,11 +86,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # Never silently replace an existing release or its assets.
-          if gh release view v3.1.4 >/dev/null 2>&1; then
-            echo 'Release v3.1.4 already exists; refusing to overwrite it.' >&2
+          if gh release view v3.2.0 >/dev/null 2>&1; then
+            echo 'Release v3.2.0 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.1.4 --verify-tag --latest \
-            --title 'KvantOS 3.1.4' --notes-file RELEASE.ru.md \
+          gh release create v3.2.0 --verify-tag --latest \
+            --title 'KvantOS 3.2.0' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
             packages/*.bin packages/*.efi packages/*SHA256SUMS.txt

@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.2.0 — smooth graphics and a friendlier desktop
+
+* Anti-aliased text everywhere: a coverage font (DejaVu Sans Mono rasterised
+  at 3x into the same 8x16 CP866 cell, 4 bits/pixel) replaces hard bitmap
+  glyphs in the GUI, terminal, editors and boot console; the legacy bitmap
+  font remains as the fallback when smoothing is switched off.
+* New smooth primitives (Wu lines, supersampled discs, rounded rectangles
+  and title gradients, soft layered shadows); windows, icons, the KVANT
+  launcher and the taskbar were redrawn with them. Bold headings and a big
+  smooth desktop logo.
+* Usability: icon hover highlights with explanatory tooltips (also listed
+  in the launcher), a first-run hint on the desktop, date next to the
+  taskbar clock, and a Settings > Appearance "Smooth text" toggle.
+* The kvsh status line no longer paints over the desktop every 500 ms.
+* Direct-ISO builder: bounce ceiling raised to 0x8E000 (MBI stays at
+  0x90000) for the larger kernel.
+
 ## 3.1.4 — protected storage, native I/O and read-only NTFS
 
 * M6.17–M6.20: NTFS read-only adapter now zero-fills at the exact Initialized

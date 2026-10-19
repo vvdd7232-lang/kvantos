@@ -308,7 +308,7 @@ debug: $(ISO)
 # The full distribution set: GRUB and direct BIOS/UEFI ISOs, floppy,
 # kernels, applications and an empty disk image. This target only builds
 # files locally; publishing is
-# handled separately by .github/workflows/release.yml on the v3.1.4 tag.
+# handled separately by .github/workflows/release.yml on the v3.2.0 tag.
 release:
 	@test "$(STORAGE_LAB)" = 0 || { echo 'Refusing release artifacts from STORAGE_LAB build'; exit 1; }
 	@mkdir -p build

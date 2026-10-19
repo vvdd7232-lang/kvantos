@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.1.4"
+#define KV_VERSION  "3.2.0"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 
@@ -367,6 +367,17 @@ void fb_round_fill(i32 x, i32 y, i32 w, i32 h, u32 c);
 void fb_gradient_v(i32 x, i32 y, i32 w, i32 h, u8 r1, u8 g1, u8 b1, u8 r2, u8 g2, u8 b2);
 void fb_glyph(i32 x, i32 y, u8 ch, u32 fg, u32 bg);
 void fb_text(i32 x, i32 y, const char *s, u32 fg, u32 bg);
+void fb_text_bold(i32 x, i32 y, const char *s, u32 fg, u32 bg);
+void fb_text_scaled(i32 x, i32 y, const char *s, i32 scale, u32 fg, u32 bg);
+void fb_set_aa(int on);
+int  fb_aa_on(void);
+void fb_blend_pixel(i32 x, i32 y, u32 c, u32 alpha);
+void fb_line_aa(i32 x0, i32 y0, i32 x1, i32 y1, u32 c);
+void fb_disc_aa(i32 cx, i32 cy, i32 r, u32 c);
+void fb_round_fill_aa(i32 x, i32 y, i32 w, i32 h, i32 r, u32 c);
+void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 r);
+void fb_gradient_v_round(i32 x, i32 y, i32 w, i32 h, i32 r,
+                         u8 r1, u8 g1, u8 b1, u8 r2, u8 g2, u8 b2);
 void fb_text_center(i32 x, i32 y, i32 w, const char *s, u32 fg, u32 bg);
 void fb_clear(u32 c);
 void fb_present(const void *back);
@@ -499,6 +510,7 @@ void cmd_refresh(int argc, char **argv);
 
 /* ---------- graphical shell ---------- */
 int  gui_run(void);
+int  gui_active(void);   /* 1 while the desktop owns the framebuffer */
 
 /* ---------- random numbers ---------- */
 void   kv_rand_seed(u32 seed);
