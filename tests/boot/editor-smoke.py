@@ -164,6 +164,14 @@ with smoke.Guest() as q:
     q.menu(item=11);q.widget(84,7);assert q.mode(9)==3
     q.widget(83,9);assert q.num('running')==1
     q.exit_gui()
+    # The shell prints its return banner on its own schedule; on a loaded
+    # TCG runner that can take far longer than exit_gui's fixed pause.
+    # Poll for the banner instead of racing it (the check itself is the
+    # same, only the waiting is honest).
+    for _ in range(300):
+        if 'Возврат в текстовую консоль kvsh.' in q.log.read_text(errors='replace'):
+            break
+        time.sleep(.1)
     assert 'Возврат в текстовую консоль kvsh.' in q.log.read_text(errors='replace')
     assert 'KERNEL PANIC' not in q.log.read_text(errors='replace')
     q.text('vidmode 640 480\n');q.text('guimenu\n');time.sleep(.5)
