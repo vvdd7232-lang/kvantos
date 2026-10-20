@@ -58,18 +58,18 @@ static u32 C_FIELD, C_FIELD_ALT, C_FIELD_BORDER, C_SELECT, C_LINE, C_BUTTON;
 
 enum { APP_ABOUT = 0, APP_SYSMON, APP_FILES, APP_TERM, APP_PAINT, APP_HELP, APP_SETTINGS, APP_EDIT,
        APP_STORE,      /* installing and launching programs */
-       APP_DEV, APP_MATRIX, APP_USER };     /* the window of a running .kapp application */
+       APP_DEV, APP_USER, APP_MATRIX };     /* the .kapp window, then the Matrix app */
 
 /* Application names. A static initialiser cannot contain a function
    call, so both languages live in separate tables and app_name()
    returns the right string. */
 static const char *app_names_en[] = {
     "About", "Monitor", "Files", "Terminal", "Paint", "Help", "Settings", "Notepad",
-    "Programs", "C Workshop", "Matrix", "Application"
+    "Programs", "C Workshop", "Application", "Matrix"
 };
 static const char *app_names_ru[] = {
     "О системе", "Монитор", "Файлы", "Терминал", "Рисование", "Справка", "Настройки", "Блокнот",
-    "Программы", "C-мастерская", "Матрица", "Приложение"
+    "Программы", "C-мастерская", "Приложение", "Матрица"
 };
 static const char *app_name(int i)
 {
@@ -82,13 +82,13 @@ static const char *app_descs_en[] = {
     "What this system is", "Memory and tasks", "Disks and folders",
     "The command line", "Draw with the mouse", "How to use KvantGUI",
     "Screen and colours", "Notes and text files",
-    "Install and run apps", "Write C programs", "Falling green code", "A running program"
+    "Install and run apps", "Write C programs", "A running program", "Falling green code"
 };
 static const char *app_descs_ru[] = {
     "Что это за система", "Память и задачи", "Диски и папки",
     "Командная строка", "Рисование мышью", "Как пользоваться",
     "Экран, цвета и язык", "Заметки и тексты",
-    "Запуск программ", "Код и сборка на C", "Падающий зелёный код", "Запущенная программа"
+    "Запуск программ", "Код и сборка на C", "Запущенная программа", "Падающий зелёный код"
 };
 static const char *app_desc(int i)
 {
