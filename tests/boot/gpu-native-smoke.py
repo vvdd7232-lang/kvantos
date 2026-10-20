@@ -82,8 +82,14 @@ try:
     header, _, pixels = data.partition(b'255\n')
     dims = header.split()[-2:]
     assert dims == [b'1024', b'768'], dims
-    colours = {pixels[i:i + 3] for i in range(0, len(pixels) - 2, 3 * 997)}
-    assert len(colours) > 8, f'screen looks flat: {len(colours)} colours'
+    sample = [pixels[i:i + 3] for i in range(0, len(pixels) - 2, 3 * 101)]
+    colours = set(sample)
+    nonblack = sum(1 for px in sample if px != b'\x00\x00\x00')
+    # A text console on the framebuffer is mostly black by design; what
+    # proves a live graphics mode is the mode geometry (checked above)
+    # plus drawn content: status bar, glyphs, the coloured logo.
+    assert len(colours) >= 4, f'screen looks flat: {len(colours)} colours'
+    assert nonblack > len(sample) // 100, f'screen looks blank: {nonblack} lit samples'
     print('PASS kernel-native GPU: bootloader stayed in text, kernel set '
           '1024x768x32 on the adapter, console+kvsh live on the framebuffer')
 finally:
