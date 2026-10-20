@@ -1573,7 +1573,7 @@ static void app_matrix(window_t *v, i32 cx, i32 cy, i32 cw) {
     i32 sy = cy + ch - 18;
     fb_fill(cx, sy, cw, 18, fb_rgb(0, 10, 4));
     fb_text(cx + 8, sy + 1, prompt, C_GREEN, 0xFFFFFFFF);
-    if ((timer_ticks() / (timer_hz() / 2 + 1)) & 1)
+    if ((now / (timer_hz() / 2 + 1)) & 1)
         fb_fill(cx + 8 + (i32)strlen(prompt) * 8, sy + 2, 6, 13, C_GREEN);
 }
 
