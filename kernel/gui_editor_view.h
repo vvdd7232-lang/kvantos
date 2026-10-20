@@ -55,8 +55,8 @@ static int ed_file(int index,char *name,u32 *size) {
 static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
                          int value,int maximum,int visible) {
     i32 w=vertical?16:length,h=vertical?length:16;
-    fb_fill(x,y,w,h,fb_rgb(232,236,243));
-    fb_rect(x,y,w,h,fb_rgb(190,199,214));
+    fb_fill(x,y,w,h,C_FIELD_ALT);
+    fb_rect(x,y,w,h,C_FIELD_BORDER);
     if(length<48) { hit_add(win,widget,x,y,w,h); return; }
     fb_text(x+4,y+1,vertical?"^":"<",C_TEXT_DIM,0xFFFFFFFF);
     fb_text(vertical?x+4:x+length-12,vertical?y+length-17:y+1,vertical?"v":">",C_TEXT_DIM,0xFFFFFFFF);
@@ -65,7 +65,7 @@ static void ed_scrollbar(int win,int widget,i32 x,i32 y,i32 length,int vertical,
     knob=ed_clamp(knob,16,track);
     int at=16+(maximum?(track-knob)*value/maximum:0);
     fb_round_fill(vertical?x+2:x+at,vertical?y+at:y+2,
-                  vertical?12:knob,vertical?knob:12,maximum?fb_rgb(128,151,187):fb_rgb(197,205,217));
+                  vertical?12:knob,vertical?knob:12,maximum?C_ACCENT:C_BUTTON);
     hit_add(win,widget,x,y,w,h);
 }
 static void ed_dialog(window_t *v,i32 cy) {
@@ -75,8 +75,8 @@ static void ed_dialog(window_t *v,i32 cy) {
     i32 x=v->x+25,w=v->w-50,y=cy+(file_mode?8:65);
     i32 h=file_mode?v->h-TITLE_H-18:190;
     hit_remove_window(win); /* Modal: no controls behind the card are clickable. */
-    fb_fill(x-4,y-4,w+8,h+8,fb_rgb(215,223,237));
-    fb_fill(x,y,w,h,C_WHITE); fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x-4,y-4,w+8,h+8,C_FIELD_BORDER);
+    fb_fill(x,y,w,h,C_WIN); fb_rect(x,y,w,h,C_ACCENT);
     const char *title=ed_name_mode==ED_OPEN_DIALOG?T("Open a file", "Открыть файл"):
                       ed_name_mode==ED_SAVE_DIALOG?(kvfs_mounted()?T("Save as: RAM + KvFS", "Сохранить как: RAM + KvFS"):T("Save as: RAM only", "Сохранить как: только RAM")):
                       ed_name_mode==ED_DIRTY_DIALOG?T("Save changes?", "Сохранить изменения?"):
@@ -106,15 +106,15 @@ static void ed_dialog(window_t *v,i32 cy) {
     i32 ly=y+72,lh=h-178;
     int rows=(lh-8)/20;
     if(rows<1) rows=1;
-    fb_fill(x+12,ly,w-54,lh,fb_rgb(248,250,254));
-    fb_rect(x+12,ly,w-54,lh,fb_rgb(191,201,217));
+    fb_fill(x+12,ly,w-54,lh,C_FIELD);
+    fb_rect(x+12,ly,w-54,lh,C_FIELD_BORDER);
     char name[24],info[48]; u32 size;
     int total=0;
     while(ed_file(total,name,&size)) total++;
     editor->file_top=ed_clamp(editor->file_top,0,total>rows?total-rows:0);
     for(int r=0;r<rows && ed_file(editor->file_top+r,name,&size);r++) {
         i32 fy=ly+4+r*20;
-        if(!strcmp(name,ed_name_in)) fb_fill(x+14,fy-1,w-58,19,fb_rgb(219,233,254));
+        if(!strcmp(name,ed_name_in)) fb_fill(x+14,fy-1,w-58,19,C_SELECT);
         fb_text(x+20,fy,name,C_TEXT,0xFFFFFFFF);
         ksnprintf(info,sizeof(info),"%u B",size);
         fb_text(x+w-146,fy,info,C_TEXT_DIM,0xFFFFFFFF);
@@ -127,7 +127,7 @@ static void ed_dialog(window_t *v,i32 cy) {
     ed_label(x+12,ly+lh+5,w-24,ed_status,C_TEXT_DIM);
     i32 ny=y+h-78;
     fb_text(x+12,ny+5,T("Name:", "Имя:"),C_TEXT_DIM,0xFFFFFFFF);
-    fb_fill(x+64,ny,w-76,26,fb_rgb(247,250,255));
+    fb_fill(x+64,ny,w-76,26,C_FIELD);
     fb_rect(x+64,ny,w-76,26,C_ACCENT);
     fb_text(x+72,ny+5,ed_name_in,C_TEXT,0xFFFFFFFF);
     fb_fill(x+72+editor->name_caret*8,ny+4,2,17,C_ACCENT);
@@ -163,17 +163,17 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
     int keep=editor->imported;
     if(workshop)widget_chip(win,W_DEV_ISOLATE,cx+cw-(keep?298:182),cy+68,110,24,dev_isolated?"ABI4/CPL3":"ABI3/kernel",dev_isolated);
     if(keep) widget_chip(win,W_ED_KEEP,cx+cw-182,cy+68,110,24,T("Keep: KvFS", "На KvFS"),kvfs_mounted());
-    ed_label(cx+12,cy+73,cw-(keep?208:92)-(workshop?116:0),name,ed_lines>ED_WARN_LINES?fb_rgb(160,100,0):ed_dirty?C_RED:C_TEXT_DIM);
+    ed_label(cx+12,cy+73,cw-(keep?208:92)-(workshop?116:0),name,ed_lines>ED_WARN_LINES?C_YELLOW:ed_dirty?C_RED:C_TEXT_DIM);
     ed_layout_t g=ed_layout(v);
-    fb_fill(g.x,g.y,g.w,g.h,C_WHITE); fb_rect(g.x,g.y,g.w,g.h,fb_rgb(190,201,219));
-    fb_fill(g.x+1,g.y+1,g.tx-g.x-4,g.h-2,fb_rgb(244,247,252));
+    fb_fill(g.x,g.y,g.w,g.h,C_FIELD); fb_rect(g.x,g.y,g.w,g.h,C_FIELD_BORDER);
+    fb_fill(g.x+1,g.y+1,g.tx-g.x-4,g.h-2,C_FIELD_ALT);
     unsigned a,b; text_range(&editor->doc,&a,&b);
     int caret_on=((u32)timer_ticks()/(timer_hz()/2+1))%2==0;
     for(int i=0;i<g.rows && ed_top+i<ed_lines;i++) {
         int row=ed_top+i; i32 y=g.y+4+i*16;
         char num[8]; ksnprintf(num,sizeof(num),"%d",row+1);
         fb_text(g.x+4,y,num,C_TEXT_DIM,0xFFFFFFFF);
-        if(row==ed_cy) fb_fill(g.tx,y-1,g.cols*8,16,fb_rgb(242,247,255));
+        if(row==ed_cy) fb_fill(g.tx,y-1,g.cols*8,16,C_SELECT);
         unsigned off=text_offset(&editor->doc,row,0);
         int start=text_byte(ed_line(row),ed_left),len=(int)strlen(ed_line(row));
         for(int col=0,pos=start;col<g.cols;col++) {
@@ -181,12 +181,12 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
             unsigned at=off+(unsigned)pos;
             int selected=a<b && at>=a && at<b && (pos<len || row<ed_lines-1);
             i32 x=g.tx+col*8;
-            if(selected) fb_fill(x,y-1,8,16,fb_rgb(54,110,188));
+            if(selected) fb_fill(x,y-1,8,16,C_ACCENT);
             if(pos<len) {
                 char ch[5]; int n=next-pos;
                 if(n>4) { ch[0]='?'; ch[1]=0; }
                 else { memcpy(ch,ed_line(row)+pos,(u32)n); ch[n]=0; }
-                fb_text(x,y,ch,selected?C_WHITE:C_TEXT,0xFFFFFFFF);
+                fb_text(x,y,ch,selected?(theme_accent==0?C_BLACK:C_WHITE):C_TEXT,0xFFFFFFFF);
                 pos=next;
             } else break;
         }
@@ -212,7 +212,7 @@ static void app_dev(window_t *v,i32 cx,i32 cy,i32 cw) {
     if(!dev_help || ed_name_mode) return;
     int win=(int)(v-wins); hit_remove_window(win);
     i32 x=cx+10,y=cy+8,w=cw-20,h=v->h-TITLE_H-18;
-    fb_fill(x,y,w,h,fb_rgb(24,32,50)); fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x,y,w,h,fb_rgb(0,10,4)); fb_rect(x,y,w,h,C_ACCENT);
     const char *lines[]={
         T("C Workshop: edit, build, run", "C-мастерская: редактируйте, собирайте, запускайте"),
         T("Use the New / Open / Save buttons above the text.", "Файлы: кнопки Создать / Открыть / Сохранить."),

@@ -1,0 +1,34 @@
+name: iso
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-12 gcc-multilib nasm xorriso mtools \
+            grub-pc-bin grub-common binutils python3
+
+      - name: build BIOS + UEFI ISO
+        run: make -j2 CC=gcc-12 iso
+
+      - name: checksum
+        run: sha256sum release/kvantos.iso | tee release/kvantos.iso.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-iso
+          path: |
+            release/kvantos.iso
+            release/kvantos.iso.sha256

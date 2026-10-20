@@ -78,7 +78,7 @@ static void ed_search_field(int win,int id,i32 x,i32 y,i32 w,int which) {
     const char *s=which?editor->replacement:editor->query;
     int active=editor->search_focus==which,cols=(w-16)/8;
     int caret=active?text_column(s,editor->search_caret):0,left=caret>=cols?caret-cols+1:0;
-    fb_fill(x,y,w,25,fb_rgb(247,250,255)); fb_rect(x,y,w,25,active?C_ACCENT:C_TEXT_DIM);
+    fb_fill(x,y,w,25,C_FIELD); fb_rect(x,y,w,25,active?C_ACCENT:C_TEXT_DIM);
     ed_label(x+8,y+5,w-16,s+text_byte(s,left),C_TEXT);
     if(active) fb_fill(x+8+(caret-left)*8,y+4,2,17,C_ACCENT);
     hit_add(win,id,x,y,w,25);
@@ -87,8 +87,8 @@ static void ed_search_view(window_t *v) {
     int win=(int)(v-wins);
     i32 x=v->x+25,w=v->w-50,h=ED_SEARCH_HEIGHT,y=v->y+v->h-h-48;
     hit_remove_window(win);
-    fb_fill(x-4,y-4,w+8,h+8,fb_rgb(215,223,237));
-    fb_fill(x,y,w,h,C_WHITE); fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x-4,y-4,w+8,h+8,C_FIELD_BORDER);
+    fb_fill(x,y,w,h,C_WIN); fb_rect(x,y,w,h,C_ACCENT);
     ed_label(x+12,y+10,w-90,T("Find / replace", "Поиск / замена"),C_TEXT);
     widget_chip(win,W_ED_LAYOUT,x+w-66,y+6,54,24,kbd_layout()?"RU":"EN",0);
     fb_text(x+12,y+42,T("Find:", "Найти:"),C_TEXT_DIM,0xffffffff);
