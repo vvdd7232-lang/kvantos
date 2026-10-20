@@ -33,11 +33,14 @@ void kmain(u32 magic, u32 mbi_addr) {
 
     /* The bootloader may pass the word text on the command line -
        then we force the classic VGA 80x25 mode. */
-    int force_text = 0, safe_mode = 0;
+    int force_text = 0, safe_mode = 0, force_gpu = 0;
     if ((mbi->flags & (1u << 2)) && mbi->cmdline) {
         const char *p = (const char *)(kv_addr_t)mbi->cmdline;
         for (; *p; p++) {
             if (p[0] == 't' && p[1] == 'e' && p[2] == 'x' && p[3] == 't') force_text = 1;
+            /* "gpu": ignore any bootloader framebuffer - the kernel
+               itself must program the display adapter (vbe_native_bringup) */
+            if (p[0] == 'g' && p[1] == 'p' && p[2] == 'u') force_gpu = 1;
             if (p[0] == 's' && p[1] == 'a' && p[2] == 'f' && p[3] == 'e') safe_mode = 1;
             /* lang=ru switches the whole system to Russian */
             if (p[0] == 'l' && p[1] == 'a' && p[2] == 'n' && p[3] == 'g' &&
@@ -50,7 +53,7 @@ void kmain(u32 magic, u32 mbi_addr) {
        Multiboot header, so for text mode we put the adapter back. */
     if (force_text) vbe_force_text();
 
-    int have_fb = force_text ? 0 : fb_init(mbi);   /* before the console: it picks its own mode */
+    int have_fb = (force_text || force_gpu) ? 0 : fb_init(mbi);   /* before the console: it picks its own mode */
 
     /* CRITICAL on real laptops (e.g. Samsung RV410 / GMA 4500M).
        Following the Multiboot header request GRUB has ALREADY switched
