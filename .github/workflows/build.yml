@@ -33,6 +33,8 @@ jobs:
         run: python3 tests/boot/check-images.py
       - name: BIOS and UEFI boot smoke
         run: bash tests/boot/qemu-smoke.sh release/kvantos.iso
+      - name: kernel-native GPU bring-up (bootloader stays in text)
+        run: python3 tests/boot/gpu-native-smoke.py
       - name: EHCI independent controllers and timed detach (BIOS + UEFI)
         run: python3 tests/boot/ehci-isolation-smoke.py
       - name: editor RU input, find/replace and storage (BIOS + UEFI)

@@ -33,11 +33,14 @@ void kmain(u32 magic, u32 mbi_addr) {
 
     /* The bootloader may pass the word text on the command line -
        then we force the classic VGA 80x25 mode. */
-    int force_text = 0, safe_mode = 0;
+    int force_text = 0, safe_mode = 0, force_gpu = 0;
     if ((mbi->flags & (1u << 2)) && mbi->cmdline) {
         const char *p = (const char *)(kv_addr_t)mbi->cmdline;
         for (; *p; p++) {
             if (p[0] == 't' && p[1] == 'e' && p[2] == 'x' && p[3] == 't') force_text = 1;
+            /* "gpu": ignore any bootloader framebuffer - the kernel
+               itself must program the display adapter (vbe_native_bringup) */
+            if (p[0] == 'g' && p[1] == 'p' && p[2] == 'u') force_gpu = 1;
             if (p[0] == 's' && p[1] == 'a' && p[2] == 'f' && p[3] == 'e') safe_mode = 1;
             /* lang=ru switches the whole system to Russian */
             if (p[0] == 'l' && p[1] == 'a' && p[2] == 'n' && p[3] == 'g' &&
@@ -50,7 +53,7 @@ void kmain(u32 magic, u32 mbi_addr) {
        Multiboot header, so for text mode we put the adapter back. */
     if (force_text) vbe_force_text();
 
-    int have_fb = force_text ? 0 : fb_init(mbi);   /* before the console: it picks its own mode */
+    int have_fb = (force_text || force_gpu) ? 0 : fb_init(mbi);   /* before the console: it picks its own mode */
 
     /* CRITICAL on real laptops (e.g. Samsung RV410 / GMA 4500M).
        Following the Multiboot header request GRUB has ALREADY switched
@@ -62,7 +65,12 @@ void kmain(u32 magic, u32 mbi_addr) {
     if (!have_fb && !force_text && (mbi->flags & (1u << 12))) {
         /* Diagnostics on COM1: visible even when the screen shows nothing */
         serial_puts(T("KvantOS: bootloader framebuffer rejected " "(type/bpp), falling back to VGA text mode\n", "KvantOS: фреймбуфер загрузчика не принят " "(type/bpp), возврат в текстовый режим VGA\n"));
-        vbe_force_text();
+        /* If the adapter speaks BGA (ports work this early, no PCI
+           needed) the kernel can set its own graphics mode later in
+           vbe_native_bringup(), so do not disable it here. Other
+           adapters keep the proven text-mode rescue. */
+        if (!vbe_bga_present())
+            vbe_force_text();
     }
 
     vga_init();
@@ -159,6 +167,28 @@ void kmain(u32 magic, u32 mbi_addr) {
     step(vbe_can_modeset()
          ? T("VBE: resolution switching available (vidmode command)", "VBE: смена разрешения доступна (команда vidmode)")
          : T("VBE: mode fixed by the bootloader", "VBE: режим зафиксирован загрузчиком"));
+
+    /* Native work on the видеокарте: the bootloader gave us no usable
+       framebuffer, but the adapter itself can be programmed (BGA /
+       VMware SVGA II). Set the mode from the kernel, move the console
+       onto the GPU framebuffer and continue graphically. If the adapter
+       cannot be programmed either, rescue the screen into VGA text so
+       the boot log stays visible (the Samsung RV410 case above). */
+    if (!have_fb && !force_text) {
+        if (vbe_native_bringup()) {
+            have_fb = 1;
+            serial_puts("KvantOS: GPU mode set by the kernel driver\n");
+            fb_console_resync();
+            kprintf(T("       GPU mode set by kernel: %ux%u, %u bpp\n",
+                      "       Режим GPU установлен ядром: %ux%u, %u бит\n"),
+                    fb_width(), fb_height(), fb_bpp_get());
+            step(T("GPU: kernel-native mode set, console on видеокарте",
+                   "GPU: режим установлен ядром, консоль на видеокарте"));
+        } else if (mbi->flags & (1u << 12)) {
+            vbe_force_text();
+            vga_init();
+        }
+    }
 
 skip_hw:
     if (have_fb && !safe_mode) {

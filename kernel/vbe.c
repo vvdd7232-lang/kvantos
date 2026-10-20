@@ -224,6 +224,31 @@ const char *vbe_backend_name(void) {
 
 int vbe_can_modeset(void) { return backend == GPU_BGA || backend == GPU_VMWARE; }
 
+/* BGA presence via the DISPI ports alone; safe before PCI scan. */
+int vbe_bga_present(void) { return bga_detect(); }
+
+/* Native GPU bring-up: the kernel itself switches the display adapter
+   into a linear-framebuffer mode instead of relying on the bootloader.
+   This is the path taken when GRUB/EFI handed over no usable
+   framebuffer (or none at all): if the adapter speaks BGA or VMware
+   SVGA II, program 1024x768x32 (falling back to 800x600x32) directly,
+   bind fb.c to the adapter's own video memory, and from then on the
+   whole OS - text console and GUI alike - works on the видеокарте.
+   Adapters without a kernel modeset interface (Intel/NVIDIA/AMD in
+   GPU_FIXED) keep using the bootloader-provided framebuffer; there is
+   deliberately no attempt to guess their register layouts. */
+int vbe_native_bringup(void) {
+    if (fb_active()) return 1;                 /* already on the GPU */
+    if (!vbe_can_modeset()) return 0;
+
+    pci_dev_t *gpu = pci_gpu();
+    if (gpu) pci_enable_device(gpu);           /* memory decoding + BM */
+
+    if (vbe_set_mode(1024, 768, 32) == VBE_OK) return 1;
+    if (vbe_set_mode(800, 600, 32) == VBE_OK)  return 1;
+    return 0;
+}
+
 void vbe_current(vmode_t *m) { *m = cur; }
 
 /* ---------- list of supported modes ---------- */

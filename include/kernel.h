@@ -484,6 +484,8 @@ enum {
 typedef struct { u32 width, height, bpp, pitch, phys, hz; } vmode_t;
 
 void        vbe_init(void);
+int         vbe_native_bringup(void);
+int         vbe_bga_present(void);
 int         vbe_force_text(void);
 int         vbe_backend(void);
 const char *vbe_backend_name(void);
