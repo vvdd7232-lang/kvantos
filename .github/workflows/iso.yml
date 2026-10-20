@@ -2,6 +2,8 @@ name: iso
 
 on:
   workflow_dispatch:
+  push:
+    branches: [matrix-ui]
 
 permissions:
   contents: read
