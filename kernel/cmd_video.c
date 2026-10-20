@@ -175,7 +175,7 @@ void cmd_vidmode(int argc, char **argv) {
     if (!fb_active()) {
         vga_set_color(VGA_COLOR(VGA_LRED, VGA_BLACK));
         kputs(T("\n  The system booted in VGA text mode.\n", "\n  Система загружена в текстовом режиме VGA.\n"));
-        kputs(T("  Pick a graphical entry in the GRUB menu.\n\n", "  Выберите графический пункт в меню GRUB.\n\n"));
+        kputs(T("  Pick a graphical or 'kernel GPU driver' entry in the GRUB menu.\n\n", "  Выберите графический пункт или пункт «kernel GPU driver» в меню GRUB.\n\n"));
         vga_set_color(VGA_COLOR(VGA_LGREY, VGA_BLACK));
         return;
     }
