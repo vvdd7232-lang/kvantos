@@ -146,7 +146,7 @@ with smoke.Guest() as q:
     assert q.document()['text'].startswith(b'file ')
     # NumPad fallback uses the same mouse path. Physical movement cannot release
     # its latched synthetic button. NumLock is optional, never a launcher key.
-    q.menu(item=10);assert q.num('mousekeys')==1
+    q.menu(item=11);assert q.num('mousekeys')==1
     q.move(12,12);before=q.num('mx');q.key('kp_6');assert q.num('mx')>before
     q.key('kp_0');assert q.mem('buttons',1)[0]&1
     q.cmd('mouse_move 3 3');time.sleep(.08);assert q.mem('buttons',1)[0]&1
@@ -157,11 +157,11 @@ with smoke.Guest() as q:
     q.click(40,q.num('scr_h')-14)
     q.key('num_lock');assert q.num('mousekeys')==0
     # Quit is mouse-only and asks about BOTH independent dirty editors.
-    q.open_app(7);q.text('!');q.menu(item=11);assert q.mode(7)==3
+    q.open_app(7);q.text('!');q.menu(item=12);assert q.mode(7)==3
     q.widget(83,7);assert q.num('running')==1
     q.open_app(6);q.widget(102,6);q.widget(603,6)
     assert q.mode(7)==3;q.widget(83,7) # Settings exit must use the same guard
-    q.menu(item=11);q.widget(84,7);assert q.mode(9)==3
+    q.menu(item=12);q.widget(84,7);assert q.mode(9)==3
     q.widget(83,9);assert q.num('running')==1
     q.exit_gui()
     # The shell prints its return banner on its own schedule; on a loaded

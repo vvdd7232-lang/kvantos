@@ -95,7 +95,7 @@ class MouseGUI:
             self.widget(84, app)
 
     def exit_gui(self):
-        self.menu(item=11)
+        self.menu(item=12)
         for _ in range(2):
             if not self.num('running'):
                 break
