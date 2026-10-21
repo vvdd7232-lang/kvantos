@@ -116,6 +116,10 @@ class Guest(MouseGUI):
             name,ptr,size,used=struct.unpack_from('<24sQII' if IS64 else '<24sIII',table,off)
             if used:result[name.split(b'\0')[0].decode()]=self.mem(ptr,size)
         return result
+    def run(self):
+        self.widget(91,9)
+        deadline=time.monotonic()+20
+        while self.num('loaded')!=1 and time.monotonic()<deadline:time.sleep(.1)
     def __exit__(self,*exc):
         self.sock.close();self.proc.terminate()
         try:self.proc.wait(timeout=5)
@@ -174,7 +178,7 @@ void close(void){release(values);release(buffer);}
         # Editing contexts are independent even with two app types in one GUI.
         q.open_app(7)
         assert q.document(7)['text']==b'private notes'
-        q.open_app(9);q.widget(91,9);time.sleep(1)
+        q.open_app(9);q.run()
         assert q.num('loaded')==1
         assert q.mem('app_file',44).split(b'\0')[0]==b'hello.kapp'
         # Generated entry stores API in the first data word. The template's global
@@ -208,13 +212,13 @@ void close(void){release(values);release(buffer);}
         assert q.mode(9)==0
         assert q.document(9)['text'].startswith(b'// Click Build')
         assert q.mem('editor_text',32).startswith(b'// Click Build')
-        q.widget(91,9);time.sleep(1)
+        q.run()
         assert q.num('loaded')==1
         assert q.mem('app_file',44).split(b'\0')[0]==b'hello.kapp'
         q.cmd(f'screendump "{WORK / "rebooted.ppm"}"')
         print('Guest: source reopened from disk and rebuilt after a full reboot OK')
         q.close_app(10);q.open_app(9)
-        q.widget(41,9);q.choose_name('verify.c');q.widget(82,9);q.widget(91,9);time.sleep(1)
+        q.widget(41,9);q.choose_name('verify.c');q.widget(82,9);q.run()
         assert q.num('loaded')==1 and q.num('app_faulted')==0
         assert q.mem('app_file',40).split(b'\0')[0]==b'verify.kapp'
         assert q.mem('app_status',96).split(b'\0')[0]==b'41:2:3:4:5'
@@ -226,7 +230,7 @@ void close(void){release(values);release(buffer);}
     with Guest(disk=False) as q:
         q.text('lang ru\n');q.text('guimenu\n');time.sleep(1);q.open_app(9);q.widget(90,9);time.sleep(.3)
         q.cmd(f'screendump "{WORK / "workshop-ru.ppm"}"')
-        q.widget(91,9);time.sleep(1)
+        q.run()
         assert 'hello.kapp' in q.files() and q.num('loaded') == 1
         q.cmd(f'screendump "{WORK / "running-ru.ppm"}"')
         print('Guest: Russian UI + diskless RAM-only build and native .kapp execution OK')
