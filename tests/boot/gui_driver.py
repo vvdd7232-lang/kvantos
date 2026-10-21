@@ -22,6 +22,10 @@ class MouseGUI:
         self.cmd('mouse_button 0')
         deadline=time.monotonic()+getattr(self,'click_timeout',8)
         while self.num('gui_mouse_seen') and time.monotonic()<deadline:time.sleep(.01)
+        if self.num('gui_mouse_seen'):
+            self.cmd('mouse_move 1 0');self.cmd('mouse_move -1 0');time.sleep(.05)
+        deadline=time.monotonic()+getattr(self,'click_timeout',8)
+        while self.num('gui_mouse_seen') and time.monotonic()<deadline:time.sleep(.01)
         assert self.num('gui_mouse_seen')==0, 'mouse button did not release'
         # One measured click, not repeated aiming. A slow TCG repaint/storage
         # action can outlast a fixed pulse; await actual GUI acknowledgement.
@@ -35,6 +39,7 @@ class MouseGUI:
                     time.sleep(.01)
                 else:
                     if attempt + 1 < attempts:
+                        self.cmd('mouse_move 1 0');self.cmd('mouse_move -1 0')
                         time.sleep(.05)
                         continue
                     raise AssertionError(('GUI did not acknowledge mouse button',button))
