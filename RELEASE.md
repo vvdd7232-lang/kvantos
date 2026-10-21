@@ -1,64 +1,59 @@
-# KvantOS 3.2.0 — smooth graphics and a friendlier desktop
+# KvantOS 3.3.0 - dark hacker theme and Matrix
 
-October 19, 2026. Release for **BIOS/i386** and **UEFI/x86-64**. Existing
-3.1.x tags and downloads remain unchanged.
+October 21, 2026. Release for **BIOS/i386** and **UEFI/x86-64**. Existing
+3.2.0 tags and downloads remain unchanged.
 
 ## At a glance
 
-3.2.0 is the visual release. The hard bitmap font is replaced by an
-anti-aliased one, the window interface is redrawn with smooth shapes, and
-the desktop explains itself: icon tooltips, program descriptions in the
-menu and a first-run hint line. The 3.1.4 storage policy is unchanged:
-ordinary FAT volumes stay read-only, writes go only to a prepared FAT32
-volume with an owned WAL after an explicit enable, and NTFS is strictly
-read-only.
+3.3.0 is the design release. The interface is now dark: graphite panels,
+black windows, a neon-green accent and green code on the desktop. A built-in
+**Matrix** application brings an animated digital rain. Everything from 3.2.0
+is preserved: both kernels, C Workshop, the editors, KvFS and the conservative
+FAT32 write policy.
 
-## Changes since 3.1.4
+## Changes since 3.2.0
 
-### Graphics without rough pixels
+### Dark interface
 
-- **Anti-aliased text everywhere**: a coverage font (DejaVu Sans Mono,
-  full Cyrillic) in the same 8x16 CP866 cell — smooth letters in the GUI,
-  terminal, editors and the boot console. The legacy bitmap font remains
-  as the fallback used when smoothing is off.
-- **New primitives**: anti-aliased (Xiaolin Wu) lines, supersampled discs,
-  rounded rectangles and title gradients, soft layered window shadows.
-- Windows, the round close button, desktop icons, the KVANT launcher and
-  the taskbar were redrawn with these shapes; bold headings and a big
-  smooth K V A N T logo on the desktop.
+- Black and graphite panels, windows, menus, taskbar and the KVANT launcher.
+- Neon green is the default accent; text and borders are tuned for contrast
+  on dark surfaces.
+- Dark search, replace and import dialogs; editor selection no longer blends
+  into the text.
+- The kvsh prompt and status lines are green.
 
-### Clear and convenient
+### Matrix
 
-- Hover the pointer over an icon: a highlight and a tooltip explain what
-  the program does; the same one-line descriptions appear next to the
-  names in the KVANT menu.
-- A first-run hint line at the bottom of the desktop.
-- The date sits next to the taskbar clock; the right-hand readouts can no
-  longer overlap at small widths.
-- Settings > Appearance gains a "Smooth (anti-aliased) text" toggle.
-- The kvsh status line no longer paints a blue strip over the desktop
-  every half second.
+- New **Matrix** wallpaper with green code; it is the default desktop.
+- Built-in **Matrix** application: animated digital rain in a 560x400 window,
+  the `root@kvant:~# ./matrix` line and a blinking cursor.
+- Matrix is the eleventh icon in the menu and on the desktop.
 
-### Internals
+### Settings
 
-- Font generator `tools/mkfont_aa.py` (3x rendering + downsampling, packed
-  at 4 bits per pixel — the font costs 16 KiB in the kernel image).
-- Direct-ISO builder: the bounce ceiling is raised to 0x8E000 (the
-  Multiboot info block stays at 0x90000).
+- Seven accents: Neon, Blue, Teal, Emerald, Purple, Garnet, Graphite.
+- Five wallpapers: Gradient, Night, Grid, Solid, Matrix.
+- The accent and wallpaper choices are saved in `settings.cfg` and restored
+  after a reboot.
+
+## Compatibility
+
+- BIOS/i386 (`kvant.bin`) and UEFI/x86-64 (`kvant64.bin`), hybrid ISO.
+- All 3.2.0 applications and formats are preserved; FAT32/USB policy is
+  unchanged.
+- The application ABI is unchanged; existing `.kapp` files still run.
 
 ## Verification
 
-Locally and in CI: both kernels built; gui-smoke (GUI, 11 applications,
-Maze 3D) on BIOS and UEFI; mcc smoke (C Workshop); file manager; editors;
-the release workflow storage suites. Known limitation: the patched-QEMU
-storage LAB suites are not part of this release gate and keep running in
-the main CI pipeline.
+CI builds both kernels and ran 16/16 jobs: GUI and editors on BIOS and UEFI,
+EN/RU input, find/replace, RAM and KvFS persistence, C Workshop, compiler
+isolation, AHCI/USB and the storage scenarios.
 
 ## Artifacts
 
-- `kvantos-3.2.0.tar.gz` — distribution (ISOs, kernels, EFI, apps, SDK);
-- `kvantos-3.2.0-source.tar.gz` — full tagged sources;
+- `kvantos-3.3.0.tar.gz` - distribution (ISOs, kernels, EFI, apps, SDK);
+- `kvantos-3.3.0-source.tar.gz` - full tagged sources;
 - individual images and kernels: `kvantos.iso`, `kvantos-direct.iso`,
   `kvantos-floppy.img`, `kvantos-disk.img`, `kvant.bin`, `kvant64.bin`,
   `kvantefi.efi`, `esp.img`;
-- `kvantos-3.2.0-SHA256SUMS.txt` — SHA-256 checksums.
+- `kvantos-3.3.0-SHA256SUMS.txt` - SHA-256 checksums.

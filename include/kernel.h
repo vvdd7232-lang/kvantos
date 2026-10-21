@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.2.0"
+#define KV_VERSION  "3.3.0"
 #define KV_ARCH     "i386 (32-bit protected mode)"
 #define KV_BUILD    __DATE__ " " __TIME__
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Package already-built, tested v3.2.0 artifacts without publishing anything.
+# Package already-built, tested v3.3.0 artifacts without publishing anything.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version=3.2.0
+version=3.3.0
 tag=v$version
 [[ $(git describe --exact-match --tags HEAD) == "$tag" ]] || {
     echo "Check out $tag before packaging" >&2; exit 1;

@@ -1,6 +1,6 @@
-# KvantOS 3.2.0
+# KvantOS 3.3.0
 
-Source and usage notes for the 3.2.0 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
+Source and usage notes for the 3.3.0 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -39,9 +39,9 @@ the guest. This is a limited C subset, not full GCC. **Save** writes source;
 **Open** shows a RAM/disk file picker. KvFS persists files; RAM-only files disappear on reboot.
 The Workshop and Notepad have independent documents.
 
-[Workshop guide](sdk/WORKSHOP.md) · [Release 3.2.0](RELEASE.md)
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.3.0](RELEASE.md)
 
-## FAT32 / USB import and write policy (unchanged in 3.2.0)
+## FAT32 / USB import and write policy (unchanged in 3.3.0)
 
 Version 3.1.3 adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later

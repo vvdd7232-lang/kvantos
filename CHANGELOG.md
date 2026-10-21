@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.3.0 — dark hacker theme and Matrix
+
+* Dark interface across windows, menus, taskbar, launcher, editors and
+  dialogs: graphite panels, black surfaces and a neon-green accent.
+* New Matrix wallpaper, enabled by default, plus a built-in Matrix
+  application with animated digital rain and a `root@kvant:~# ./matrix`
+  prompt. Matrix is the eleventh desktop application.
+* Seven accent colours and five wallpapers, selectable in Settings and
+  persisted in `settings.cfg`.
+* Green kvsh prompt; higher-contrast editor selection; dark search, replace
+  and import dialogs.
+* No storage policy, application ABI or file-format changes.
+
 ## 3.2.0 — smooth graphics and a friendlier desktop
 
 * Anti-aliased text everywhere: a coverage font (DejaVu Sans Mono rasterised
