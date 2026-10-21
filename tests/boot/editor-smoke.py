@@ -31,9 +31,23 @@ def area(q,app=7):
     return w['x']+47,w['y']+22+1+96+4
 
 def drag(q,x,y,xx,yy):
-    q.move(x,y);q.cmd('mouse_button 1');time.sleep(.12)
-    q.move(xx,yy);time.sleep(.12)
-    q.cmd('mouse_button 0');time.sleep(.15)
+    q.move(x,y);q.cmd('mouse_button 0')
+    for _ in range(800):
+        if q.num('gui_mouse_seen')==0:break
+        time.sleep(.01)
+    assert q.num('gui_mouse_seen')==0,'drag start was not released'
+    q.cmd('mouse_button 1')
+    for _ in range(800):
+        if q.num('gui_mouse_seen')==1:break
+        time.sleep(.01)
+    assert q.num('gui_mouse_seen')==1,'drag button was not acknowledged'
+    q.move(xx,yy);time.sleep(.2)
+    q.cmd('mouse_button 0')
+    for _ in range(800):
+        if q.num('gui_mouse_seen')==0:break
+        time.sleep(.01)
+    assert q.num('gui_mouse_seen')==0,'drag release was not acknowledged'
+    time.sleep(.15)
 
 def open_file(q,name):
     q.widget(41,7)
