@@ -49,6 +49,20 @@ def drag(q,x,y,xx,yy):
     assert q.num('gui_mouse_seen')==0,'drag release was not acknowledged'
     time.sleep(.15)
 
+def diag(q,label):
+    print('DIAG',label,flush=True)
+    try:print(q.log.read_text(errors='replace')[-4000:],flush=True)
+    except Exception as e:print('LOGERR',repr(e),flush=True)
+    try:
+        import base64,io
+        from PIL import Image
+        p=smoke.WORK/'failure.png'
+        q.screenshot(p)
+        im=Image.open(p);im.thumbnail((512,384))
+        b=io.BytesIO();im.save(b,'PNG')
+        print('SHOT '+base64.b64encode(b.getvalue()).decode(),flush=True)
+    except Exception as e:print('SHOTERR',repr(e),flush=True)
+
 def open_file(q,name):
     q.widget(41,7)
     if q.mode(7)==3:q.widget(84,7)
@@ -173,8 +187,12 @@ with smoke.Guest() as q:
     # Quit is mouse-only and asks about BOTH independent dirty editors.
     q.open_app(7);q.text('!');q.menu(item=12);assert q.mode(7)==3
     q.widget(83,7);assert q.num('running')==1
-    q.open_app(6);q.widget(102,6);q.widget(603,6)
-    assert q.mode(7)==3;q.widget(83,7) # Settings exit must use the same guard
+    try:
+        q.open_app(6);q.widget(102,6);q.widget(603,6)
+        assert q.mode(7)==3;q.widget(83,7) # Settings exit must use the same guard
+    except Exception:
+        diag(q,'settings-quit')
+        raise
     q.menu(item=12);q.widget(84,7);assert q.mode(9)==3
     q.widget(83,9);assert q.num('running')==1
     q.exit_gui()
