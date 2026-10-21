@@ -17,6 +17,12 @@ class MouseGUI:
 
     def click(self, x, y):
         self.move(x, y)
+        # Start from a known released state: a synthetic MouseKeys click can
+        # still be latched in prev_btn when the next physical click arrives.
+        self.cmd('mouse_button 0')
+        deadline=time.monotonic()+getattr(self,'click_timeout',8)
+        while self.num('gui_mouse_seen') and time.monotonic()<deadline:time.sleep(.01)
+        assert self.num('gui_mouse_seen')==0, 'mouse button did not release'
         # One measured click, not repeated aiming. A slow TCG repaint/storage
         # action can outlast a fixed pulse; await actual GUI acknowledgement.
         for button in (1,0):
