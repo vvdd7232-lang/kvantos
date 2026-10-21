@@ -181,6 +181,8 @@ int  rtc_write_date(int y, int mo, int d);  /* set the CMOS date       */
    KvFS the functions quietly do nothing. */
 void settings_load(void);             /* call once the disk is mounted */
 void settings_save(void);             /* call after a setting changes  */
+extern int settings_theme_accent;     /* -1 until restored from settings.cfg */
+extern int settings_theme_wall;       /* -1 until restored from settings.cfg */
 
 /* ---------- physical memory ---------- */
 void   pmm_init(u32 mem_upper_kb, u32 mmap_addr, u32 mmap_len);

@@ -9,20 +9,35 @@
  *
  *  Current keys:
  *    lang   - interface language (en | ru)
+ *    accent - accent colour index (-1 = keep the built-in default)
+ *    wall   - desktop background index (-1 = keep the built-in default)
  * ============================================================ */
 #include "kernel.h"
 
 #define SETTINGS_FILE "settings.cfg"
 #define SETTINGS_MAX  512
 
+int settings_theme_accent = -1;
+int settings_theme_wall   = -1;
+
 static char buf[SETTINGS_MAX];
+
+static int parse_int(const char *s) {
+    int v = 0, neg = 0;
+    if (*s == '-') { neg = 1; s++; }
+    while (*s >= '0' && *s <= '9') v = v * 10 + (*s++ - '0');
+    return neg ? -v : v;
+}
 
 static void apply_line(const char *key, const char *val) {
     if (!strcmp(key, "lang")) {
         if (!strncmp(val, "ru", 2)) kv_lang_set(KV_LANG_RU);
         else if (!strncmp(val, "en", 2)) kv_lang_set(KV_LANG_EN);
+    } else if (!strcmp(key, "accent")) {
+        settings_theme_accent = parse_int(val);
+    } else if (!strcmp(key, "wall")) {
+        settings_theme_wall = parse_int(val);
     }
-    /* further keys go here */
 }
 
 void settings_load(void) {
@@ -51,7 +66,8 @@ void settings_load(void) {
 
 void settings_save(void) {
     if (!kvfs_mounted()) return;
-    ksnprintf(buf, SETTINGS_MAX, "lang=%s\n",
-              kv_lang_get() == KV_LANG_RU ? "ru" : "en");
+    ksnprintf(buf, SETTINGS_MAX, "lang=%s\naccent=%d\nwall=%d\n",
+              kv_lang_get() == KV_LANG_RU ? "ru" : "en",
+              settings_theme_accent, settings_theme_wall);
     kvfs_write(SETTINGS_FILE, buf, (u32)strlen(buf), 0);
 }

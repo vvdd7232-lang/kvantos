@@ -138,8 +138,8 @@ static void ed_import_view(window_t *v,i32 cy) {
     int win=(int)(v-wins),saving=ed_destination();
     i32 x=v->x+25,w=v->w-50,y=cy+8,h=v->h-TITLE_H-18;
     hit_remove_window(win);
-    fb_fill(x-4,y-4,w+8,h+8,fb_rgb(215,223,237));
-    fb_fill(x,y,w,h,C_WHITE); fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x-4,y-4,w+8,h+8,C_FIELD_BORDER);
+    fb_fill(x,y,w,h,C_WIN); fb_rect(x,y,w,h,C_ACCENT);
     ed_label(x+12,y+12,w-24,saving?T("Save as: choose volume and folder", "Сохранить как: том и папка"):T("Import from FAT / USB (read-only)", "Импорт с FAT / USB (только чтение)"),C_TEXT);
     widget_chip(win,W_ED_VOLUME,x+12,y+38,110,26,T("Next volume", "Носитель >"),0);
     widget_chip(win,W_ED_RESCAN,x+130,y+38,100,26,T("Refresh USB", "Обновить"),0);
@@ -152,11 +152,11 @@ static void ed_import_view(window_t *v,i32 cy) {
     int rows=(lh-8)/20;
     if(rows<1) rows=1;
     editor->file_top=ed_clamp(editor->file_top,0,editor->import_count>rows?editor->import_count-rows:0);
-    fb_fill(x+12,ly,w-54,lh,fb_rgb(248,250,254)); fb_rect(x+12,ly,w-54,lh,fb_rgb(191,201,217));
+    fb_fill(x+12,ly,w-54,lh,C_FIELD); fb_rect(x+12,ly,w-54,lh,C_FIELD_BORDER);
     for(int r=0;r<rows && editor->file_top+r<editor->import_count;r++) {
         int index=editor->file_top+r; vfs_dirent_t *entry=&editor->import_items[index];
         i32 fy=ly+4+r*20; char info[32];
-        if(index==editor->import_selected) fb_fill(x+14,fy-1,w-58,19,fb_rgb(219,233,254));
+        if(index==editor->import_selected) fb_fill(x+14,fy-1,w-58,19,C_SELECT);
         ed_label(x+20,fy,w-178,entry->name,C_TEXT);
         if(entry->is_dir) strncpy(info,T("<folder>", "<папка>"),sizeof(info));
         else ksnprintf(info,sizeof(info),"%u B",entry->size);
@@ -169,7 +169,7 @@ static void ed_import_view(window_t *v,i32 cy) {
     ed_label(x+12,ly+lh+5,w-24,ed_status,C_TEXT_DIM);
     i32 ny=y+h-78;
     fb_text(x+12,ny+5,T("Name:", "Имя:"),C_TEXT_DIM,0xFFFFFFFF);
-    fb_fill(x+64,ny,w-76,26,fb_rgb(247,250,255)); fb_rect(x+64,ny,w-76,26,C_ACCENT);
+    fb_fill(x+64,ny,w-76,26,C_FIELD); fb_rect(x+64,ny,w-76,26,C_ACCENT);
     const char *name=saving?editor->save_name:ed_name_in;
     int col=text_column(name,editor->name_caret),cols=(w-92)/8,left=col>=cols?col-cols+1:0;
     ed_label(x+72,ny+5,w-92,name+text_byte(name,left),C_TEXT);

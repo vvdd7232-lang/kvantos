@@ -44,9 +44,9 @@ class MouseGUI:
         h = self.num('scr_h')
         self.click(40, h-14)
         assert self.num('launcher_open') == 1
-        icons = list(struct.iter_unpack('<3i', self.mem('icons', 10*12)))
+        icons = list(struct.iter_unpack('<3i', self.mem('icons', 11*12)))
         row = next(i for i, (_,_,a) in enumerate(icons) if a == app) if app is not None else item
-        self.click(130, h-28-(30+12*26)+30+row*26+13)
+        self.click(130, h-28-(30+13*26)+30+row*26+13)
         time.sleep(.15)
 
     def open_app(self, app):
@@ -95,7 +95,7 @@ class MouseGUI:
             self.widget(84, app)
 
     def exit_gui(self):
-        self.menu(item=11)
+        self.menu(item=12)
         for _ in range(2):
             if not self.num('running'):
                 break

@@ -13,7 +13,7 @@ static int  hist_count = 0;
 
 /* The default text colour of the shell. Changed with the `color`
    command; the prompt restores it after every command. */
-static u8 shell_fg = VGA_COLOR(VGA_LGREY, VGA_BLACK);
+static u8 shell_fg = VGA_COLOR(VGA_LGREEN, VGA_BLACK);
 
 void shell_set_fg(u8 color) { shell_fg = color; }
 
