@@ -55,6 +55,10 @@ class MouseGUI:
         row = next(i for i, (_,_,a) in enumerate(icons) if a == app) if app is not None else item
         self.click(130, h-28-(30+13*26)+30+row*26+13)
         time.sleep(.15)
+        if self.num('launcher_open'):
+            self.click(130, h-28-(30+13*26)+30+row*26+13)
+            time.sleep(.15)
+        assert self.num('launcher_open') == 0
 
     def open_app(self, app):
         if app == 10:
@@ -65,6 +69,8 @@ class MouseGUI:
         else:
             self.menu(app=app)
         assert self.window(app)['minimized'] == 0
+        order=struct.unpack('<8i',self.mem('z_order',32))[:self.num('win_count')]
+        assert order[-1] == self.window(app)['id'], (app, order, self.windows())
 
     def hits(self, app=None):
         win = None if app is None else self.window(app)['id']

@@ -116,7 +116,14 @@ class Guest(MouseGUI):
             name,ptr,size,used=struct.unpack_from('<24sQII' if IS64 else '<24sIII',table,off)
             if used:result[name.split(b'\0')[0].decode()]=self.mem(ptr,size)
         return result
+    def focus(self,app):
+        wid=self.window(app)['id']
+        order=struct.unpack('<8i',self.mem('z_order',32))[:self.num('win_count')]
+        if order[-1]!=wid:
+            self.click(94+order.index(wid)*138+66,self.num('scr_h')-14)
+            time.sleep(.1)
     def run(self):
+        self.focus(9)
         self.widget(91,9)
         deadline=time.monotonic()+20
         while self.num('loaded')!=1 and time.monotonic()<deadline:time.sleep(.1)
@@ -179,7 +186,7 @@ void close(void){release(values);release(buffer);}
         q.open_app(7)
         assert q.document(7)['text']==b'private notes'
         q.open_app(9);q.run()
-        assert q.num('loaded')==1
+        assert q.num('loaded')==1,(q.mem('last_error',96),q.mem('app_status',96),q.windows())
         assert q.mem('app_file',44).split(b'\0')[0]==b'hello.kapp'
         # Generated entry stores API in the first data word. The template's global
         # count is immediately after the descriptor and the "hello.c" title.
