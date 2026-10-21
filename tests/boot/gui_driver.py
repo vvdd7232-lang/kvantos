@@ -20,12 +20,19 @@ class MouseGUI:
         # One measured click, not repeated aiming. A slow TCG repaint/storage
         # action can outlast a fixed pulse; await actual GUI acknowledgement.
         for button in (1,0):
-            self.cmd('mouse_button '+str(button))
-            deadline=time.monotonic()+getattr(self,'click_timeout',8)
-            while time.monotonic()<deadline:
-                if not self.num('running') or self.num('gui_mouse_seen')==button:break
-                time.sleep(.01)
-            else:raise AssertionError(('GUI did not acknowledge mouse button',button))
+            attempts = 2 if button == 0 else 1
+            for attempt in range(attempts):
+                self.cmd('mouse_button '+str(button))
+                deadline=time.monotonic()+getattr(self,'click_timeout',8)
+                while time.monotonic()<deadline:
+                    if not self.num('running') or self.num('gui_mouse_seen')==button:break
+                    time.sleep(.01)
+                else:
+                    if attempt + 1 < attempts:
+                        time.sleep(.05)
+                        continue
+                    raise AssertionError(('GUI did not acknowledge mouse button',button))
+                break
 
     def windows(self):
         out = []
