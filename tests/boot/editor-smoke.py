@@ -51,8 +51,6 @@ def drag(q,x,y,xx,yy):
 
 def diag(q,label):
     print('DIAG',label,flush=True)
-    try:print(q.log.read_text(errors='replace')[-4000:],flush=True)
-    except Exception as e:print('LOGERR',repr(e),flush=True)
     try:
         import base64,io
         from PIL import Image
@@ -62,6 +60,12 @@ def diag(q,label):
         b=io.BytesIO();im.save(b,'PNG')
         print('SHOT '+base64.b64encode(b.getvalue()).decode(),flush=True)
     except Exception as e:print('SHOTERR',repr(e),flush=True)
+    try:
+        q.cmd('quit')
+        q.proc.wait(timeout=5)
+    except Exception as e:print('QUITERR',repr(e),flush=True)
+    try:print(q.log.read_text(errors='replace')[-8000:],flush=True)
+    except Exception as e:print('LOGERR',repr(e),flush=True)
 
 def open_file(q,name):
     q.widget(41,7)
