@@ -196,6 +196,7 @@ void vga_panic_screen(void) {
     color = VGA_COLOR(VGA_WHITE, VGA_RED);
     if (gfx) {
         fb_set_target(NULL);          /* the back buffer may have been released */
+        fb_clear_clip();
         /* after a resolution change the character grid may be stale */
         cols = fb_width() / 8;
         rows = fb_height() / 16;

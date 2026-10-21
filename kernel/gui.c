@@ -1917,7 +1917,10 @@ static void build_desktop_cache(void) {
     void *target = fb_get_target();
     fb_clear_clip();
     fb_set_target(desktop_cache);
+    fb_clip_rect_t desk = { 0, 0, (i32)scr_w, desktop_h };
+    fb_set_clip_rects(&desk, 1);
     draw_desktop();
+    fb_clear_clip();
     fb_set_target(target);
     desktop_cache_valid = 1;
 }

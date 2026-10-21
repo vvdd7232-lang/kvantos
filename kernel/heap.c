@@ -15,6 +15,7 @@ typedef struct block {
 
 static block_t *head = NULL;
 static u32 heap_total = 0, heap_used = 0;
+static u32 heap_start = 0, heap_end = 0;
 
 void heap_init(u32 start, u32 size) {
     head = (block_t *)start;
@@ -25,6 +26,8 @@ void heap_init(u32 start, u32 size) {
     head->free  = 1;
     heap_total  = size;
     heap_used   = sizeof(block_t);
+    heap_start  = start;
+    heap_end    = start + size;
 }
 
 static void split(block_t *b, u32 size) {
@@ -105,7 +108,26 @@ char *kstrdup(const char *s) {
 
 void heap_stats(u32 *total, u32 *used, u32 *blocks) {
     u32 n = 0;
-    for (block_t *b = head; b; b = b->next) n++;
+    block_t *prev = NULL;
+    for (block_t *b = head; b; ) {
+        u32 a = (u32)(kv_addr_t)b;
+        if (a < heap_start || a + sizeof(block_t) > heap_end || (a & 7) ||
+            (b->magic != MAGIC_USED && b->magic != MAGIC_FREE)) {
+            kprintf("[heap] bad block at %p (previous %p)\n", (void *)b, (void *)prev);
+            break;
+        }
+        n++;
+        if (b->next) {
+            u32 nx = (u32)(kv_addr_t)b->next;
+            if (nx <= a || nx > heap_end - sizeof(block_t) || (nx & 7)) {
+                kprintf("[heap] block %p size %u next %p previous %p\n",
+                        (void *)b, b->size, (void *)b->next, (void *)b->prev);
+                break;
+            }
+        }
+        prev = b;
+        b = b->next;
+    }
     if (total) *total = heap_total;
     if (used) *used = heap_used;
     if (blocks) *blocks = n;
