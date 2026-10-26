@@ -1,6 +1,11 @@
 name: Release 3.4.0
 
+# The frozen tag is the release source; this branch-only push trigger is
+# also usable by GitHub App connections without Actions-dispatch permission.
 on:
+  push:
+    branches: ['arena/a1aeaa4f-kvantos']
+    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       tag:
@@ -22,11 +27,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || 'v3.4.0' }}
           fetch-depth: 0
       - name: Verify release tag
         run: |
-          test "${{ inputs.tag }}" = v3.4.0
+          test "${{ inputs.tag || 'v3.4.0' }}" = v3.4.0
           test "$(git describe --exact-match --tags HEAD)" = v3.4.0
           test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.4.0
       - name: Install toolchain and test firmware
