@@ -11,7 +11,7 @@ SOURCES := render.c $(ROOT)/kernel/string.c $(ROOT)/kernel/printf.c \
 check: $(OUT)/render
 	$(OUT)/render $(OUT)
 	python3 png.py $(OUT)
-$(OUT)/render: $(SOURCES) $(wildcard $(ROOT)/kernel/gui*.h) $(ROOT)/kernel/gui.c $(ROOT)/kernel/fb.c
+$(OUT)/render: $(SOURCES) $(wildcard $(ROOT)/kernel/gui*.h) $(ROOT)/kernel/gui.c $(ROOT)/kernel/fb.c $(ROOT)/include/kernel.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(SOURCES) -Wl,--gc-sections -fsanitize=address,undefined -no-pie -o $@
 clean:

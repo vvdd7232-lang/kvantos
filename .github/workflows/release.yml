@@ -1,32 +1,34 @@
-name: Release 3.3.0
+name: Release 3.4.0
 
 on:
-  push:
-    tags: ['v3.3.0']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.3.0
+        default: v3.4.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: kvantos-release-3.3.0
+  group: kvantos-release-3.4.0
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       - name: Verify release tag
-        run: test "$(git describe --exact-match --tags HEAD)" = v3.3.0
+        run: |
+          test "${{ inputs.tag }}" = v3.4.0
+          test "$(git describe --exact-match --tags HEAD)" = v3.4.0
+          test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.4.0
       - name: Install toolchain and test firmware
         run: |
           sudo apt-get update
@@ -39,6 +41,8 @@ jobs:
         run: make CC=gcc-12 release
       - name: Test native compiler, editors, VFS and storage models
         run: make -C tests/mcc CC=gcc-12 check sanitize ramfs editors input storage vfs filemgr ahci ohci ehci uhci hub fat-meta
+      - name: Test native GUI layout and generate previews
+        run: make -C tests/gui CC=gcc-12 check
       - name: Validate images
         run: python3 tests/boot/check-images.py
       - name: Test BIOS and UEFI CD boot
@@ -78,19 +82,34 @@ jobs:
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.3.0-release
+          name: kvantos-3.4.0-release
           path: packages/
+      - name: Preserve GUI previews
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-3.4.0-gui-previews
+          path: build/gui-visual/*.png
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           # Never silently replace an existing release or its assets.
-          if gh release view v3.3.0 >/dev/null 2>&1; then
-            echo 'Release v3.3.0 already exists; refusing to overwrite it.' >&2
+          if gh release view v3.4.0 >/dev/null 2>&1; then
+            echo 'Release v3.4.0 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.3.0 --verify-tag --latest \
-            --title 'KvantOS 3.3.0' --notes-file RELEASE.ru.md \
+          gh release create v3.4.0 --verify-tag --latest \
+            --title 'KvantOS 3.4.0 «Бриз»' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
             packages/*.bin packages/*.efi packages/*SHA256SUMS.txt
+      - name: Preserve diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kvantos-3.4.0-release-diagnostics
+          path: |
+            build/release.log
+            build/**/*.log
+            build/gui-visual/*.png
+          if-no-files-found: ignore

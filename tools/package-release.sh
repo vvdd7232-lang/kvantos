@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Package already-built, tested v3.3.0 artifacts without publishing anything.
+# Package already-built, tested release artifacts without publishing anything.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-version=3.3.0
+version=$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid kernel version' >&2; exit 1; }
 tag=v$version
 [[ $(git describe --exact-match --tags HEAD) == "$tag" ]] || {
     echo "Check out $tag before packaging" >&2; exit 1;

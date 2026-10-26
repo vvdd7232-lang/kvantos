@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Breeze desktop
+## 3.4.0 — Breeze desktop (2026-10-26)
 
 * Windows 7-inspired light chrome: tinted title gradients, subtle borders,
   white fields, blue selection, legible menus and editor/workshop dialogs.
@@ -16,8 +16,7 @@
   under colour swatches; architecture/bootloader labels follow the build target.
 * Native host raster tests under ASan/UBSan, PNG snapshots and caption/taskbar
   hit-region checks. No application ABI, storage policy or file-format changes.
-* This is working-tree UI work, not a published release; 3.3.0 release notes
-  and downloadable images still describe the original Matrix theme.
+* Existing 3.3.0 tags and downloadable images remain unchanged.
 
 ## 3.3.0 — dark hacker theme and Matrix
 

@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# Authorized user action: push the prepared 3.3.0 refs; CI validates/publishes.
-# No tokens are accepted as arguments or stored by this script.
+# Explicit user action: push the current Arena branch, freeze its tag, and
+# dispatch the gated build/test/package/publish workflow. Never move main,
+# another branch, an existing tag, or an existing release.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 repo=vvdd7232-lang/kvantos
-url=https://github.com/$repo.git
-tag=v3.3.0
-expected_main=95c38674b3f22182317fe307214677c239a206e8
-command -v gh >/dev/null || { echo 'Install GitHub CLI and run gh auth login first.' >&2; exit 1; }
+version=$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid kernel version' >&2; exit 1; }
+tag=v$version
+branch=$(git branch --show-current)
+case "$branch" in arena/*) ;; *) echo 'Run from the active Arena branch, not main or a detached tag.' >&2; exit 1;; esac
+[[ -z $(git status --porcelain) ]] || { echo 'Commit all source changes first.' >&2; exit 1; }
+commit=$(git rev-parse HEAD)
+command -v gh >/dev/null || { echo 'GitHub CLI is required.' >&2; exit 1; }
 gh auth status --hostname github.com >/dev/null
 permission=$(gh repo view "$repo" --json viewerPermission --jq .viewerPermission)
 case "$permission" in ADMIN|MAINTAIN|WRITE) ;; *) echo 'GitHub write permission required.' >&2; exit 1;; esac
-commit=$(git rev-parse "$tag^{commit}")
-[[ $(git rev-parse HEAD) == "$commit" ]] || { echo "Check out $tag first." >&2; exit 1; }
-[[ -z $(git status --porcelain --untracked-files=no) ]] || { echo 'Tracked changes must be committed first.' >&2; exit 1; }
-remote_main=$(git ls-remote "$url" refs/heads/main | cut -f1)
-[[ "$remote_main" == "$expected_main" ]] || { echo 'Remote main changed; review before publishing. No refs pushed.' >&2; exit 1; }
-[[ -z $(git ls-remote "$url" "refs/tags/$tag") ]] || { echo 'Remote tag already exists; refusing to replace it.' >&2; exit 1; }
-# Verify repository/API access separately: a failed network check must not mean absent release.
-gh api "repos/$repo/releases?per_page=100" --jq '.[].tag_name' > /dev/null
-if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-    echo 'Release already exists; refusing to replace it.' >&2; exit 1
+# A failed API call is fatal, never interpreted as an absent release/tag.
+releases=$(gh api --paginate "repos/$repo/releases?per_page=100" --jq '.[].tag_name')
+if grep -Fxq "$tag" <<< "$releases"; then
+    echo "Release $tag already exists; refusing to replace it." >&2; exit 1
 fi
-git merge-base --is-ancestor "$expected_main" "$commit"
-gh auth setup-git --hostname github.com
-git push --atomic "$url" "$commit:refs/heads/main" \
-    "$commit:refs/heads/release/$tag" "refs/tags/$tag:refs/tags/$tag"
-printf 'Refs pushed. CI will test and publish; monitor https://github.com/%s/actions\n' "$repo"
+remote_tag=$(gh api "repos/$repo/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .object.sha")
+if [[ -n "$remote_tag" && "$remote_tag" != "$commit" ]]; then
+    echo "Tag $tag already points elsewhere; refusing to move it." >&2; exit 1
+fi
+git push origin "$branch"
+if [[ -z "$remote_tag" ]]; then
+    gh api --method POST "repos/$repo/git/refs" -f "ref=refs/tags/$tag" -f "sha=$commit" --jq .ref
+fi
+# A tag freezes sources; publication happens only after the full CI suite.
+# Re-dispatching after a failed build is permitted only at that same SHA.
+gh workflow run release.yml --repo "$repo" --ref "$branch" --field "tag=$tag"
+printf '%s build dispatched from %s (%s). No release is published until tests pass.\n' "$tag" "$branch" "$commit"

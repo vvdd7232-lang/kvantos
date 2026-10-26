@@ -11,7 +11,7 @@
 #include "i18n.h"
 
 #define KV_NAME     "KvantOS"
-#define KV_VERSION  "3.3.0"
+#define KV_VERSION  "3.4.0"
 #ifdef __x86_64__
 #define KV_ARCH     "x86-64 (64-bit long mode)"
 #else

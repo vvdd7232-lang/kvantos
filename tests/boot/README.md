@@ -44,10 +44,10 @@ mouse aiming. Logs/screenshots are under `build/gui-smoke/`.
 checks the hybrid partition/boot layout rather than falling back to CD boot.
 The direct ISO is a CD/DVD fallback, not a raw-USB hybrid.
 
-After committing/tagging `v3.3.0`, `bash tools/package-release.sh` creates the
+After committing/tagging `v3.4.0`, `bash tools/package-release.sh` creates the
 source archive and external checksums under `packages/`. The workflow
-`.github/workflows/release.yml` builds/tests/packages before publishing on a
-`v3.3.0` tag push and refuses to overwrite an existing release.
+`.github/workflows/release.yml` builds/tests/packages before publishing on an explicit
+`workflow_dispatch` for `v3.4.0` and refuses to overwrite an existing release.
 
 
 ## Mouse-first editors (3.1.2)

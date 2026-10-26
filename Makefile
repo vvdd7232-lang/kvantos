@@ -308,7 +308,7 @@ debug: $(ISO)
 # The full distribution set: GRUB and direct BIOS/UEFI ISOs, floppy,
 # kernels, applications and an empty disk image. This target only builds
 # files locally; publishing is
-# handled separately by .github/workflows/release.yml on the v3.3.0 tag.
+# handled separately by .github/workflows/release.yml for the v3.4.0 tag (explicit workflow dispatch).
 release:
 	@test "$(STORAGE_LAB)" = 0 || { echo 'Refusing release artifacts from STORAGE_LAB build'; exit 1; }
 	@mkdir -p build
@@ -329,13 +329,18 @@ release-inner: iso
 	@test -f release/kvantos-disk.img || python3 sdk/mkdisk.py release/kvantos-disk.img 16 >/dev/null
 	@rm -f kvantos-$(VERSION).tar.gz
 	@cp LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md release/
+	@mkdir -p release/docs release/screenshots release/tests/gui release/tests/boot
+	@cp docs/BREEZE.ru.md release/docs/
+	@cp screenshots/breeze-appearance-ru.png release/screenshots/
+	@cp tests/gui/README.md release/tests/gui/
+	@cp tests/boot/README.md release/tests/boot/
 	@mkdir -p release/sdk
 	@cp sdk/WORKSHOP.md sdk/WORKSHOP.ru.md release/sdk/
 	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp > SHA256SUMS
 	@tar czf kvantos-$(VERSION).tar.gz -C release \
 	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
 	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64 \
-	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md sdk
+	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md sdk docs screenshots tests
 	@echo "  DONE: kvantos-$(VERSION).tar.gz ($$(du -h kvantos-$(VERSION).tar.gz | cut -f1))"
 
 font:
