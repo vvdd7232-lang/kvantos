@@ -15,6 +15,7 @@ import os
 import struct
 import subprocess
 import sys
+from direct_layout import read_layout, validate_bounce
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -23,7 +24,7 @@ BUILD = os.path.join(ROOT, "build")
 STUB_PAD = 2048          # stub = first four sectors (loaded by the BIOS)
 TABLE_OFF = 1536         # the read table lives in the fourth sector
 COPY_OFF = 1792          # ... followed by the bounce copy table
-BOUNCE_BASE = 0x10000    # INT 13h reads land here (see direct.asm)
+BOUNCE_BASE = read_layout()["BOUNCE"]    # INT 13h reads land here (see direct.asm)
 MOD_BASE = 0x200000      # .kapp modules land at 2 MiB
 MOD_ALIGN = 4096         # Multiboot bit 0: modules page aligned
 MAX_APPS = 16
@@ -104,7 +105,7 @@ def main():
     ]
     stub_bin = os.path.join(BUILD, "direct_stub.bin")
     cmd = ["nasm", "-f", "bin", "-w-no-number-overflow", "-o", stub_bin,
-           "-I", BUILD, os.path.join(ROOT, "boot", "direct.asm")]
+           "-I", BUILD, "-I", os.path.join(ROOT, "boot") + os.sep, os.path.join(ROOT, "boot", "direct.asm")]
     for d in defines:
         cmd += ["-D", d]
     r = subprocess.run(cmd)
@@ -131,11 +132,13 @@ def main():
         img += data
         if padded > len(data):
             img += b"\0" * (padded - len(data))
-    # The bounce area ends 8 KiB below the Multiboot info block
-    # (MBI at 0x90000 in boot/direct.asm); conventional memory and the
-    # BIOS data area live far below BOUNCE_BASE, the EBDA far above.
-    if bounce > 0x8E000:
-        print(f"mkdirect: bounce area grew to {bounce:#x}, out of room")
+    # Reject collisions with firmware replies, either stack, and boot metadata,
+    # not just conventional-memory exhaustion. A larger kernel must not silently
+    # overwrite the VBE/E820 blocks before protected-mode code consumes them.
+    try:
+        validate_bounce(bounce)
+    except ValueError as error:
+        print(f"mkdirect: {error}")
         return 1
 
     table = struct.pack("<I", len(entries))

@@ -379,3 +379,6 @@ build/obj/procfs.o build/obj64/procfs.o build/obj/main.o build/obj64/main.o: inc
 # Shared mappings / protocol2 surfaces (both architectures).
 USER_MEMORY_OBJECTS := user_space user_surface user_service user_image user_mode kapp
 $(addprefix build/obj/,$(addsuffix .o,$(USER_MEMORY_OBJECTS))) $(addprefix build/obj64/,$(addsuffix .o,$(USER_MEMORY_OBJECTS))): include/user_space.h include/user_surface.h include/user_service.h include/user_image.h include/user_app.h
+
+# Direct loader memory-layout helper is shared with instruction-level tests.
+build/kvantos-direct.iso: boot/direct_mmap.inc tools/direct_layout.py

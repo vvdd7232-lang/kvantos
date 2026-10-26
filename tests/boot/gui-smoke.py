@@ -40,7 +40,7 @@ def run(arch):
     proc = subprocess.Popen(['qemu-system-x86_64', '-machine',
                              'q35,accel=tcg' if firmware else 'pc,accel=tcg',
                              '-cpu', 'max' if firmware else 'pentium', '-m', '256',
-                             *firmware, '-cdrom', 'release/kvantos.iso', '-boot', 'd',
+                             *firmware, '-cdrom', os.environ.get('BOOT_ISO','release/kvantos.iso'), '-boot', 'd',
                              '-display', 'none', '-serial', 'file:' + str(log),
                              '-monitor', 'unix:' + str(monitor) + ',server,nowait',
                              '-no-reboot'], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

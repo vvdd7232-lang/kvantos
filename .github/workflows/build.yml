@@ -470,3 +470,63 @@ jobs:
               echo '```'
             done
           } | tee -a "$GITHUB_STEP_SUMMARY" || true
+
+  direct-boot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Boot toolchain and firmware
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-12 gcc-multilib nasm binutils xorriso mtools grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip
+          python3 -m pip install --user --break-system-packages unicorn==2.1.0 'setuptools<81' pillow
+      - name: Direct loader layout and E820 instruction regression
+        run: python3 tests/boot/test-direct-layout.py
+      - name: Build unchanged acceptance images
+        run: make -j2 CC=gcc-12 release
+      - name: GRUB, floppy and direct BIOS/UEFI boot with correct RAM
+        env:
+          BOOT_LOG_DIR: build/direct-boot
+          BIOS_MIN_RAM_MB: 64
+        run: |
+          set -euo pipefail
+          bash tests/boot/qemu-smoke.sh release/kvantos.iso 2>&1 | tee build/direct-grub.log
+          bash tests/boot/qemu-smoke.sh release/kvantos-direct.iso 2>&1 | tee build/direct-free.log
+      - name: Embedded apps survive direct-boot memory setup
+        env:
+          BOOT_ISO: release/kvantos-direct.iso
+        run: python3 tests/boot/gui-smoke.py
+      - name: API-readable boot diagnostics on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          paths=[Path('build/release.log'),*Path('build').glob('direct-*.log'),*Path('build/direct-boot').glob('*/*'),*Path('build/gui-smoke').glob('*/serial.log')]
+          chunks=[]
+          for p in paths:
+              if p.is_file(): chunks.append(str(p)+'\n'+p.read_text(errors='replace')[-6000:])
+          text='\n'.join(chunks)[-45000:]
+          payload={'name':'Direct boot failure details','head_sha':os.environ['HEAD_SHA'],'status':'completed','conclusion':'neutral','output':{'title':'Direct boot preflight diagnostics','summary':'Diagnostic log, not a boot-test waiver.','text':'```text\n'+text+'\n```'}}
+          Path('build/direct-diagnostic.json').write_text(json.dumps(payload))
+          PY
+          gh api --method POST "repos/$GH_REPO/check-runs" --input build/direct-diagnostic.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: direct-boot-preflight
+          path: |
+            build/direct-boot/
+            build/direct-*.log
+            build/gui-smoke/**/*.log
+            build/gui-smoke/**/*.png

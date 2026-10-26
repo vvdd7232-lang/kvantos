@@ -18,14 +18,20 @@ if ! command -v "$qemu" >/dev/null 2>&1; then
     exit 2
 fi
 
-scratch=$(mktemp -d)
+# Preserve serial/QEMU logs when CI requests them; default remains disposable.
+if [[ -n ${BOOT_LOG_DIR:-} ]]; then
+    mkdir -p "$BOOT_LOG_DIR"
+    scratch=$(mktemp -d "$BOOT_LOG_DIR/$(basename "$iso").${BOOT_MEDIA:-cd}.XXXXXX")
+else
+    scratch=$(mktemp -d)
+fi
 active_pid=
 cleanup() {
     if [[ -n "$active_pid" ]]; then
         kill "$active_pid" >/dev/null 2>&1 || true
         wait "$active_pid" >/dev/null 2>&1 || true
     fi
-    rm -rf "$scratch"
+    if [[ -z ${BOOT_LOG_DIR:-} ]]; then rm -rf "$scratch"; fi
 }
 trap cleanup EXIT
 
@@ -37,7 +43,8 @@ run_case() {
     local serial_log="$scratch/$safe_label.serial"
     local qemu_log="$scratch/$safe_label.qemu"
 
-    echo "[boot-smoke] $label"
+    local early_exit=0 qemu_status=0
+    echo "[boot-smoke] $label image=$iso"
     "$qemu" "$@" \
         -display none -monitor none \
         -serial "file:$serial_log" \
@@ -56,10 +63,22 @@ run_case() {
                 cat "$qemu_log" >&2
                 return 1
             fi
+            if [[ "$label" == BIOS* && -n ${BIOS_MIN_RAM_MB:-} ]]; then
+                local detected
+                detected=$(sed -n 's/.*detected \([0-9][0-9]*\) MiB RAM.*/\1/p' "$serial_log" | head -1)
+                if [[ -z "$detected" ]] || ((detected < BIOS_MIN_RAM_MB)); then
+                    echo "[boot-smoke] FAIL: $label reported RAM '$detected', expected at least $BIOS_MIN_RAM_MB MiB" >&2
+                    cat "$serial_log" >&2
+                    return 1
+                fi
+            fi
             echo "[boot-smoke] PASS: $label reached kvsh"
             return 0
         fi
         if ! kill -0 "$active_pid" >/dev/null 2>&1; then
+            if wait "$active_pid"; then qemu_status=0; else qemu_status=$?; fi
+            active_pid=
+            early_exit=1
             break
         fi
         sleep 1
@@ -70,7 +89,11 @@ run_case() {
         wait "$active_pid" >/dev/null 2>&1 || true
         active_pid=
     fi
-    echo "[boot-smoke] FAIL: $label did not reach kvsh within ${timeout_s}s" >&2
+    if ((early_exit)); then
+        echo "[boot-smoke] FAIL: $label QEMU exited with status $qemu_status before kvsh" >&2
+    else
+        echo "[boot-smoke] FAIL: $label did not reach kvsh within ${timeout_s}s" >&2
+    fi
     [[ -f "$serial_log" ]] && cat "$serial_log" >&2
     [[ -f "$qemu_log" ]] && cat "$qemu_log" >&2
     return 1

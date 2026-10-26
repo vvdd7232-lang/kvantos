@@ -24,16 +24,18 @@ bits 16
 org 0x7C00
 
 STACK_TOP   equ 0x7000
-E820_BUF    equ 0x80000
+; BIOS reads may fill the ENTIRE 0x10000..0x8E000 bounce window.
+; Keep firmware replies below it, after the 0x7C00..0x8400 loader.
+E820_BUF    equ 0x9000
 E820_MAX    equ 64
-VBINFO      equ 0x81000
-MODEINFO    equ 0x82000
+VBINFO      equ 0xA000
+MODEINFO    equ 0xB000
 ; real-mode segment forms of the buffers above (16-bit instructions
 ; cannot encode a 20-bit displacement without a prefix, so the real
 ; mode part addresses them as seg:off)
-E820_SEG    equ 0x8000
-VB_SEG      equ 0x8100
-MI_SEG      equ 0x8200
+E820_SEG    equ 0x0900
+VB_SEG      equ 0x0A00
+MI_SEG      equ 0x0B00
 MBI         equ 0x90000
 MODS_TAB    equ 0x90100
 MMAP_TAB    equ 0x92000
@@ -41,7 +43,8 @@ STR_AREA    equ 0x91000
 MB_MAGIC    equ 0x2BADB002
 READ_TABLE  equ 0x8200              ; fourth sector of the loaded stub
 COPY_TABLE  equ 0x8300              ; bounce -> final addresses, same sector
-DAP         equ 0x6000
+DAP         equ 0x5000             ; below the reserved 0x6000..0x7000 stack
+BOUNCE_END  equ 0x8E000             ; exclusive, below Multiboot/EBDA
 BOUNCE      equ 0x10000             ; INT 13h can only address seg:off
                                     ; (up to ~1.06 MiB), so everything is
                                     ; read here first and copied to the
@@ -286,7 +289,7 @@ pm_entry:
     mov fs, ax
     mov gs, ax
     mov ss, ax
-    mov esp, 0x7F000
+    mov esp, STACK_TOP              ; NEVER place stack inside the bounce area
 
     ; ---- move everything from the bounce area to the final
     ;      addresses (kernel segments to 1 MiB, modules to 2 MiB) ----
@@ -329,56 +332,7 @@ pm_entry:
     mov ecx, strings_len
     rep movsb
 
-    ; ---- mmap table from E820 (entry size forced to 20) ----
-    mov ebx, E820_BUF
-    mov edi, MMAP_TAB
-    mov ecx, dword [e820_cnt]
-    xor ebp, ebp                    ; mem_upper in KiB
-.mmap_loop:
-    test ecx, ecx
-    jz .mmap_done
-    push dword [ebx + 16]           ; type
-    push dword [ebx + 12]           ; length high
-    push dword [ebx + 8]            ; length low
-    mov eax, dword [ebx]            ; base low
-    mov edx, dword [ebx + 4]        ; base high
-    mov dword [edi], 20             ; multiboot: size field
-    mov dword [edi + 4], eax
-    mov dword [edi + 8], edx
-    pop eax                         ; length low
-    mov dword [edi + 12], eax
-    pop eax                         ; length high
-    mov dword [edi + 16], eax
-    pop eax                         ; type
-    mov dword [edi + 20], eax
-    ; track upper memory: type 1 regions that start above 1 MiB
-    cmp dword [ebx + 16], 1
-    jne .mmap_next
-    cmp edx, 0
-    jne .mmap_next                  ; region above 4 GiB - ignore
-    cmp eax, 0x100000
-    jb .mmap_next
-    push ebx
-    mov ebx, dword [ebx + 8]        ; length low
-    add eax, ebx
-    pop ebx
-    sub eax, 0x100000
-    shr eax, 10
-    cmp eax, ebp
-    jb .mmap_next
-    mov ebp, eax
-.mmap_next:
-    add ebx, 24
-    add edi, 24
-    dec ecx
-    jmp .mmap_loop
-.mmap_done:
-    mov dword [mmap_len], edi
-    sub dword [mmap_len], MMAP_TAB
-    test ebp, ebp
-    jnz .have_upper
-    mov ebp, 31744                  ; 32 MiB fallback
-.have_upper:
+    %include "direct_mmap.inc"
 
     ; ---- modules table (destinations come from the read table) ----
     mov edi, MODS_TAB
