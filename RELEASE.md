@@ -1,7 +1,16 @@
-# KvantOS 3.5.0 — procfs and shared GUI
+# KvantOS 3.5.1 — procfs and shared GUI
 
 October 26, 2026. **BIOS/i386** and **UEFI/x86-64**.
 Published 3.4.0 and earlier releases remain unchanged.
+
+## Direct BIOS boot fix
+
+The earlier 3.5.0 attempt failed boot acceptance and was not published; its tag
+has not moved. 3.5.1 separates E820/VBE firmware buffers and the protected-mode
+stack from the direct loader's kernel/app bounce area, fixes mem_upper, and
+reserves boot modules before page-table allocation. The builder rejects memory
+collisions; regressions execute the actual E820 instructions and compare every
+embedded app's guest RAM bytes with the original files.
 
 ## Highlights
 
@@ -50,9 +59,9 @@ This is not physical-hardware qualification or a performance claim.
 
 ## Artifacts
 
-- `kvantos-3.5.0.tar.gz` — distribution, images, kernels, apps, SDK and demos;
-- `kvantos-3.5.0-source.tar.gz` — tagged sources;
+- `kvantos-3.5.1.tar.gz` — distribution, images, kernels, apps, SDK and demos;
+- `kvantos-3.5.1-source.tar.gz` — tagged sources;
 - `kvantos.iso`, `kvantos-direct.iso`, `kvantos-floppy.img`, `kvantos-disk.img`;
 - `kvant.bin`, `kvant64.bin`, `kvantefi.efi`, `esp.img`;
 - `pixels32.kapp`, `pixels64.kapp` — experimental shared-surface demos;
-- `kvantos-3.5.0-SHA256SUMS.txt` — SHA-256 checksums.
+- `kvantos-3.5.1-SHA256SUMS.txt` — SHA-256 checksums.

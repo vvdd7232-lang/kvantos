@@ -1,24 +1,21 @@
-name: Release 3.5.0
+name: Release 3.5.1
 
 # Release uses frozen tagged sources. Heavy regression matrices remain in
 # build.yml; this workflow gates publication on bounded release acceptance.
 on:
-  # Arena GitHub App cannot dispatch Actions; push only after freezing v3.5.0.
-  push:
-    branches: ['arena/a1aeaa4f-kvantos']
-    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.5.0
+        default: v3.5.1
 
 permissions:
   contents: write
+  checks: write
 
 concurrency:
-  group: kvantos-release-3.5.0
+  group: kvantos-release-3.5.1
   cancel-in-progress: false
 
 jobs:
@@ -28,13 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || 'v3.5.0' }}
+          ref: ${{ inputs.tag || 'v3.5.1' }}
           fetch-depth: 0
       - name: Verify release tag
         run: |
-          test "${{ inputs.tag || 'v3.5.0' }}" = v3.5.0
-          test "$(git describe --exact-match --tags HEAD)" = v3.5.0
-          test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.5.0
+          test "${{ inputs.tag || 'v3.5.1' }}" = v3.5.1
+          test "$(git describe --exact-match --tags HEAD)" = v3.5.1
+          test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.5.1
       - name: Install toolchain and test firmware
         run: |
           sudo apt-get update
@@ -43,6 +40,11 @@ jobs:
             grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip dosfstools gdisk ntfs-3g
       - name: Install bounded compiler and GUI test dependencies
         run: python3 -m pip install --user --break-system-packages unicorn==2.1.0 'setuptools<81' 'pillow>=10,<13'
+      - name: Direct loader memory-layout and E820 instruction regressions
+        run: |
+          mkdir -p build
+          set -o pipefail
+          python3 tests/boot/test-direct-layout.py 2>&1 | tee build/release-direct-layout.log
       - name: Build distribution and protocol1/protocol2 SDK demos
         run: make CC=gcc-12 release
       - name: Host compiler, memory, procfs, editors and storage guards (ASan/UBSan)
@@ -52,21 +54,29 @@ jobs:
       - name: Validate images
         run: python3 tests/boot/check-images.py
       - name: BIOS and UEFI CD boot (GRUB and direct ISO)
+        env:
+          BOOT_LOG_DIR: build/boot-release
+          BIOS_MIN_RAM_MB: 64
         run: |
-          bash tests/boot/qemu-smoke.sh release/kvantos.iso
-          bash tests/boot/qemu-smoke.sh release/kvantos-direct.iso
+          set -euo pipefail
+          bash tests/boot/qemu-smoke.sh release/kvantos.iso 2>&1 | tee build/release-boot-grub.log
+          bash tests/boot/qemu-smoke.sh release/kvantos-direct.iso 2>&1 | tee build/release-boot-direct.log
       - name: BIOS and UEFI USB boot
         run: BOOT_MEDIA=usb bash tests/boot/qemu-smoke.sh release/kvantos.iso
-      - name: Desktop and native application on both kernels
-        run: python3 tests/boot/gui-smoke.py
+      - name: Desktop and native application bytes on both kernels
+        run: set -o pipefail; python3 tests/boot/gui-smoke.py 2>&1 | tee build/release-gui-smoke.log
+      - name: Direct ISO desktop and embedded application bytes
+        env:
+          BOOT_ISO: release/kvantos-direct.iso
+        run: set -o pipefail; python3 tests/boot/gui-smoke.py 2>&1 | tee build/release-gui-smoke.log
       - name: Procfs reads, write refusal and rescan on both kernels
-        run: python3 tests/boot/procfs-smoke.py
+        run: set -o pipefail; python3 tests/boot/procfs-smoke.py 2>&1 | tee build/release-procfs-smoke.log
       - name: CPL3 CPU isolation and fault cleanup on both kernels
-        run: python3 tests/boot/user-isolation-smoke.py
+        run: set -o pipefail; python3 tests/boot/user-isolation-smoke.py 2>&1 | tee build/release-user-isolation-smoke.log
       - name: Shared surfaces, immutable-front write fault and frame cleanup
-        run: python3 tests/boot/user-surface-smoke.py
+        run: set -o pipefail; python3 tests/boot/user-surface-smoke.py 2>&1 | tee build/release-user-surface-smoke.log
       - name: Protocol1 compatibility and immutable source disk
-        run: python3 tests/boot/isolated-app-smoke.py
+        run: set -o pipefail; python3 tests/boot/isolated-app-smoke.py 2>&1 | tee build/release-isolated-app-smoke.log
       - name: GPT bounds and NTFS read-only format checks
         run: make -C tests/fs CC=gcc-12 gpt ntfs-image
       - name: Package versioned sources and checksums
@@ -74,12 +84,12 @@ jobs:
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.5.0-release
+          name: kvantos-3.5.1-release
           path: packages/
       - name: Preserve GUI previews
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.5.0-gui-previews
+          name: kvantos-3.5.1-gui-previews
           path: |
             build/gui-visual/*.png
             build/user-surface/**/*.png
@@ -89,22 +99,41 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           # Never replace a published version or its assets.
-          if gh release view v3.5.0 >/dev/null 2>&1; then
-            echo 'Release v3.5.0 already exists; refusing to overwrite it.' >&2
+          if gh release view v3.5.1 >/dev/null 2>&1; then
+            echo 'Release v3.5.1 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.5.0 --verify-tag --latest \
-            --title 'KvantOS 3.5.0 — procfs и shared GUI' --notes-file RELEASE.ru.md \
+          gh release create v3.5.1 --verify-tag --latest \
+            --title 'KvantOS 3.5.1 — procfs и shared GUI' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
             packages/*.bin packages/*.efi packages/*.kapp packages/*SHA256SUMS.txt
+      - name: API-readable failure details
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p build
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          paths=[*Path('build').rglob('*.log'),*Path('build').rglob('*.serial')]
+          paths=sorted((p for p in paths if p.is_file()),key=lambda p:p.stat().st_mtime,reverse=True)
+          text='\n'.join(str(p)+'\n'+p.read_text(errors='replace')[-7000:] for p in paths)[:45000]
+          payload={'name':'Release failure details','head_sha':os.environ['HEAD_SHA'],'status':'completed','conclusion':'neutral','output':{'title':'Release 3.5.1 failure diagnostics','summary':'Diagnostic log only; all release gates remain mandatory.','text':'```text\n'+text+'\n```'}}
+          Path('build/release-diagnostic.json').write_text(json.dumps(payload))
+          PY
+          gh api --method POST "repos/$GH_REPO/check-runs" --input build/release-diagnostic.json
       - name: Preserve diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.5.0-release-diagnostics
+          name: kvantos-3.5.1-release-diagnostics
           path: |
             build/release.log
             build/**/*.log
+            build/boot-release/
             build/gui-visual/*.png
             build/user-surface/**/*.png
           if-no-files-found: ignore

@@ -1,6 +1,6 @@
-# KvantOS 3.5.0
+# KvantOS 3.5.1
 
-**New in 3.5.0:** read-only `/proc` telemetry and opt-in CPL3 shared ARGB
+**New in 3.5.1:** read-only `/proc` telemetry and opt-in CPL3 shared ARGB
 surfaces. Shared surfaces are experimental, fixed at 420×300; resize, dirty
 regions and dynamic kernel modules are not implemented. See [release notes](RELEASE.md).
 
@@ -9,7 +9,7 @@ regions and dynamic kernel modules are not implemented. See [release notes](RELE
 [the UI notes](docs/BREEZE.ru.md) and [host visual tests](tests/gui/README.md).
 Existing 3.3.0 downloads keep the original Matrix theme; use the 3.4.0 images for Breeze.
 
-Source and usage notes for the 3.5.0 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
+Source and usage notes for the 3.5.1 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
 > kernel there is now a second build, `kvant64.bin`, compiled for
@@ -48,9 +48,9 @@ the guest. This is a limited C subset, not full GCC. **Save** writes source;
 **Open** shows a RAM/disk file picker. KvFS persists files; RAM-only files disappear on reboot.
 The Workshop and Notepad have independent documents.
 
-[Workshop guide](sdk/WORKSHOP.md) · [Release 3.5.0](RELEASE.md)
+[Workshop guide](sdk/WORKSHOP.md) · [Release 3.5.1](RELEASE.md)
 
-## FAT32 / USB import and write policy (unchanged in 3.5.0)
+## FAT32 / USB import and write policy (unchanged in 3.5.1)
 
 Version 3.1.3 adds **Import** to Notepad and C Workshop: mouse selection
 of a FAT volume/folder/file, separate local name, a safe RAM copy and later

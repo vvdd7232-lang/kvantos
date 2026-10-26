@@ -1,6 +1,19 @@
 # Changelog
 
-## 3.5.0 — procfs and shared GUI surfaces (2026-10-26)
+## 3.5.1 — direct BIOS loader memory fix (2026-10-26)
+
+- Fix kernel/app bounce reads overwriting E820/VBE firmware buffers and the
+  protected-mode copy stack. Keep the full permitted bounce area disjoint.
+- Reload the E820 base, not the entry type, when calculating mem_upper.
+- Reserve boot modules before allocating framebuffer page tables; verify their
+  exact bytes in RAMFS on both firmware paths.
+- Add build-time layout guards, instruction-level E820 regression tests and
+  direct ISO boot/GUI preflight. Preserve boot logs and distinguish early QEMU
+  exit from timeout. Boot acceptance remains mandatory.
+- 3.5.0 failed release acceptance and was never published; its tag is unchanged.
+
+
+## 3.5.0 — procfs and shared GUI surfaces (unpublished, 2026-10-26)
 
 - Add a read-only `/proc` system volume (CPU, PMM memory, uptime/ticks, kernel
   task status), independent of the eight storage slots and surviving rescans.
