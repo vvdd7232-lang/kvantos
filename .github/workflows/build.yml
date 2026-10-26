@@ -29,6 +29,12 @@ jobs:
         run: make CC=gcc-12 release
       - name: editor model and atomic RAM saves
         run: make -C tests/mcc CC=gcc-12 editors ramfs input storage vfs filemgr ahci ohci ehci uhci hub fat-meta
+      - name: GUI palette, layout and native raster snapshots (ASan/UBSan)
+        run: make -C tests/gui CC=gcc-12 check
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-host-visuals
+          path: build/gui-visual/*.png
       - name: validate boot images
         run: python3 tests/boot/check-images.py
       - name: BIOS and UEFI boot smoke

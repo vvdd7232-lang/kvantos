@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Breeze desktop
+
+* Windows 7-inspired light chrome: tinted title gradients, subtle borders,
+  white fields, blue selection, legible menus and editor/workshop dialogs.
+* Default Blue accent and new procedural Breeze wallpaper; Matrix remains an
+  app and wallpaper. Existing wallpaper indices and settings.cfg stay valid.
+* Caption minimise button, with taskbar restore; adaptive task slots keep all
+  eight windows accessible at 640x480 without covering the clock.
+* Quiet taskbar (date/time only), smaller desktop signature and compact
+  Appearance controls that fit the Settings window in EN and RU.
+* Layout fixes: symmetric rounded corners, bounded title gradients, centred
+  button labels with UTF-8 ellipsis, separated launcher columns, wrapped About
+  details and paged Help at native window sizes. Paint's label no longer sits
+  under colour swatches; architecture/bootloader labels follow the build target.
+* Native host raster tests under ASan/UBSan, PNG snapshots and caption/taskbar
+  hit-region checks. No application ABI, storage policy or file-format changes.
+* This is working-tree UI work, not a published release; 3.3.0 release notes
+  and downloadable images still describe the original Matrix theme.
+
 ## 3.3.0 — dark hacker theme and Matrix
 
 * Dark interface across windows, menus, taskbar, launcher, editors and

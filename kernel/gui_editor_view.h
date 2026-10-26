@@ -186,7 +186,7 @@ static void app_edit(window_t *v,i32 cx,i32 cy,i32 cw) {
                 char ch[5]; int n=next-pos;
                 if(n>4) { ch[0]='?'; ch[1]=0; }
                 else { memcpy(ch,ed_line(row)+pos,(u32)n); ch[n]=0; }
-                fb_text(x,y,ch,selected?(theme_accent==0?C_BLACK:C_WHITE):C_TEXT,0xFFFFFFFF);
+                fb_text(x,y,ch,selected?C_WHITE:C_TEXT,0xFFFFFFFF);
                 pos=next;
             } else break;
         }
@@ -212,7 +212,7 @@ static void app_dev(window_t *v,i32 cx,i32 cy,i32 cw) {
     if(!dev_help || ed_name_mode) return;
     int win=(int)(v-wins); hit_remove_window(win);
     i32 x=cx+10,y=cy+8,w=cw-20,h=v->h-TITLE_H-18;
-    fb_fill(x,y,w,h,fb_rgb(0,10,4)); fb_rect(x,y,w,h,C_ACCENT);
+    fb_fill(x,y,w,h,C_FIELD); fb_rect(x,y,w,h,C_ACCENT);
     const char *lines[]={
         T("C Workshop: edit, build, run", "C-мастерская: редактируйте, собирайте, запускайте"),
         T("Use the New / Open / Save buttons above the text.", "Файлы: кнопки Создать / Открыть / Сохранить."),
@@ -231,6 +231,6 @@ static void app_dev(window_t *v,i32 cx,i32 cy,i32 cw) {
         T("Full reference: sdk/WORKSHOP.md", "Полное описание: sdk/WORKSHOP.ru.md")
     };
     for(unsigned i=0;i<sizeof(lines)/sizeof(lines[0]);i++)
-        ed_label(x+12,y+12+(i32)i*21,w-24,lines[i],C_WHITE);
+        ed_label(x+12,y+12+(i32)i*21,w-24,lines[i],C_TEXT);
     widget_chip(win,W_DEV_HELP,x+w-158,y+h-40,146,28,T("Close help", "Закрыть справку"),1);
 }

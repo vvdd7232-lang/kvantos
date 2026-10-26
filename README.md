@@ -1,5 +1,9 @@
 # KvantOS 3.3.0
 
+**Working tree:** the Windows 7-inspired light Breeze desktop is described in
+[the UI notes](docs/BREEZE.ru.md) and [host visual tests](tests/gui/README.md).
+Published 3.3.0 images still contain the original Matrix theme.
+
 Source and usage notes for the 3.3.0 release; see [release notes](RELEASE.md), [changelog](CHANGELOG.md) and [roadmap](ROADMAP.md).
 
 > **New in 3.0** — the move to **64-bit**: alongside the classic 32-bit
