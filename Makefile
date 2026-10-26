@@ -360,10 +360,17 @@ build/obj/mcc.o build/obj64/mcc.o: kernel/mcc_pp.h kernel/mcc_types.h kernel/mcc
 # Bounded native rename names; no filesystem path interpretation in flat drivers.
 build/obj/ramfs.o build/obj64/ramfs.o build/obj/kvfs.o build/obj64/kvfs.o: include/native_name.h
 
-VFS_OBJECTS := fat fat_lab filemgr gui kvfs main ntfs partition shell utilcmds vfs vfs_native
+VFS_OBJECTS := fat fat_lab filemgr gui kvfs main ntfs partition procfs shell utilcmds vfs vfs_native
 $(addprefix build/obj/,$(addsuffix .o,$(VFS_OBJECTS))) $(addprefix build/obj64/,$(addsuffix .o,$(VFS_OBJECTS))): include/vfs.h
 
 build/obj/filemgr.o build/obj64/filemgr.o: include/native_name.h include/filemgr.h
 build/obj/gui.o build/obj64/gui.o: include/filemgr.h
 
 build/obj/gui.o build/obj64/gui.o: kernel/gui_store_policy.h
+
+# Read-only system mount contract.
+build/obj/procfs.o build/obj64/procfs.o build/obj/main.o build/obj64/main.o: include/procfs.h
+
+# Shared mappings / protocol2 surfaces (both architectures).
+USER_MEMORY_OBJECTS := user_space user_surface user_service user_image user_mode kapp
+$(addprefix build/obj/,$(addsuffix .o,$(USER_MEMORY_OBJECTS))) $(addprefix build/obj64/,$(addsuffix .o,$(USER_MEMORY_OBJECTS))): include/user_space.h include/user_surface.h include/user_service.h include/user_image.h include/user_app.h

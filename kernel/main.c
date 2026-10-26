@@ -2,6 +2,7 @@
  *  KvantOS - kernel entry point
  * ============================================================ */
 #include "kernel.h"
+#include "procfs.h"
 #include "kvapp.h"
 #include "vfs.h"
 
@@ -251,6 +252,7 @@ skip_hw:
     }
 
     sched_init();
+    if (procfs_vfs_register() < 0) kputs("[procfs] registration failed\n");
     task_create("idle", idle_task);
     step(T("Scheduler: pre-emptive round-robin", "Планировщик: round-robin с вытеснением"));
 

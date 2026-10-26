@@ -1,7 +1,9 @@
 #ifndef KV_USER_SERVICE_H
 #define KV_USER_SERVICE_H
 #include "user_space.h"
+#include "user_surface.h"
 #define KS_VERSION 1u
+#define KS_SURFACE_VERSION 2u
 #define KS_FILES 8u
 #define KS_FILE_BYTES 1024u
 #define KS_HANDLES 8u
@@ -15,7 +17,7 @@
 #define KS_OPEN_W 2u
 #define KS_OPEN_CREATE 4u
 #define KS_OPEN_TRUNC 8u
-enum {KS_WAIT=1,KS_COMPLETE,KS_DRAW,KS_OPEN,KS_READ,KS_WRITE,KS_CLOSE,KS_DELETE,KS_TEXT,KS_QUERY,KS_STATUS,KS_INFO,KS_LINE,KS_LIST,KS_CLOCK};
+enum {KS_WAIT=1,KS_COMPLETE,KS_DRAW,KS_OPEN,KS_READ,KS_WRITE,KS_CLOSE,KS_DELETE,KS_TEXT,KS_QUERY,KS_STATUS,KS_INFO,KS_LINE,KS_LIST,KS_CLOCK,KS_SURFACE_INFO,KS_SURFACE_PRESENT};
 #define KS_CAP_RECT 1u
 #define KS_CAP_TEXT 2u
 #define KS_CAP_STATUS 4u
@@ -23,6 +25,7 @@ enum {KS_WAIT=1,KS_COMPLETE,KS_DRAW,KS_OPEN,KS_READ,KS_WRITE,KS_CLOSE,KS_DELETE,
 #define KS_CAP_LINE 16u
 #define KS_CAP_LIST 32u
 #define KS_CAP_CLOCK 64u
+#define KS_CAP_SURFACE 128u
 #define KS_TEXT_BYTES 127u
 #define KS_TEXT_BUDGET 1024u
 enum {KS_INVALID=-1,KS_FAULT=-2,KS_UNKNOWN=-3,KS_DENIED=-4,KS_QUOTA=-5,KS_STALE=-6,KS_BUSY=-7,KS_AGAIN=-8,KS_MISSING=-9};
@@ -48,6 +51,8 @@ typedef struct {
     uint8_t scratch[4096];ks_rect rects[KS_COMMANDS];
     ks_text_sink text_sink;uint32_t text_left,hz,language;char status[96];ks_line_sink line_sink;
     uint32_t clock[3];int clock_valid;
+    /* Append-only internal fields: keep diagnostic prefix offsets stable. */
+    uint32_t protocol;ku_surface *surface;
 } ks_service;
 int ks_init(ks_service *,const ku_space *,uint32_t generation,uint32_t width,uint32_t height,ks_sink,void *);
 void ks_destroy(ks_service *);

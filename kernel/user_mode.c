@@ -11,6 +11,8 @@ extern void ku_mode_resume(const registers_t *frame,kv_addr_t root);
 extern void ku_mode_leave(void) __attribute__((noreturn));
 static ku_space process;
 static ks_service services;
+static ku_surface app_surface;
+static u32 app_surface_commits;
 static u32 service_generation;
 static int rendered_ok,app_resident,app_slices;
 static u32 app_total_yields;
@@ -415,10 +417,17 @@ int ku_app_live(void) {return app_resident;}
 u32 ku_app_draw_token(void) {return app_resident && services.pending && services.event.type==KS_EVENT_DRAW?services.event.id:0;}
 const char *ku_app_error(void) {return app_error;}
 const char *ku_app_status(void) {return app_resident?services.status:"";}
+int ku_app_surface_size(u32 *w,u32 *h) {
+    if(!app_resident || !app_surface.presented || !w || !h)return -1;
+    *w=app_surface.info.width;*h=app_surface.info.height;return 0;
+}
+int ku_app_surface_pixel(u32 x,u32 y,u32 *argb) {
+    return app_resident?ku_surface_pixel(&app_surface,x,y,argb):-1;
+}
 void ku_app_unload(void) {
     kv_flags_t f=irq_save();
     if(!app_resident || active || busy) {irq_restore(f);return;}
-    ks_destroy(&services);ku_unpin(&process);ku_destroy(&process);
+    ks_destroy(&services);ku_unpin(&process);ku_surface_destroy(&app_surface);ku_destroy(&process);
     memset(&continuation,0,sizeof(continuation));memset(app_events,0,sizeof(app_events));
     app_event_count=0;app_resident=0;irq_restore(f);
 }
@@ -428,9 +437,13 @@ int ku_app_load(const void *image,u32 bytes,ks_sink sink,ks_text_sink text_sink,
     app_error[0]=0;busy=1;ki_plan plan;memset(&plan,0,sizeof(plan));ku_kernel_cr3=root_now();
     u32 ca,cb,cc,cd;__asm__ volatile("cpuid":"=a"(ca),"=b"(cb),"=c"(cc),"=d"(cd):"a"(1),"c"(0));has_sep=!!(cd&(1u<<11));
     int nx=nx_enable(),ok=!ki_load(&process,&memory_ops,(u32)ku_kernel_cr3,image,bytes,sizeof(void*)==8,nx,&plan);
-    u32 info[8]={1,32,++service_generation,420,300,sizeof(void*)==8,(u32)nx,0};
+    u32 info[8]={ok?plan.protocol:1,32,++service_generation,420,300,sizeof(void*)==8,(u32)nx,0};
     if(ok)ok=!ku_load(&process,KI_BOOT_OFF,info,sizeof(info)) && !ks_init(&services,&process,service_generation,420,300,sink,ctx);
     if(ok) {services.text_sink=text_sink;services.line_sink=line_sink;}
+    if(ok && plan.protocol==KS_SURFACE_VERSION) {
+        ok=!ku_surface_create(&app_surface,&process,service_generation,420,300);
+        if(ok) {services.protocol=KS_SURFACE_VERSION;services.surface=&app_surface;}
+    }
     memset(&continuation,0,sizeof(continuation));
 #ifdef __x86_64__
     continuation.rip=plan.entry;continuation.rsp=KU_BASE+KU_SIZE-8;continuation.rdi=KI_BOOT_VA;continuation.rflags=0x202;
@@ -442,8 +455,8 @@ int ku_app_load(const void *image,u32 bytes,ks_sink sink,ks_text_sink text_sink,
     if(ok)ok=!ku_load(&process,KU_SIZE-20,initial_stack,sizeof(initial_stack));
 #endif
     continuation.cs=0x1b;continuation.ss=0x23;
-    if(ok) {ku_pin(&process);app_resident=1;app_event_count=0;app_slices=0;app_total_yields=0;}
-    else {ks_destroy(&services);ku_destroy(&process);strcpy(app_error,"invalid isolated image or memory limit");}
+    if(ok) {app_surface_commits=0;ku_pin(&process);app_resident=1;app_event_count=0;app_slices=0;app_total_yields=0;}
+    else {ks_destroy(&services);ku_surface_destroy(&app_surface);ku_destroy(&process);strcpy(app_error,"invalid isolated image or memory limit");}
     busy=0;irq_restore(flags);return ok?0:-1;
 }
 int ku_app_event(u32 type,u32 delta,u32 width,u32 height,i32 x,i32 y,i32 key,i32 button) {
@@ -476,6 +489,14 @@ int ku_app_event(u32 type,u32 delta,u32 width,u32 height,i32 x,i32 y,i32 key,i32
     busy=0;
     int result=1;
     if(reason==YIELDED) {app_total_yields++;if(++app_slices>=25)reason=KILLED;}
+    /* COMPLETE has returned through ku_mode_leave to kernel CR3. Never
+       change live user PTEs inside the int80 handler or at a quantum yield.
+       IRQs are still disabled; next ku_mode_resume reloads CR3 (TLB flush). */
+    if(reason==WAITING && !services.pending && app_surface.pending) {
+        int rc=ku_unpin(&process);
+        if(!rc) {rc=ku_surface_commit(&app_surface);if(ku_pin(&process))rc=-1;}
+        if(rc) {reason=FAULTED;vector=13;}else app_surface_commits++;
+    }
     if(reason==WAITING)app_slices=0;
     else if(reason!=YIELDED) {
         if(reason==ENDED && !exit_value)result=0;

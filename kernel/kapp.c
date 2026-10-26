@@ -631,6 +631,18 @@ void kapp_draw(i32 x, i32 y, i32 w, i32 h) {
                 else api_rect(r->x,r->y,r->w,r->h,r->color);
             }
         }
+        /* Immutable front shared with CPL3, no pixel copy through KS messages.
+           Straight ARGB is converted to the current framebuffer RGB format. */
+        u32 sw,sh;
+        if(isolated && loaded && !ku_app_surface_size(&sw,&sh)) {
+            if(sw>(u32)w)sw=(u32)w;
+            if(sh>(u32)h)sh=(u32)h;
+            for(u32 py=0;py<sh;py++)for(u32 px=0;px<sw;px++) {
+                u32 c;
+                if(!ku_app_surface_pixel(px,py,&c))
+                    fb_blend_pixel(x+(i32)px,y+(i32)py,fb_rgb((u8)(c>>16),(u8)(c>>8),(u8)c),c>>24);
+            }
+        }
         return;
     }
     if (!enter(x, y, w, h)) return;

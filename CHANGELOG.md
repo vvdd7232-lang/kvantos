@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — procfs and shared GUI surfaces
+
+- Add a read-only `/proc` system volume (CPU, PMM memory, uptime/ticks, kernel
+  task status), independent of the eight storage slots and surviving rescans.
+- Copy scheduler metadata under IRQ exclusion with a bounded traversal; fix
+  task_count nontermination on rings containing only dead tasks.
+- Route absolute-path `cat` through VFS, preserving bare RAMFS filenames.
+- Add sanitizer host coverage and a BIOS32/UEFI64 procfs boot test in build CI.
+- Add opt-in ABI4 protocol2 shared ARGB surfaces: refcounted physical frames,
+  per-space alias protection, immutable front/back publication at COMPLETE,
+  CPU alpha compositing, and zero-on-final-release teardown.
+- Add pixels32/pixels64 CPL3 demos plus sanitizer and QEMU surface tests;
+  protocol1 and trusted legacy app ABIs remain supported. Initial geometry is
+  fixed 420x300; resize/dirty regions and measured FPS gains are not implemented.
+- Document ToaruOS design provenance and **not-yet-implemented** dynamic-driver
+  prerequisites: [Russian design/status](docs/PROCFS-SHM-MODULES.ru.md).
+  Existing ps/mem/Monitor and ring3 file services are not migrated yet.
+
+
 ## 3.4.0 — Breeze desktop (2026-10-26)
 
 * Windows 7-inspired light chrome: tinted title gradients, subtle borders,

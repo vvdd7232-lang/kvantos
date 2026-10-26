@@ -232,6 +232,18 @@ typedef struct task {
     struct task *next;
 } task_t;
 
+/* Copied scheduler metadata, never borrowed task/stack pointers. */
+typedef struct {
+    u32 id;
+    char name[16];
+    int state;
+    u32 switches;
+} task_info_t;
+/* 1 found, 0 absent/end, -1 invalid arguments or broken/overlong ring.
+   Both copy under IRQ exclusion; dead tasks are not published. */
+int task_snapshot_id(u32 id, task_info_t *out);
+int task_snapshot_nth(u32 index, task_info_t *out);
+
 void    sched_init(void);
 task_t *task_create(const char *name, void (*entry)(void));
 void    schedule(void);

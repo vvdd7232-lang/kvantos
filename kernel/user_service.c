@@ -12,14 +12,14 @@ _Static_assert(sizeof(ks_rect)==24 && sizeof(ks_text_wire)==24 && sizeof(ks_line
 int ks_init(ks_service *s,const ku_space *space,uint32_t gen,uint32_t w,uint32_t h,ks_sink sink,void *ctx) {
     if(!s || !space || !space->live || !gen || !w || !h || w>4096 || h>4096 || s->live)return KS_INVALID;
     memset(s,0,sizeof(*s));s->space=space;s->generation=gen;s->width=w;s->height=h;
-    s->sink=sink;s->sink_ctx=ctx;s->live=1;return 0;
+    s->sink=sink;s->sink_ctx=ctx;s->live=1;s->protocol=KS_VERSION;return 0;
 }
 void ks_destroy(ks_service *s) {if(s)memset(s,0,sizeof(*s));}
 int ks_post(ks_service *s,uint32_t type,uint32_t delta,int32_t x,int32_t y,int32_t key,int32_t button) {
     if(!s || !s->live || type<1 || type>5)return KS_INVALID;
     if(s->pending)return KS_BUSY;
     if(s->next_event==0xffffffffu)return KS_QUOTA;
-    s->event=(ks_event){KS_VERSION,sizeof(ks_event),s->generation,++s->next_event,type,delta>250?250:delta,s->width,s->height,x,y,key,button};
+    s->event=(ks_event){s->protocol,sizeof(ks_event),s->generation,++s->next_event,type,delta>250?250:delta,s->width,s->height,x,y,key,button};
     s->pending=1;s->delivered=0;s->draw_left=64;s->text_left=KS_TEXT_BUDGET;return 0;
 }
 static int filename(ks_service *s,char *name,uint32_t off,uint32_t n) {
@@ -181,13 +181,17 @@ static int32_t list(ks_service *s,const ks_request *r) {
     }
     return KS_MISSING;
 }
+static int has_surface(const ks_service *s) {
+    return s->protocol==KS_SURFACE_VERSION && s->surface && s->surface->live &&
+           s->surface->space==s->space && s->surface->info.generation==s->generation;
+}
 int32_t ks_dispatch(ks_service *s,uint32_t off,uint32_t size) {
     if(!s || !s->live || !s->space->live || !s->space->pins)return KS_INVALID;
     if(size!=sizeof(ks_request))return KS_INVALID;
     ks_request r;if(ku_copyin(s->space,&r,off,sizeof(r)))return KS_FAULT;
-    if(r.version!=KS_VERSION || r.bytes!=sizeof(r) || r.flags)return KS_INVALID;
+    if(r.version!=s->protocol || r.bytes!=sizeof(r) || r.flags)return KS_INVALID;
     if(r.generation!=s->generation)return KS_DENIED;
-    if(r.token && r.op!=KS_COMPLETE && r.op!=KS_DRAW && r.op!=KS_TEXT && r.op!=KS_LINE)return KS_INVALID;
+    if(r.token && r.op!=KS_COMPLETE && r.op!=KS_DRAW && r.op!=KS_TEXT && r.op!=KS_LINE && r.op!=KS_SURFACE_PRESENT)return KS_INVALID;
     switch(r.op) {
     case KS_WAIT:
         if(r.c || r.d || r.b!=sizeof(ks_event))return KS_INVALID;
@@ -202,9 +206,19 @@ int32_t ks_dispatch(ks_service *s,uint32_t off,uint32_t size) {
     case KS_TEXT:return text(s,&r);
     case KS_LINE:return line(s,&r);
     case KS_LIST:return list(s,&r);
+    case KS_SURFACE_INFO:
+        if(!has_surface(s))return KS_DENIED;
+        if(r.b!=sizeof(ku_surface_info) || r.c || r.d)return KS_INVALID;
+        return ku_copyout(s->space,r.a,&s->surface->info,sizeof(ku_surface_info))?KS_FAULT:(int32_t)sizeof(ku_surface_info);
+    case KS_SURFACE_PRESENT:
+        if(!has_surface(s))return KS_DENIED;
+        if(!s->pending || !s->delivered || s->event.type!=KS_EVENT_DRAW || r.token!=s->event.id)return KS_STALE;
+        if(r.c || r.d)return KS_INVALID;
+        if(s->surface->pending)return KS_BUSY;
+        return ku_surface_queue(s->surface,r.a,r.b)?KS_INVALID:0;
     case KS_QUERY:
         if(r.a || r.b || r.c || r.d)return KS_INVALID;
-        return KS_CAP_RECT|KS_CAP_STATUS|KS_CAP_INFO|KS_CAP_LIST|KS_CAP_CLOCK|(s->text_sink?KS_CAP_TEXT:0)|(s->line_sink?KS_CAP_LINE:0);
+        return KS_CAP_RECT|KS_CAP_STATUS|KS_CAP_INFO|KS_CAP_LIST|KS_CAP_CLOCK|(s->text_sink?KS_CAP_TEXT:0)|(s->line_sink?KS_CAP_LINE:0)|(has_surface(s)?KS_CAP_SURFACE:0);
     case KS_STATUS: {
         if(r.b>95 || r.c || r.d)return KS_INVALID;
         char copy[96];memset(copy,0,sizeof(copy));

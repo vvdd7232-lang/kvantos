@@ -11,18 +11,60 @@ static int sched_ready = 0;
 task_t *task_current(void) { return current; }
 task_t *task_list(void)    { return tasks; }
 
-/* The list is circular - iterate strictly until back at the start */
-u32 task_count(void) {
-    if (!current) return 0;
-    kv_flags_t fl = irq_save();
-    u32 n = 0;
-    task_t *t = current;
-    do {
-        if (t->state != TASK_DEAD) n++;
+/* Host tests exercise real traversal/copy logic without privileged CLI. */
+#ifdef KV_SCHED_HOSTTEST
+static kv_flags_t snapshot_lock(void) { return 0; }
+static void snapshot_unlock(kv_flags_t flags) { (void)flags; }
+#else
+static kv_flags_t snapshot_lock(void) { return irq_save(); }
+static void snapshot_unlock(kv_flags_t flags) { irq_restore(flags); }
+#endif
+
+/* Bound visited nodes, not live ones: a ring of dead tasks must terminate.
+   Validate the whole ring before reporting a result, and copy while locked
+   so the scheduler's reaper cannot free a task between lookup and copy. */
+static int snapshot_find(u32 key, int by_id, task_info_t *out, u32 *count) {
+    kv_flags_t flags = snapshot_lock();
+    task_t *start = current, *t = start;
+    task_info_t found = {0};
+    u32 live = 0, visited = 0;
+    int have = 0, valid = !start;
+    if (start) do {
+        if (!t || visited++ == 256) break;
+        if (t->state != TASK_DEAD) {
+            if ((by_id ? t->id == key : live == key) && !have) {
+                found.id = t->id;
+                memcpy(found.name, t->name, sizeof(found.name));
+                found.name[sizeof(found.name)-1] = 0;
+                found.state = t->state;
+                found.switches = t->switches;
+                have = 1;
+            }
+            live++;
+        }
         t = t->next;
-    } while (t != current && n < 256);
-    irq_restore(fl);
-    return n;
+        if (t == start) { valid = 1; break; }
+    } while (1);
+    if (valid) {
+        if (count) *count = live;
+        if (out && have) *out = found;
+    }
+    snapshot_unlock(flags);
+    return valid ? have : -1;
+}
+
+u32 task_count(void) {
+    u32 count = 0;
+    snapshot_find(0, 0, NULL, &count);
+    return count;
+}
+
+int task_snapshot_id(u32 id, task_info_t *out) {
+    return out ? snapshot_find(id, 1, out, NULL) : -1;
+}
+
+int task_snapshot_nth(u32 index, task_info_t *out) {
+    return out ? snapshot_find(index, 0, out, NULL) : -1;
 }
 
 void sched_init(void) {

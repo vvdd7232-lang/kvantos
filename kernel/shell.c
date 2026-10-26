@@ -613,7 +613,12 @@ static void cmd_ls(void) {
     kprintf(T("\n  Files: %u, %u bytes in total (ramfs)\n\n", "\n  Файлов: %u, суммарно %u байт (ramfs)\n\n"), count, bytes);
 }
 
+static void cmd_vcat(int argc,char **argv);
 static void cmd_cat(const char *name) {
+    if (name && name[0]=='/') {
+        char *args[]={"vcat",(char *)name};
+        cmd_vcat(2,args); return;
+    }
     rfile_t *f = ramfs_find(name);
     if (!f) { kprintf(T("  cat: file '%s' not found\n\n", "  cat: файл '%s' не найден\n\n"), name); return; }
     kputc('\n');

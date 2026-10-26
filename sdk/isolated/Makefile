@@ -1,6 +1,6 @@
 CC ?= gcc
 COMMON = -std=gnu11 -Os -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -msoft-float -mno-sse -mno-sse2 -mno-mmx -Wall -Wextra -Werror
-all: build/boxes32.kapp build/boxes64.kapp
+all: build/boxes32.kapp build/boxes64.kapp build/pixels32.kapp build/pixels64.kapp
 build/boxes32.o: boxes.c kvuser.h
 	@mkdir -p build
 	$(CC) $(COMMON) -m32 -march=i586 -c $< -o $@
@@ -34,3 +34,19 @@ build/mcc_runtime64.elf: build/mcc_runtime64.o mcc_runtime.lds
 ../../build/mcc_user_blob.h: build/mcc_runtime32.elf build/mcc_runtime64.elf runtime_pack.py
 	python3 runtime_pack.py build/mcc_runtime32.elf build/mcc_runtime64.elf $@
 .PHONY: runtime
+
+# Explicit protocol2 opt-in; existing boxes/runtime keep protocol1.
+build/pixels32.o: pixels.c kvuser.h
+	@mkdir -p build
+	$(CC) $(COMMON) -m32 -march=i586 -c $< -o $@
+build/pixels64.o: pixels.c kvuser.h
+	@mkdir -p build
+	$(CC) $(COMMON) -m64 -mno-red-zone -c $< -o $@
+build/pixels32.elf: build/pixels32.o user.lds
+	ld -m elf_i386 -T user.lds -z noexecstack $< -o $@
+build/pixels64.elf: build/pixels64.o user.lds
+	ld -m elf_x86_64 -T user.lds -z noexecstack $< -o $@
+build/pixels32.kapp: build/pixels32.elf pack.py
+	python3 pack.py $< $@ 0 2
+build/pixels64.kapp: build/pixels64.elf pack.py
+	python3 pack.py $< $@ 1 2

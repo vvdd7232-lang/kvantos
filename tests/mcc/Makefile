@@ -149,9 +149,9 @@ build/test_user_space: test_user_space.c ../../kernel/user_space.c ../../include
 .PHONY: user-service
 user-service: build/test_user_service
 	./build/test_user_service
-build/test_user_service: test_user_service.c test_user_space.c ../../kernel/user_space.c ../../kernel/user_service.c ../../include/user_space.h ../../include/user_service.h
+build/test_user_service: test_user_service.c test_user_space.c ../../kernel/user_space.c ../../kernel/user_surface.c ../../kernel/user_service.c ../../include/user_surface.h ../../include/user_space.h ../../include/user_service.h
 	@mkdir -p build
-	$(CC) $(FLAGS) -DKU_HOSTTEST -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie test_user_service.c ../../kernel/user_space.c ../../kernel/user_service.c -o $@
+	$(CC) $(FLAGS) -DKU_HOSTTEST -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie test_user_service.c ../../kernel/user_space.c ../../kernel/user_surface.c ../../kernel/user_service.c -o $@
 
 .PHONY: user-image
 user-image: build/test_user_image
@@ -236,3 +236,18 @@ build/test_shell_vls: test_shell_vls.c ../../kernel/shell.c ../../kernel/vfs.c .
 build/test_ntfs_listing: test_ntfs_listing.c ../../kernel/ntfs.c ../../include/kernel.h ../../include/vfs.h Makefile
 	@mkdir -p build
 	$(CC) $(FLAGS) -Wno-unused-parameter -fno-builtin -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie $< -Wl,--gc-sections -o $@
+
+.PHONY: procfs
+procfs: build/test_procfs
+	./build/test_procfs
+
+build/test_procfs: test_procfs.c ../../kernel/procfs.c ../../kernel/sched.c ../../kernel/vfs.c ../../kernel/shell.c ../../kernel/printf.c ../../include/procfs.h ../../include/vfs.h ../../include/kernel.h
+	@mkdir -p build
+	$(CC) $(FLAGS) -Wno-unused-parameter -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -fno-builtin -ffunction-sections -fdata-sections -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie test_procfs.c ../../kernel/printf.c -Wl,--gc-sections -o $@
+
+.PHONY: user-surface
+user-surface: build/test_user_surface
+	./build/test_user_surface
+build/test_user_surface: test_user_surface.c test_user_space.c ../../kernel/user_space.c ../../kernel/user_surface.c ../../kernel/user_service.c ../../include/user_space.h ../../include/user_surface.h ../../include/user_service.h
+	@mkdir -p build
+	$(CC) $(FLAGS) -DKU_HOSTTEST -fsanitize=address,undefined -fno-omit-frame-pointer -no-pie test_user_surface.c ../../kernel/user_space.c ../../kernel/user_surface.c ../../kernel/user_service.c -o $@

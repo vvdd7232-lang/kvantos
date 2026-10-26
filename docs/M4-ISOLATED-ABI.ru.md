@@ -1,5 +1,11 @@
 # M4.1 — контракт изолированных приложений, проект
 
+> Дополнение: experimental format2 **protocol2** теперь добавляет shared ARGB
+> surfaces с read-only front и публикацией на COMPLETE. Protocol1 ниже сохранён;
+> новый путь и его ограничения описаны в
+> [PROCFS-SHM-MODULES.ru.md](PROCFS-SHM-MODULES.ru.md#реализовано-экспериментальные-shared-surfaces-gui-protocol2).
+
+
 Дата: 17.10.2026. **Исторический проект M4.1, не frozen binary ABI.**
 Обновление: M4.2–M4.6 реализованы отдельными bounded increment’ами; см.
 `M4.2-ADDRESS-SPACES.ru.md`, `M4.4-BOUNDED-SERVICES.ru.md` и

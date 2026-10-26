@@ -5,6 +5,7 @@
 #include "vfs.h"
 
 static vfs_volume_t vols[VFS_MAX_VOLUMES];
+static vfs_volume_t proc_volume; /* persistent system mount, not a disk */
 static u32 generation;
 u32 vfs_generation(void) { return generation; }
 
@@ -24,6 +25,7 @@ const char *vfs_kind_name(fs_kind_t k) {
         case FS_FAT16: return "FAT16";
         case FS_FAT32: return "FAT32";
         case FS_NTFS:  return "NTFS";
+        case FS_PROC:  return "procfs";
         case FS_UNKNOWN: return T("unknown", "неизвестно");
         default:       return "-";
     }
@@ -32,6 +34,19 @@ const char *vfs_kind_name(fs_kind_t k) {
 int vfs_mount(const char *name, fs_kind_t kind, const vfs_ops_t *ops,
               void *fs, int disk, u32 lba_start, u32 lba_count,
               const char *label, int writable) {
+    if (!name) return -1;
+    if (kind == FS_PROC) {
+        if (!ops || strcmp(name, "proc") || proc_volume.used) return -1;
+        memset(&proc_volume, 0, sizeof(proc_volume));
+        strcpy(proc_volume.name, "proc");
+        strcpy(proc_volume.label, "System information");
+        proc_volume.kind = FS_PROC; proc_volume.ops = ops;
+        proc_volume.fs = fs; proc_volume.disk = -1;
+        proc_volume.used = 1; /* writable is ALWAYS zero */
+        vfs_namespace_changed();
+        return VFS_MAX_VOLUMES;
+    }
+    if (!strcmp(name, "proc")) return -1; /* cannot shadow the reserved name */
     for (int i = 0; i < VFS_MAX_VOLUMES; i++) {
         if (vols[i].used) continue;
         memset(&vols[i], 0, sizeof(vols[i]));
@@ -53,7 +68,7 @@ int vfs_mount(const char *name, fs_kind_t kind, const vfs_ops_t *ops,
 int vfs_volume_count(void) {
     int n = 0;
     for (int i = 0; i < VFS_MAX_VOLUMES; i++) if (vols[i].used) n++;
-    return n;
+    return n + (proc_volume.used ? 1 : 0);
 }
 
 vfs_volume_t *vfs_volume(int i) {
@@ -63,10 +78,13 @@ vfs_volume_t *vfs_volume(int i) {
         if (n == i) return &vols[k];
         n++;
     }
+    if (proc_volume.used && i == n) return &proc_volume;
     return NULL;
 }
 
 vfs_volume_t *vfs_find(const char *name) {
+    if (!name) return NULL;
+    if (proc_volume.used && !strcmp(name, "proc")) return &proc_volume;
     for (int i = 0; i < VFS_MAX_VOLUMES; i++)
         if (vols[i].used && strcmp(vols[i].name, name) == 0) return &vols[i];
     return NULL;

@@ -17,12 +17,23 @@ typedef struct {
     void *(*direct)(void *ctx,uint32_t frame);
     void *ctx;
 } ku_ops;
+#define KU_SHARED_PAGES 128u
+/* Stable kernel-owned object; keep its storage alive until live becomes zero.
+   owner is one revocable reference; every installed PTE holds another. */
+typedef struct {
+    ku_ops ops;
+    uint32_t frames[KU_SHARED_PAGES];
+    unsigned pages,refs;
+    int live,owner;
+} ku_shared;
 typedef struct {
     ku_ops ops;
     uint32_t root,tables[4],borrowed[3],frames[KU_PAGES];
     uint8_t rights[KU_PAGES];
     unsigned table_count,borrowed_count,pins;
     int live,arch64,nx;
+    /* Appended: existing diagnostic offsets of frames[] remain unchanged. */
+    ku_shared *shared[KU_PAGES];
 } ku_space;
 /* Start from a zero-initialized space. Failure rolls back owned frames only. */
 int ku_create(ku_space *,const ku_ops *,uint32_t kernel_root,int arch64,int nx);
@@ -33,6 +44,13 @@ int ku_destroy(ku_space *); /* refuses pinned space; idempotent after teardown *
 int ku_pin(ku_space *);
 int ku_unpin(ku_space *);
 int ku_map(ku_space *,uint32_t offset,unsigned rights); /* fresh zeroed page */
+/* Same serialization/offline CR3 contract as ku_map. Shared pages reject KU_X
+   (hardware NX only on supported x64). Protect/unmap affect ALL aliases of this object in this space. */
+int ku_shared_create(ku_shared *,const ku_ops *,uint32_t bytes);
+int ku_shared_destroy(ku_shared *); /* drop owner; mappings drain independently */
+int ku_map_shared(ku_space *,uint32_t offset,ku_shared *,unsigned rights);
+int ku_protect_shared(ku_space *,ku_shared *,unsigned rights);
+int ku_unmap_shared(ku_space *,ku_shared *);
 int ku_check(const ku_space *,uint32_t offset,uint32_t length,unsigned rights);
 int ku_copyin(const ku_space *,void *kernel,uint32_t offset,uint32_t length);
 int ku_copyout(const ku_space *,uint32_t offset,const void *kernel,uint32_t length);

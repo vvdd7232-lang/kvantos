@@ -30,6 +30,7 @@ int main(int argc,char **argv) {
         for(unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++) {
             fixture(arch);put(image,bad[i],0xffffffff);assert(ki_validate(image,116,arch,&plan)<0);
         }
+        fixture(arch);put(image,88,2);assert(!ki_validate(image,116,arch,&plan) && plan.protocol==2);
         fixture(arch);memset(image+32,'x',32);assert(ki_validate(image,116,arch,&plan)<0);
         fixture(arch);assert(ki_validate(image,115,arch,&plan)<0 && ki_validate(image,117,arch,&plan)<0);
         uint32_t seed=4242;

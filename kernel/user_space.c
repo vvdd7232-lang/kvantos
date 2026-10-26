@@ -38,11 +38,95 @@ static int table(ku_space *s) {
     uint32_t p=new_frame(s);if(!p)return -1;
     s->tables[s->table_count++]=p;return 0;
 }
+/* Object references are changed only under the caller's lifetime lock. */
+static void shared_put(ku_shared *m) {
+    if (--m->refs) return;
+    for(unsigned i=0;i<m->pages;i++) {
+        memset(m->ops.direct(m->ops.ctx,m->frames[i]),0,KU_PAGE);
+        m->ops.release(m->ops.ctx,m->frames[i]);
+    }
+    memset(m,0,sizeof(*m));
+}
+int ku_shared_create(ku_shared *m,const ku_ops *ops,uint32_t bytes) {
+    if(!m || m->live || !ops || !ops->alloc || !ops->direct || !ops->release ||
+       !bytes || bytes>KU_SHARED_PAGES*KU_PAGE)return -1;
+    memset(m,0,sizeof(*m));m->ops=*ops;m->live=m->owner=1;m->refs=1;
+    unsigned pages=(bytes+KU_PAGE-1)/KU_PAGE;
+    for(unsigned i=0;i<pages;i++) {
+        uint32_t p=ops->alloc(ops->ctx);
+        if(!valid_frame(p)) {if(p)ops->release(ops->ctx,p);goto fail;}
+        for(unsigned j=0;j<i;j++)if(m->frames[j]==p)goto fail;
+        void *v=ops->direct(ops->ctx,p);
+        if(!v) {ops->release(ops->ctx,p);goto fail;}
+        memset(v,0,KU_PAGE);m->frames[m->pages++]=p;
+    }
+    return 0;
+fail:
+    ku_shared_destroy(m);return -1;
+}
+int ku_shared_destroy(ku_shared *m) {
+    if(!m)return -1;
+    if(m->live && m->owner) {m->owner=0;shared_put(m);}
+    return 0;
+}
+static void leaf(ku_space *s,unsigned i,uint32_t frame,unsigned rights) {
+    if(s->arch64) {
+        uint64_t *pt=direct(s,s->tables[3]);
+        pt[i]=frame?(frame|P|U|((rights&KU_W)?W:0)|((s->nx && !(rights&KU_X))?NX:0)):0;
+    } else {
+        uint32_t *pt=direct(s,s->tables[1]);
+        pt[((KU_BASE+(i<<12))>>12)&1023]=frame?(frame|(uint32_t)(P|U|((rights&KU_W)?W:0))):0;
+    }
+}
+static int shared_rights(unsigned rights) {return rights==KU_R || rights==(KU_R|KU_W);}
+int ku_map_shared(ku_space *s,uint32_t off,ku_shared *m,unsigned rights) {
+    if(!s || !s->live || s->pins || !m || !m->live || !m->owner || !shared_rights(rights) ||
+       !m->pages || m->pages>KU_SHARED_PAGES || off>=KU_SIZE || (off&(KU_PAGE-1)) ||
+       m->pages>(KU_SIZE-off)/KU_PAGE || m->refs>0xffffffffu-m->pages ||
+       s->ops.ctx!=m->ops.ctx || s->ops.direct!=m->ops.direct ||
+       s->ops.alloc!=m->ops.alloc || s->ops.release!=m->ops.release)return -1;
+    unsigned first=off>>12;
+    for(unsigned i=0;i<m->pages;i++) {
+        uint32_t p=m->frames[i];
+        if(s->frames[first+i] || !direct(s,p))return -1;
+        for(unsigned j=0;j<s->borrowed_count;j++)if(p==s->borrowed[j])return -1;
+        for(unsigned j=0;j<s->table_count;j++)if(p==s->tables[j])return -1;
+        for(unsigned j=0;j<KU_PAGES;j++)if(p==s->frames[j] && !s->shared[j])return -1;
+    }
+    for(unsigned i=0;i<m->pages;i++) {
+        unsigned at=first+i;s->frames[at]=m->frames[i];s->shared[at]=m;s->rights[at]=(uint8_t)rights;
+        m->refs++;leaf(s,at,s->frames[at],rights);
+    }
+    return 0;
+}
+int ku_protect_shared(ku_space *s,ku_shared *m,unsigned rights) {
+    if(!s || !s->live || s->pins || !m || !m->live || !shared_rights(rights))return -1;
+    unsigned found=0;
+    for(unsigned i=0;i<KU_PAGES;i++)if(s->shared[i]==m) {
+        if(ku_check(s,i*KU_PAGE,KU_PAGE,KU_R))return -1;
+        found++;
+    }
+    if(!found)return -1;
+    for(unsigned i=0;i<KU_PAGES;i++)if(s->shared[i]==m) {
+        s->rights[i]=(uint8_t)rights;leaf(s,i,s->frames[i],rights);
+    }
+    return found?0:-1;
+}
+int ku_unmap_shared(ku_space *s,ku_shared *m) {
+    if(!s || !s->live || s->pins || !m || !m->live)return -1;
+    unsigned found=0;
+    for(unsigned i=0;i<KU_PAGES;i++)if(s->shared[i]==m) {
+        found++;leaf(s,i,0,0);s->frames[i]=0;s->rights[i]=0;s->shared[i]=NULL;
+        shared_put(m);
+    }
+    return found?0:-1;
+}
 int ku_destroy(ku_space *s) {
     if(!s || s->pins)return -1;
     if(!s->live)return 0;
     for(unsigned i=0;i<KU_PAGES;i++)if(s->frames[i]) {
-        memset(direct(s,s->frames[i]),0,KU_PAGE);s->ops.release(s->ops.ctx,s->frames[i]);
+        if(s->shared[i])shared_put(s->shared[i]);
+        else {memset(direct(s,s->frames[i]),0,KU_PAGE);s->ops.release(s->ops.ctx,s->frames[i]);}
     }
     for(unsigned i=0;i<s->table_count;i++) {
         memset(direct(s,s->tables[i]),0,KU_PAGE);s->ops.release(s->ops.ctx,s->tables[i]);
@@ -124,13 +208,7 @@ int ku_map(ku_space *s,uint32_t off,unsigned rights) {
     unsigned i=off>>12;if(s->frames[i])return -1;
     uint32_t p=new_frame(s);if(!p)return -1;
     s->frames[i]=p;s->rights[i]=(uint8_t)rights;
-    if(s->arch64) {
-        uint64_t *pt=direct(s,s->tables[3]);
-        pt[i]=p|P|U|((rights&KU_W)?W:0)|((s->nx && !(rights&KU_X))?NX:0);
-    } else {
-        uint32_t *pt=direct(s,s->tables[1]);
-        pt[((KU_BASE+off)>>12)&1023]=p|(uint32_t)(P|U|((rights&KU_W)?W:0));
-    }
+    leaf(s,i,p,rights);
     return 0;
 }
 /* Validate actual page walks, not just a metadata range. This catches stale

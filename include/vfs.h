@@ -28,7 +28,8 @@ typedef enum {
     FS_FAT16,
     FS_FAT32,
     FS_NTFS,
-    FS_UNKNOWN        /* a partition exists but the format is foreign */
+    FS_UNKNOWN,       /* a partition exists but the format is foreign */
+    FS_PROC           /* system mount, outside the eight storage slots */
 } fs_kind_t;
 
 /* One directory entry as reported by a driver. */
@@ -82,6 +83,8 @@ typedef struct {
 } vfs_volume_t;
 
 /* ---- volume management ---- */
+/* procfs is a separate read-only system mount, listed after storage volumes.
+   It survives storage namespace resets and does not consume a disk slot. */
 void         vfs_init(void);
 u32          vfs_generation(void); /* Namespace reset or native remount/fence. */
 void         vfs_namespace_changed(void); /* Bump only; no I/O, rescan or reset. */
