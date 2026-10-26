@@ -76,7 +76,10 @@ class MouseGUI:
             w=self.window(app)
             order=struct.unpack('<8i',self.mem('z_order',32))[:self.num('win_count')]
             if order[-1]!=w['id'] or w['minimized']:
-                self.click(94+order.index(w['id'])*138+66,self.num('scr_h')-14)
+                # Mirror the shared GUI slot formula; all eight windows stay visible.
+                reserve=148 if self.num('opt_seconds') else 124
+                step=min(138,(self.num('scr_w')-94-reserve)//len(order))
+                self.click(94+order.index(w['id'])*step+(step-6)//2,self.num('scr_h')-14)
         else:
             self.menu(app=app)
         assert self.window(app)['minimized'] == 0

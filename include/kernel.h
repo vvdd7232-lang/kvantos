@@ -12,7 +12,11 @@
 
 #define KV_NAME     "KvantOS"
 #define KV_VERSION  "3.3.0"
+#ifdef __x86_64__
+#define KV_ARCH     "x86-64 (64-bit long mode)"
+#else
 #define KV_ARCH     "i386 (32-bit protected mode)"
+#endif
 #define KV_BUILD    __DATE__ " " __TIME__
 
 typedef uint8_t  u8;

@@ -217,17 +217,6 @@ void fb_blend_pixel(i32 x, i32 y, u32 c, u32 alpha) {
     put_raw((u32)x, (u32)y, blend_rgb(c, get_raw((u32)x, (u32)y), alpha));
 }
 
-static u32 isqrt32(u32 v) {
-    u32 r = 0, bit = 1u << 30;
-    while (bit > v) bit >>= 2;
-    while (bit) {
-        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
-        else r >>= 1;
-        bit >>= 2;
-    }
-    return r;
-}
-
 /* Xiaolin Wu anti-aliased line */
 void fb_line_aa(i32 x0, i32 y0, i32 x1, i32 y1, u32 c) {
     if (!fb_ok) return;
@@ -248,7 +237,7 @@ void fb_line_aa(i32 x0, i32 y0, i32 x1, i32 y1, u32 c) {
     if (!dx) { fb_blend_pixel(x0, y0, c, 255); return; }
     /* y in 16.16 fixed point, gradient step per column */
     i32 grad = dy * 65536 / dx;
-    i32 y = y0 * 65536 + grad / 2;
+    i32 y = y0 * 65536; /* integer endpoints must land on their own pixels */
     for (i32 x = x0; x <= x1; x++, y += grad) {
         i32 yi = y >> 16;
         u32 frac = ((u32)y >> 8) & 0xFF;
@@ -304,14 +293,14 @@ void fb_round_fill_aa(i32 x, i32 y, i32 w, i32 h, i32 r, u32 c) {
     fb_fill(x + w - r, y + r, r, h - 2 * r, c);
     for (i32 j = 0; j < r; j++) {
         for (i32 i = 0; i < r; i++) {
-            u32 tl = corner_cov(x + i, y + j, x + r, y + r, r);
-            u32 tr = corner_cov(x + w - 1 - i, y + j, x + w - 1 - r, y + r, r);
-            u32 bl = corner_cov(x + i, y + h - 1 - j, x + r, y + h - 1 - r, r);
-            u32 br = corner_cov(x + w - 1 - i, y + h - 1 - j, x + w - 1 - r, y + h - 1 - r, r);
-            if (tl) fb_blend_pixel(x + i, y + j, c, tl);
-            if (tr) fb_blend_pixel(x + w - 1 - i, y + j, c, tr);
-            if (bl) fb_blend_pixel(x + i, y + h - 1 - j, c, bl);
-            if (br) fb_blend_pixel(x + w - 1 - i, y + h - 1 - j, c, br);
+            /* Mirror ONE coverage mask. Sampling the opposite corners in
+               screen coordinates shifts their half-pixel samples outward. */
+            u32 cov = corner_cov(i, j, r, r, r);
+            if (!cov) continue;
+            fb_blend_pixel(x + i, y + j, c, cov);
+            fb_blend_pixel(x + w - 1 - i, y + j, c, cov);
+            fb_blend_pixel(x + i, y + h - 1 - j, c, cov);
+            fb_blend_pixel(x + w - 1 - i, y + h - 1 - j, c, cov);
         }
     }
 }
@@ -362,9 +351,11 @@ void fb_shadow(i32 x, i32 y, i32 w, i32 h, i32 r) {
 void fb_gradient_v_round(i32 x, i32 y, i32 w, i32 h, i32 r,
                          u8 r1, u8 g1, u8 b1, u8 r2, u8 g2, u8 b2) {
     if (h <= 0 || w <= 0) return;
+    if (r < 0) r = 0;
     if (2 * r > w) r = w / 2;
+    if (r > h) r = h;
     for (i32 j = 0; j < h; j++) {
-        u32 t = (u32)j * 256u / (u32)h;
+        u32 t = h > 1 ? (u32)j * 256u / (u32)(h - 1) : 0;
         u8 cr = (u8)(r1 + ((i32)(r2 - r1) * (i32)t) / 256);
         u8 cg = (u8)(g1 + ((i32)(g2 - g1) * (i32)t) / 256);
         u8 cb = (u8)(b1 + ((i32)(b2 - b1) * (i32)t) / 256);
@@ -373,13 +364,12 @@ void fb_gradient_v_round(i32 x, i32 y, i32 w, i32 h, i32 r,
             fb_fill(x, y + j, w, 1, col);
             continue;
         }
-        i32 dy = r - 1 - j;
-        i32 half = (i32)isqrt32((u32)(r * r - dy * dy));
-        i32 inset = r - half;
-        fb_fill(x + inset, y + j, w - 2 * inset, 1, col);
-        /* soften the very edge pixel pair */
-        fb_blend_pixel(x + inset - 1, y + j, col, 110);
-        fb_blend_pixel(x + w - inset, y + j, col, 110);
+        fb_fill(x + r, y + j, w - 2 * r, 1, col);
+        for (i32 i = 0; i < r; i++) {
+            u32 cov = corner_cov(i, j, r, r, r);
+            fb_blend_pixel(x + i, y + j, col, cov);
+            fb_blend_pixel(x + w - 1 - i, y + j, col, cov);
+        }
     }
 }
 
