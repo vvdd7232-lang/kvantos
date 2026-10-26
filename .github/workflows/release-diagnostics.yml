@@ -19,7 +19,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          if ! gh api "repos/$GH_REPO/actions/jobs/121670625481/logs" > release-job.log 2>fetch-error.txt; then
+          if ! gh api --allow-escape-sequences "repos/$GH_REPO/actions/jobs/121670625481/logs" > release-job.log 2>fetch-error.txt; then
             echo "::error::Log fetch failed: $(tr '\n' ' ' < fetch-error.txt | head -c 1500)"
             exit 1
           fi
