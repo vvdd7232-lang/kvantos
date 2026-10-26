@@ -19,7 +19,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          gh api "repos/$GH_REPO/actions/jobs/121670625481/logs" > release-job.log
+          if ! gh api "repos/$GH_REPO/actions/jobs/121670625481/logs" > release-job.log 2>fetch-error.txt; then
+            echo "::error::Log fetch failed: $(tr '\n' ' ' < fetch-error.txt | head -c 1500)"
+            exit 1
+          fi
           python3 - <<'PY'
           import json,os
           from pathlib import Path
@@ -35,4 +38,7 @@ jobs:
                              'text':'```text\n'+text+'\n```'}}
           Path('diagnostic.json').write_text(json.dumps(payload))
           PY
-          gh api --method POST "repos/$GH_REPO/check-runs" --input diagnostic.json
+          if ! gh api --method POST "repos/$GH_REPO/check-runs" --input diagnostic.json 2>check-error.txt; then
+            echo "::error::Diagnostic check failed: $(tr '\n' ' ' < check-error.txt | head -c 1500)"
+            exit 1
+          fi
