@@ -1,0 +1,38 @@
+name: Release boot diagnostics
+on:
+  push:
+    branches: ['arena/a1aeaa4f-kvantos']
+    paths: ['.github/workflows/release-diagnostics.yml']
+  workflow_dispatch:
+permissions:
+  actions: read
+  checks: write
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Retrieve failed release boot log and expose bounded diagnostics
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/$GH_REPO/actions/jobs/121670625481/logs" > release-job.log
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          text=Path('release-job.log').read_text(errors='replace')
+          marker='[boot-smoke]'
+          start=text.find(marker)
+          if start>=0:text=text[start:]
+          text=text[:45000]
+          payload={'name':'Release boot diagnostic log','head_sha':os.environ['HEAD_SHA'],
+                   'status':'completed','conclusion':'neutral',
+                   'output':{'title':'Failed v3.5.0 boot acceptance log',
+                             'summary':'Diagnostic capture only; does not waive or pass boot acceptance.',
+                             'text':'```text\n'+text+'\n```'}}
+          Path('diagnostic.json').write_text(json.dumps(payload))
+          PY
+          gh api --method POST "repos/$GH_REPO/check-runs" --input diagnostic.json
