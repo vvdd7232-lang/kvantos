@@ -1,56 +1,58 @@
-# KvantOS 3.4.0 “Breeze” — a light desktop
+# KvantOS 3.5.0 — procfs and shared GUI
 
-October 26, 2026. Update for **BIOS/i386** and **UEFI/x86-64**.
-Existing 3.3.0 tags, releases and downloads remain unchanged.
+October 26, 2026. **BIOS/i386** and **UEFI/x86-64**.
+Published 3.4.0 and earlier releases remain unchanged.
 
 ## Highlights
 
-A Windows 7-inspired native desktop: softly tinted title gradients, white
-fields, restrained borders, shadows and procedural Breeze wallpaper. This is
-freestanding C rendering, not a web shell; glass is stylised, without blur or
-actual transparency.
+- Read-only `/proc`: CPU, PMM memory, uptime/ticks and kernel-task status.
+  Use `cat /proc/meminfo` or `cat /proc/0/status`. The system mount survives
+  rescans and does not consume one of the eight storage slots.
+- IRQ-protected scheduler metadata copies and bounded task-ring traversal;
+  fix task_count nontermination on a ring of dead tasks.
+- Opt-in experimental **ABI4 protocol2 shared ARGB8888 surfaces**. The client
+  writes back; COMPLETE publishes it as read-only front. The compositor reads
+  the same physical frames rather than copying a pixel array through messages.
+- Reference-counted frame ownership, alias protection, final-release zeroing,
+  CPU alpha blending, and `pixels32.kapp` / `pixels64.kapp` CPL3 demos.
+  Q exits; F deliberately writes front to exercise user page-fault cleanup.
+  Find the demos in `sdk/isolated/build/` in the distribution or as separate
+  downloads; add one to KvFS and open it with Program Manager.
 
-- Light windows, menus, file manager, editors and dialogs.
-- Caption minimise button and taskbar restore.
-- Adaptive task slots keep all eight windows reachable at 640×480 without
-  covering the date and clock. Memory statistics remain in Monitor.
-- Blue accent and Breeze wallpaper by default; seven accents and six wallpapers.
-- Matrix remains an app and wallpaper; the terminal intentionally stays dark.
+## Limits and compatibility
 
-## Layout fixes
+Surfaces are currently **420×300**, clipped rather than resized with the window.
+No resize handshake, dirty regions, GPU acceleration or measured FPS gain is
+claimed. Dynamic kernel modules are **not implemented**.
 
-Symmetric rounded corners, bounded title gradients, aligned close-button lines,
-centred and UTF-8-fitted button text, title/control separation and launcher
-column gutters. About wraps long details and reports the build architecture
-and bootloader correctly. Help has wrapping and Back/Next pages at its native
-window size. Paint's label no longer overlaps the colour swatches.
+Proc entries describe kernel tasks, not POSIX processes. VFS has no per-open
+snapshot yet: read the entire file in one call for consistent contents.
+ps/mem/Monitor and ring3 file services have not migrated to procfs.
+Bare RAMFS cat, trusted ABI2/3 and ABI4 protocol1 remain supported; protocol2
+requires explicit format2 opt-in. Breeze remains the desktop theme. Existing
+FAT/WAL write policy and USB/AHCI/NTFS restrictions are unchanged.
 
-## Compatibility
+The implementation uses ToaruOS architectural ideas, not incorporated upstream
+source. ToaruOS is NCSA-licensed; see `docs/PROCFS-SHM-MODULES.ru.md` for provenance.
 
-No application ABI, file-format or disk-write policy changes. Ordinary FAT
-mounts remain read-only; optional writes still require a prepared owned-file
-WAL and explicit per-session enablement. Existing USB/AHCI/NTFS restrictions
-remain; physical devices and VirtualBox are not qualified by this release.
+## Release acceptance
 
-Saved accent/wallpaper indices remain compatible. Existing Matrix preferences
-are preserved: choose **KVANT → Settings → Appearance → Breeze** to switch.
-Neon is now called Green and accent shades were adjusted for readable text.
-Previously downloaded ISOs do not update themselves.
+Publication is gated on tagged-source builds, host ASan/UBSan tests, image
+validation, BIOS/UEFI CD/USB boot, desktop, procfs, CPU isolation, shared surfaces
+(including front-write refusal and frame cleanup), protocol1 compatibility,
+and quick GPT/NTFS host checks.
 
-## Verification and publication
-
-Native host GUI raster/layout tests under ASan/UBSan, editor-model tests and
-EN/RU input tests passed locally. Documentation previews use actual GUI code
-with deterministic device stubs, not a booted VM.
-
-The GitHub release is published only after CI builds and validates the images,
-BIOS/UEFI CD/USB boot, desktop, editors, C Workshop, compiler and FAT/WAL,
-NTFS and AHCI/USB scenarios. Host rendering does not replace boot testing.
+Long repeated editor/Workshop, AHCI/USB/WAL, Save As and GPT/MBR import matrices
+are removed from the release critical path, not from the repository. Extended
+regressions remain in ordinary build CI; its overall result is not a separate
+publication gate. The smaller acceptance set runs against this exact tag.
+This is not physical-hardware qualification or a performance claim.
 
 ## Artifacts
 
-- `kvantos-3.4.0.tar.gz` — distribution: ISOs, kernels, EFI, apps and SDK;
-- `kvantos-3.4.0-source.tar.gz` — tagged sources;
+- `kvantos-3.5.0.tar.gz` — distribution, images, kernels, apps, SDK and demos;
+- `kvantos-3.5.0-source.tar.gz` — tagged sources;
 - `kvantos.iso`, `kvantos-direct.iso`, `kvantos-floppy.img`, `kvantos-disk.img`;
 - `kvant.bin`, `kvant64.bin`, `kvantefi.efi`, `esp.img`;
-- `kvantos-3.4.0-SHA256SUMS.txt` — SHA-256 checksums.
+- `pixels32.kapp`, `pixels64.kapp` — experimental shared-surface demos;
+- `kvantos-3.5.0-SHA256SUMS.txt` — SHA-256 checksums.

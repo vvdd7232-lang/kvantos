@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — procfs and shared GUI surfaces
+## 3.5.0 — procfs and shared GUI surfaces (2026-10-26)
 
 - Add a read-only `/proc` system volume (CPU, PMM memory, uptime/ticks, kernel
   task status), independent of the eight storage slots and surviving rescans.

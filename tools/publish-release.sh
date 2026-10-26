@@ -29,7 +29,7 @@ git push origin "$branch"
 if [[ -z "$remote_tag" ]]; then
     gh api --method POST "repos/$repo/git/refs" -f "ref=refs/tags/$tag" -f "sha=$commit" --jq .ref
 fi
-# A tag freezes sources; publication happens only after the full CI suite.
+# A tag freezes sources; publication happens only after the release acceptance suite.
 # Re-dispatching after a failed build is permitted only at that same SHA.
 gh workflow run release.yml --repo "$repo" --ref "$branch" --field "tag=$tag"
 printf '%s build dispatched from %s (%s). No release is published until tests pass.\n' "$tag" "$branch" "$commit"

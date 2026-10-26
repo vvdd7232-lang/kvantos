@@ -321,6 +321,7 @@ release:
 	fi
 
 release-inner: iso
+	@$(MAKE) --no-print-directory -C sdk/isolated all
 	@test "$(STORAGE_LAB)" = 0 || { echo 'Refusing release artifacts from STORAGE_LAB build'; exit 1; }
 	@$(MAKE) --no-print-directory floppy
 	@# Run the direct builder after the GRUB ISO: both currently create build/esp.img.
@@ -330,17 +331,21 @@ release-inner: iso
 	@rm -f kvantos-$(VERSION).tar.gz
 	@cp LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md release/
 	@mkdir -p release/docs release/screenshots release/tests/gui release/tests/boot
-	@cp docs/BREEZE.ru.md release/docs/
+	@cp docs/BREEZE.ru.md docs/PROCFS-SHM-MODULES.ru.md docs/M4-ISOLATED-ABI.ru.md release/docs/
 	@cp screenshots/breeze-appearance-ru.png release/screenshots/
 	@cp tests/gui/README.md release/tests/gui/
 	@cp tests/boot/README.md release/tests/boot/
 	@mkdir -p release/sdk
 	@cp sdk/WORKSHOP.md sdk/WORKSHOP.ru.md release/sdk/
-	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp > SHA256SUMS
+	@mkdir -p release/sdk/isolated/build release/include
+	@cp sdk/isolated/*.c sdk/isolated/*.h sdk/isolated/*.py sdk/isolated/*.lds sdk/isolated/Makefile release/sdk/isolated/
+	@cp sdk/isolated/build/boxes32.kapp sdk/isolated/build/boxes64.kapp sdk/isolated/build/pixels32.kapp sdk/isolated/build/pixels64.kapp release/sdk/isolated/build/
+	@cp include/kvapp.h release/include/
+	@cd release && sha256sum *.iso *.img *.bin *.efi apps/*.kapp apps64/*.kapp sdk/isolated/build/*.kapp > SHA256SUMS
 	@tar czf kvantos-$(VERSION).tar.gz -C release \
 	    kvantos.iso kvantos-direct.iso kvantos-floppy.img \
 	    kvant.bin kvant64.bin kvantefi.efi esp.img kvantos-disk.img apps apps64 \
-	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md sdk docs screenshots tests
+	    SHA256SUMS LICENSE CHANGELOG.md README.md README.ru.md INSTALL.md INSTALL.ru.md RELEASE.md RELEASE.ru.md USB-IMPORT.md USB-IMPORT.ru.md sdk include docs screenshots tests
 	@echo "  DONE: kvantos-$(VERSION).tar.gz ($$(du -h kvantos-$(VERSION).tar.gz | cut -f1))"
 
 font:

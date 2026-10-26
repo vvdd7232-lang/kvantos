@@ -24,13 +24,14 @@ cp "kvantos-$version.tar.gz" packages/
 cp release/kvantos.iso release/kvantos-direct.iso release/kvantos-floppy.img \
    release/kvantos-disk.img release/kvant.bin release/kvant64.bin \
    release/kvantefi.efi release/esp.img packages/
+cp release/sdk/isolated/build/pixels32.kapp release/sdk/isolated/build/pixels64.kapp packages/
 git archive --format=tar --prefix="kvantos-$version/" "$tag" | gzip -n > "packages/kvantos-$version-source.tar.gz"
 cp RELEASE.md RELEASE.ru.md packages/
 (
     cd packages
     sha256sum "kvantos-$version.tar.gz" "kvantos-$version-source.tar.gz" \
         kvantos.iso kvantos-direct.iso kvantos-floppy.img kvantos-disk.img \
-        kvant.bin kvant64.bin kvantefi.efi esp.img > "kvantos-$version-SHA256SUMS.txt"
+        kvant.bin kvant64.bin kvantefi.efi esp.img pixels32.kapp pixels64.kapp > "kvantos-$version-SHA256SUMS.txt"
     sha256sum -c "kvantos-$version-SHA256SUMS.txt"
 )
 echo "Release files are in packages/. Nothing has been uploaded."

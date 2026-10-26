@@ -35,6 +35,12 @@ jobs:
         with:
           name: gui-host-visuals
           path: build/gui-visual/*.png
+      - name: Full regression GUI helpers
+        run: python3 -m pip install --user --break-system-packages pillow
+      - name: Full mouse-first editor regression (not repeated in release)
+        run: python3 tests/boot/editor-smoke.py
+      - name: Legacy C Workshop guest regression (not repeated in release)
+        run: python3 tests/mcc/smoke.py
       - name: validate boot images
         run: python3 tests/boot/check-images.py
       - name: BIOS and UEFI boot smoke

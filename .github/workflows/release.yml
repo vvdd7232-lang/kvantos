@@ -1,120 +1,106 @@
-name: Release 3.4.0
+name: Release 3.5.0
 
-# The frozen tag is the release source; this branch-only push trigger is
-# also usable by GitHub App connections without Actions-dispatch permission.
+# Release uses frozen tagged sources. Heavy regression matrices remain in
+# build.yml; this workflow gates publication on bounded release acceptance.
 on:
-  push:
-    branches: ['arena/a1aeaa4f-kvantos']
-    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       tag:
         description: Existing release tag
         required: true
-        default: v3.4.0
+        default: v3.5.0
 
 permissions:
   contents: write
 
 concurrency:
-  group: kvantos-release-3.4.0
+  group: kvantos-release-3.5.0
   cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag || 'v3.4.0' }}
+          ref: ${{ inputs.tag || 'v3.5.0' }}
           fetch-depth: 0
       - name: Verify release tag
         run: |
-          test "${{ inputs.tag || 'v3.4.0' }}" = v3.4.0
-          test "$(git describe --exact-match --tags HEAD)" = v3.4.0
-          test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.4.0
+          test "${{ inputs.tag || 'v3.5.0' }}" = v3.5.0
+          test "$(git describe --exact-match --tags HEAD)" = v3.5.0
+          test "$(awk '$2 == "KV_VERSION" {gsub(/"/, "", $3); print $3}' include/kernel.h)" = 3.5.0
       - name: Install toolchain and test firmware
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             gcc-12 gcc-multilib nasm binutils xorriso mtools \
             grub-pc-bin grub-common qemu-system-x86 ovmf python3 python3-pip dosfstools gdisk ntfs-3g
-      - name: Install compiler execution test dependency
-        run: python3 -m pip install --user --break-system-packages unicorn pillow
-      - name: Build distribution
+      - name: Install bounded compiler and GUI test dependencies
+        run: python3 -m pip install --user --break-system-packages unicorn==2.1.0 'setuptools<81' 'pillow>=10,<13'
+      - name: Build distribution and protocol1/protocol2 SDK demos
         run: make CC=gcc-12 release
-      - name: Test native compiler, editors, VFS and storage models
-        run: make -C tests/mcc CC=gcc-12 check sanitize ramfs editors input storage vfs filemgr ahci ohci ehci uhci hub fat-meta
-      - name: Test native GUI layout and generate previews
+      - name: Host compiler, memory, procfs, editors and storage guards (ASan/UBSan)
+        run: make -C tests/mcc CC=gcc-12 check sanitize ramfs editors input storage vfs procfs filemgr ahci ohci ehci uhci hub fat-meta user-space user-service user-image user-surface
+      - name: Native GUI layout and previews
         run: make -C tests/gui CC=gcc-12 check
       - name: Validate images
         run: python3 tests/boot/check-images.py
-      - name: Test BIOS and UEFI CD boot
+      - name: BIOS and UEFI CD boot (GRUB and direct ISO)
         run: |
           bash tests/boot/qemu-smoke.sh release/kvantos.iso
           bash tests/boot/qemu-smoke.sh release/kvantos-direct.iso
-      - name: Test BIOS and UEFI USB boot
+      - name: BIOS and UEFI USB boot
         run: BOOT_MEDIA=usb bash tests/boot/qemu-smoke.sh release/kvantos.iso
-      - name: Test desktop and native application on both kernels
+      - name: Desktop and native application on both kernels
         run: python3 tests/boot/gui-smoke.py
-      - name: Test C Workshop on BIOS and UEFI
-        run: python3 tests/mcc/smoke.py
-      - name: Test mouse-first editors on BIOS and UEFI
-        run: python3 tests/boot/editor-smoke.py
-      - name: Test EN/RU input, find/replace and KvFS persistence
-        run: python3 tests/boot/editor-input-smoke.py
-      - name: Test normal AHCI read and mixed AHCI/USB owned-WAL paths
-        run: |
-          python3 tests/boot/ahci-smoke.py
-          python3 tests/boot/ahci-usb-smoke.py
-      - name: Test mouse Save As to enrolled FAT32 (ordinary policy)
-        run: GUI_SAVE_OWNED=1 python3 tests/boot/save-as-smoke.py
-      - name: Test EHCI controller isolation and detach fencing
-        run: python3 tests/boot/ehci-isolation-smoke.py
-      - name: Test GPT parser and read-only partition discovery
-        run: make -C tests/fs CC=gcc-12 gpt
-      - name: Test NTFS read-only image matrix and 64-bit size refusal
-        run: make -C tests/fs CC=gcc-12 ntfs-image
-      - name: Test normal-policy FAT/WAL recovery and bounded reads
-        run: make -C tests/fs CC=gcc-12 fat-owned fat-perf
-      - name: Test USB 2.0 import and long documents on GPT and MBR
-        run: |
-          USB_CONTROLLER=ehci-ohci USB_LAYOUT=gpt python3 tests/boot/usb-import-smoke.py
-          USB_CONTROLLER=ehci-ohci USB_LAYOUT=mbr python3 tests/boot/usb-import-smoke.py
+      - name: Procfs reads, write refusal and rescan on both kernels
+        run: python3 tests/boot/procfs-smoke.py
+      - name: CPL3 CPU isolation and fault cleanup on both kernels
+        run: python3 tests/boot/user-isolation-smoke.py
+      - name: Shared surfaces, immutable-front write fault and frame cleanup
+        run: python3 tests/boot/user-surface-smoke.py
+      - name: Protocol1 compatibility and immutable source disk
+        run: python3 tests/boot/isolated-app-smoke.py
+      - name: GPT bounds and NTFS read-only format checks
+        run: make -C tests/fs CC=gcc-12 gpt ntfs-image
       - name: Package versioned sources and checksums
         run: bash tools/package-release.sh
       - name: Preserve downloadable artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.4.0-release
+          name: kvantos-3.5.0-release
           path: packages/
       - name: Preserve GUI previews
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.4.0-gui-previews
-          path: build/gui-visual/*.png
+          name: kvantos-3.5.0-gui-previews
+          path: |
+            build/gui-visual/*.png
+            build/user-surface/**/*.png
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          # Never silently replace an existing release or its assets.
-          if gh release view v3.4.0 >/dev/null 2>&1; then
-            echo 'Release v3.4.0 already exists; refusing to overwrite it.' >&2
+          # Never replace a published version or its assets.
+          if gh release view v3.5.0 >/dev/null 2>&1; then
+            echo 'Release v3.5.0 already exists; refusing to overwrite it.' >&2
             exit 1
           fi
-          gh release create v3.4.0 --verify-tag --latest \
-            --title 'KvantOS 3.4.0 «Бриз»' --notes-file RELEASE.ru.md \
+          gh release create v3.5.0 --verify-tag --latest \
+            --title 'KvantOS 3.5.0 — procfs и shared GUI' --notes-file RELEASE.ru.md \
             packages/*.tar.gz packages/*.iso packages/*.img \
-            packages/*.bin packages/*.efi packages/*SHA256SUMS.txt
+            packages/*.bin packages/*.efi packages/*.kapp packages/*SHA256SUMS.txt
       - name: Preserve diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: kvantos-3.4.0-release-diagnostics
+          name: kvantos-3.5.0-release-diagnostics
           path: |
             build/release.log
             build/**/*.log
             build/gui-visual/*.png
+            build/user-surface/**/*.png
           if-no-files-found: ignore
