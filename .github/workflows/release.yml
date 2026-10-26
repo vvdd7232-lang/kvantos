@@ -3,6 +3,10 @@ name: Release 3.5.1
 # Release uses frozen tagged sources. Heavy regression matrices remain in
 # build.yml; this workflow gates publication on bounded release acceptance.
 on:
+  # Push after the immutable source tag exists (Arena cannot dispatch Actions).
+  push:
+    branches: ['arena/a1aeaa4f-kvantos']
+    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       tag:
