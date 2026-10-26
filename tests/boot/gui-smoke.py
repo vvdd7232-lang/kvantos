@@ -109,6 +109,18 @@ def run(arch):
         expected = {p.name.encode() for p in Path('release/apps').glob('*.kapp')}
         actual = {table[i * stride:i * stride + 24].split(b'\0')[0] for i in range(32)}
         assert len(expected) == 11 and expected.issubset(actual), actual
+        # A framebuffer page-table allocation must not recycle a boot module
+        # before RAMFS has copied it. File names alone cannot detect this.
+        apps = Path('release/apps64' if firmware else 'release/apps')
+        for i in range(32):
+            record=table[i*stride:(i+1)*stride]
+            name=record[:24].split(b'\0')[0]
+            if name not in expected: continue
+            pointer=struct.unpack_from('<Q' if firmware else '<I',record,24)[0]
+            size=struct.unpack_from('<I',record,32 if firmware else 28)[0]
+            original=(apps/name.decode()).read_bytes()
+            assert size==len(original) and mem(pointer,size)==original, ('boot module corrupted',name)
+
         target = None
         for i in range(32):
             name = table[i * stride:i * stride + 24].split(b'\0')[0]

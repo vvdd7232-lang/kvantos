@@ -93,6 +93,18 @@ void kmain(u32 magic, u32 mbi_addr) {
     u32 mmap_addr = (mbi->flags & (1 << 6)) ? mbi->mmap_addr : 0;
     u32 mmap_len  = (mbi->flags & (1 << 6)) ? mbi->mmap_length : 0;
     pmm_init(mem_upper, mmap_addr, mmap_len);
+    /* Boot modules may begin exactly at kernel_end (direct ISO). Reserve
+       them BEFORE fb_map/paging can allocate their pages for page tables;
+       their bytes are still needed by the later RAMFS import. */
+    if ((mbi->flags & (1u << 3)) && mbi->mods_addr && mbi->mods_count) {
+        struct boot_module { u32 start, end, string, reserved; };
+        struct boot_module *modules = (struct boot_module *)(kv_addr_t)mbi->mods_addr;
+        u32 count = mbi->mods_count < 16 ? mbi->mods_count : 16;
+        pmm_reserve_range(mbi->mods_addr, count * sizeof(*modules));
+        for (u32 i=0; i<count; i++)
+            if (modules[i].end > modules[i].start)
+                pmm_reserve_range(modules[i].start, modules[i].end-modules[i].start);
+    }
     kprintf(T("       detected %u MiB RAM, %u pages of 4 KiB\n", "       обнаружено %u МиБ ОЗУ, %u страниц по 4 КиБ\n"),
             pmm_total_bytes() / 1048576, pmm_total_frames());
     step(T("PMM: physical page bitmap", "PMM: битовая карта физических страниц"));
